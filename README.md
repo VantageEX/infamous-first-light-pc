@@ -40,9 +40,11 @@ An unofficial native Windows port of **inFAMOUS First Light** (PS4). The game's 
 
 ## Playing
 
-1. Download a release (when there is one) and unzip it anywhere.
+1. Download the [latest release](https://github.com/VantageEX/infamous-first-light-pc/releases/latest) and unzip it anywhere you can write to (not Program Files).
 2. Start **inFAMOUS First Light.exe** and pick your game folder (the one with `eboot.bin` and `sce_sys`).
 3. Press **Play**. F10 shows the performance overlay; Insert (or R3 + L2) opens the in-game menu.
+
+From v0.3.2 the launcher checks for a new release when it starts and installs it with one click; your saves and settings stay.
 
 Requirements: Windows 10/11 64-bit, a Vulkan 1.3 GPU, a CPU with AVX (Intel CPUs work: the AMD-only instructions the game uses are emulated).
 
@@ -124,9 +126,11 @@ Licensed under **GPL-2.0**, like the projects it builds on ([LICENSE](LICENSE)).
 
 ## Как играть
 
-1. Скачайте релиз (когда он появится) и распакуйте куда угодно.
+1. Скачайте [последний релиз](https://github.com/VantageEX/infamous-first-light-pc/releases/latest) и распакуйте в любую папку, куда можно писать (не в Program Files).
 2. Запустите **inFAMOUS First Light.exe** и выберите папку с игрой (в ней `eboot.bin` и `sce_sys`).
 3. Нажмите **«Играть»**. F10 показывает оверлей производительности, Insert (или R3 + L2) открывает меню в игре.
+
+Начиная с v0.3.2 лаунчер при запуске проверяет новые релизы и ставит их в один клик; сохранения и настройки остаются.
 
 Нужно: Windows 10/11 64-бит, видеокарта с Vulkan 1.3, процессор с AVX (процессоры Intel тоже подходят: инструкции AMD, которые использует игра, эмулируются).
 
