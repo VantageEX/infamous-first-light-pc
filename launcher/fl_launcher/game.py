@@ -8,11 +8,23 @@ from pathlib import Path
 # dump; other ids get a "not tested" note.
 KNOWN_TITLES = {'CUSA00897', 'CUSA00575'}
 
-# Core switches First Light needs, on top of the core's Second Son defaults; the advanced box
-# overrides them.
-#   TLG_OCCLUSION_MODE=4: the light glare reads two occlusion queries a frame. Mode 3 (the core's
-#   default) gives it 0/0 (yellow screens and buildings), 2 a negative count (white-outs).
-FIRST_LIGHT_ENV = {'TLG_OCCLUSION_MODE': '4'}
+# Core switches the game runs with; the advanced box overrides them. The core's own defaults are
+# not what iss_pc ships with: its launcher sets these (port/launcher/infamous_run.py DEFAULT_ENV,
+# DEFAULT_SETTINGS and build_env), and run.py alone does not.
+FIRST_LIGHT_ENV = {
+    # Precise GPU readbacks. The core defaults to relaxed, where the CPU never sees what the GPU
+    # wrote: First Light's emissive exposure sticks at its -9.5 EV floor, so the neon dash trail
+    # is ~1000 times too dim and the city stays dark after loading a save.
+    'TLG_READBACKS': '2',
+    'TLG_EAGER_READBACK': '0',     # on, smoke and glow flicker in precise mode (iss_pc)
+    'TLG_WRITE_MERGE': '1',        # game memcpy/memset into GPU memory without a GPU wait
+    'TLG_PIPELINE_BINARIES': '0',  # VK_KHR_pipeline_binary crashes on the NVIDIA 595 driver
+    'TLG_GC_BUDGET_MB': '3500',    # texture cache budget (iss_pc: 5600 runs out of 6 GB of VRAM)
+    'TLG_FRAME_STATS': '1',        # FPS in the log every 5 s
+    # The light glare reads two occlusion queries a frame. Mode 3 (the core's default) gives it
+    # 0/0 (yellow screens and buildings), 2 a negative count (white-outs).
+    'TLG_OCCLUSION_MODE': '4',
+}
 
 # PS4 system language ids (sceSystemServiceParamGetInt LANG), as the core's TLG_LANGUAGE takes them.
 LANGUAGES = {
