@@ -36,7 +36,7 @@ fi
 hidden=()
 for module in argparse base64 collections hashlib json re shutil struct tempfile xml.etree.ElementTree \
               urllib.request runpy sqlite3 mmap dataclasses array bisect random time typing \
-              ctypes.wintypes msvcrt zlib iced_x86 PIL.Image; do
+              ctypes.wintypes msvcrt zlib iced_x86 PIL.Image multiprocessing multiprocessing.pool; do
     hidden+=(--hidden-import "$module")
 done
 entry=port/out/fl_entry.py
@@ -86,6 +86,9 @@ done
 echo "Packaged $(find "$dest/port/out" -maxdepth 1 -iname '*.dll' | wc -l) DLLs from /clang64/bin"
 cp port/run.py "$dest/port/"
 cp -r port/scripts port/patches "$dest/port/"
+# The first-start shader jobs generator (scripts/build_jobs.py runs it).
+mkdir -p "$dest/port/tools"
+cp -r port/tools/xpps "$dest/port/tools/"
 find "$dest" -name __pycache__ -prune -exec rm -r {} +
 cp port/LICENSE "$dest/LICENSE.txt"
 git rev-parse --short HEAD > "$dest/VERSION"

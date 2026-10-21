@@ -12,6 +12,7 @@ from .settings import (CORE_DEFAULTS, DISPLAY_MODES, FPS_LIMITS, INI_SWITCHES, P
                        Settings, parse_env)
 
 LOG_LINES = 5000
+JOBS_PREFIX = 'Shader jobs: '
 CORE_SWITCHES = ('vsync', 'fsr1', 'rcas', 'show_fps', 'async_shaders')
 
 
@@ -337,6 +338,17 @@ class Launcher(QObject):
         cursor.insertText(text)
 
     def _log_line(self, text):
+        # run.py's first-start job file (build_job_file): "Shader jobs: <phase> <n>%" for the index
+        # phase then the jobs phase, shown as one progress in the status line, until its last line
+        # ("... in <n> s" or "not built ...").
+        if self.runner.running and text.startswith(JOBS_PREFIX):
+            body = text[len(JOBS_PREFIX):]
+            phase, _, percent = body.rpartition(' ')
+            if phase in ('index', 'jobs') and percent.endswith('%') and percent[:-1].isdigit():
+                done = int(percent[:-1]) // 2 + (50 if phase == 'jobs' else 0)
+                self._set_status(self.t('preparing_shaders', percent=done))
+            elif body.endswith(' s') or body.startswith('not built'):
+                self._set_status(self.t('running'))
         if self._log_doc is None:
             self._log_buffer = (self._log_buffer + [text])[-LOG_LINES:]
         else:

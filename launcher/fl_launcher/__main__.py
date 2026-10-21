@@ -36,6 +36,11 @@ def run_script():
     return 0
 
 
+if getattr(sys, 'frozen', False):
+    # Worker processes of a script's multiprocessing pool (scripts/build_jobs.py) start this
+    # executable again: they must run their task, not the launcher.
+    import multiprocessing
+    multiprocessing.freeze_support()
 if len(sys.argv) > 2 and sys.argv[1] == '--script':
     sys.exit(run_script())
 if len(sys.argv) > 1 and sys.argv[1] == '--run':

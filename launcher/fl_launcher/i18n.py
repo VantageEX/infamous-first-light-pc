@@ -55,6 +55,8 @@ STRINGS = {
                   'en': 'After playing, press “Create report” and send the archive to the developer.'},
     'starting': {'ru': 'Запуск…', 'en': 'Starting…'},
     'running': {'ru': 'Игра запущена', 'en': 'The game is running'},
+    'preparing_shaders': {'ru': 'Подготовка шейдеров, только в первый раз… {percent}%',
+                          'en': 'Preparing shaders, first start only… {percent}%'},
     'exited': {'ru': 'Игра завершилась (код {code}).', 'en': 'The game exited (code {code}).'},
     'credits': {'ru': 'Ядро: iss_pc от HayatoG и shadPS4 (GPL-2.0). Не связано с Sony и Sucker Punch.',
                 'en': 'Core: iss_pc by HayatoG and shadPS4 (GPL-2.0). Not affiliated with Sony or Sucker Punch.'},

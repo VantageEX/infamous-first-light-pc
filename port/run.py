@@ -13,6 +13,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import time
 
 PORT = Path(__file__).resolve().parent
 
@@ -90,6 +91,46 @@ def run_script(name, *args, capture=False, check=True):
     if result.returncode:
         sys.exit(result.returncode)
     return None
+
+
+def build_job_file(game, jobs, out, env):
+    """The first-start pipeline job file (`<user>/cache/<title id>-jobs.bin`, both renderers read
+    it): made once from the game's own .xpps packages by tools/xpps (scripts/build_jobs.py, about
+    a minute), so that the renderer compiles the game's graphics pipelines before it starts and
+    not while it plays. TLG_BUILD_JOBS=0 skips it; a failure only costs the stutter it saves."""
+    packages = game / 'art' / 'cache'
+    if env.get('TLG_BUILD_JOBS') == '0' or jobs.is_file() or not any(packages.glob('*.xpps')):
+        return
+    jobs.parent.mkdir(parents=True, exist_ok=True)
+    index = out / 'xpps-index.sqlite'
+    temp = jobs.with_suffix('.tmp')
+    print('Shader jobs: reading the game files for the first-start compilation (once)', flush=True)
+    script = ['--script'] if getattr(sys, 'frozen', False) else []
+    command = [sys.executable, *script, str(PORT / 'scripts' / 'build_jobs.py'), str(packages), str(temp),
+               '--index', str(index), '--nice']
+    started = time.monotonic()
+    # One log line per tenth of each phase: the generator prints a PROGRESS line per package.
+    shown = {}
+    with subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                          text=True, encoding='utf-8', errors='replace',
+                          env={**os.environ, 'PYTHONIOENCODING': 'utf-8'}, creationflags=no_console()) as child:
+        for line in child.stdout:
+            parts = line.split()
+            if len(parts) == 4 and parts[0] == 'PROGRESS' and parts[2].isdigit() and parts[3].isdigit():
+                tenth = int(parts[2]) * 10 // max(1, int(parts[3]))
+                if shown.get(parts[1]) != tenth:
+                    shown[parts[1]] = tenth
+                    print(f'Shader jobs: {parts[1]} {tenth * 10}%', flush=True)
+            elif line.strip():
+                print(f'Shader jobs: {line.rstrip()}', flush=True)
+    for leftover in (index, index.with_name(index.name + '.tmp')):
+        leftover.unlink(missing_ok=True)
+    if child.returncode or not temp.is_file():
+        temp.unlink(missing_ok=True)
+        print(f'Shader jobs: not built (exit {child.returncode}); the game compiles pipelines as it draws', flush=True)
+        return
+    temp.replace(jobs)
+    print(f'Shader jobs: {jobs.name} in {time.monotonic() - started:.0f} s', flush=True)
 
 
 def find_executable(name):
@@ -223,6 +264,8 @@ def main():
         user_dir = Path(env.get('ISS_USER_DIR') or env.get('TLG_USER_DIR') or _data_dir(data)).resolve()
         user_dir.mkdir(parents=True, exist_ok=True)
         env.setdefault('TLG_GPU_USER_DIR', str(user_dir))
+        if title_id:
+            build_job_file(game, user_dir / 'cache' / f'{title_id}-jobs.bin', out, env)
         try:
             sys.path.insert(0, str(PORT / 'launcher'))
             import savemanager
