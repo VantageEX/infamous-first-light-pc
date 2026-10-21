@@ -36,7 +36,7 @@ An unofficial native Windows port of **inFAMOUS First Light** (PS4). The game's 
 |---|---|
 | Tested dump | CUSA00897 (EU), base game 1.00 |
 | Frame rate | about 35–45 FPS with renderer v2 (the default), 15–25 with the classic one, on a Ryzen + RTX 4070 SUPER; goal: a steady 30 FPS on mid-range PCs |
-| Known issues | the first start compiles shaders (a few minutes, then cached); GPU readbacks cost frame rate (work in progress); some lights pulse in the boat cutscene |
+| Known issues | the first start prepares and compiles shaders (2–3 minutes once); GPU readbacks cost frame rate (work in progress); the classic renderer flashes yellow for a moment while a save loads; some lights pulse in the boat cutscene |
 
 ## Playing
 
@@ -120,7 +120,7 @@ Licensed under **GPL-2.0**, like the projects it builds on ([LICENSE](LICENSE)).
 |---|---|
 | Проверенный дамп | CUSA00897 (EU), базовая игра 1.00 |
 | FPS | около 35–45 на рендере v2 (по умолчанию), 15–25 на обычном, Ryzen + RTX 4070 SUPER; цель — стабильные 30 FPS на средних ПК |
-| Известные проблемы | первый запуск компилирует шейдеры (несколько минут, потом из кэша); чтение данных с видеокарты стоит FPS (в работе); в катсцене с лодкой мигают некоторые огни |
+| Известные проблемы | первый запуск готовит и компилирует шейдеры (2–3 минуты, один раз); чтение данных с видеокарты стоит FPS (в работе); на обычном рендере при загрузке сохранения на мгновение мелькает жёлтый; в катсцене с лодкой мигают некоторые огни |
 
 ## Как играть
 
