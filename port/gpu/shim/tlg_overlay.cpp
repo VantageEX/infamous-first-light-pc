@@ -122,14 +122,25 @@ size_t frame_history_next = 0, frame_history_count = 0;
 // Colours of the launcher (launcher/fl_launcher/qml/theme.js): grey see-through panels like its
 // pickers, white text, its blue accent, small corner radii.
 namespace Theme {
-constexpr ImVec4 Glass{28.0f / 255, 28.0f / 255, 30.0f / 255, 1.0f};
+constexpr ImVec4 Glass{28.0f / 255, 28.0f / 255, 30.0f / 255, 1.0f};   // panels, at GlassAlpha
+constexpr ImVec4 Popover{36.0f / 255, 36.0f / 255, 40.0f / 255, 1.0f}; // dialogs, at PopoverAlpha
+constexpr float GlassAlpha = 0.78f, PopoverAlpha = 0.97f;
 constexpr ImVec4 Text{1.0f, 1.0f, 1.0f, 1.0f};
 constexpr ImVec4 Muted{1.0f, 1.0f, 1.0f, 0.64f};
+constexpr ImVec4 Faint{1.0f, 1.0f, 1.0f, 0.38f};
+constexpr ImVec4 Line{1.0f, 1.0f, 1.0f, 0.1f};
+constexpr ImVec4 Ink{0.0f, 0.0f, 0.0f, 1.0f}; // text on a white (focused) button
 constexpr ImVec4 Accent{0x1f / 255.0f, 0x8f / 255.0f, 1.0f, 1.0f};
 constexpr ImVec4 Good{0x2a / 255.0f, 0xd1 / 255.0f, 0x6a / 255.0f, 1.0f};
 constexpr ImVec4 Warn{1.0f, 0xc3 / 255.0f, 0x5a / 255.0f, 1.0f};
 constexpr ImVec4 Bad{1.0f, 0x6b / 255.0f, 0x5a / 255.0f, 1.0f};
 constexpr float PanelRadius = 6.0f, ItemRadius = 4.0f;
+
+constexpr ImVec4 White(float alpha) { return {1.0f, 1.0f, 1.0f, alpha}; }
+constexpr ImVec4 Fade(const ImVec4& c, float alpha) { return {c.x, c.y, c.z, c.w * alpha}; }
+inline ImU32 U32(const ImVec4& c, float alpha = 1.0f) {
+    return ImGui::ColorConvertFloat4ToU32(Fade(c, std::clamp(alpha, 0.0f, 1.0f)));
+}
 } // namespace Theme
 
 void SetOpen(bool value) {
@@ -313,7 +324,9 @@ void FloatRow(const char* label, std::atomic<float>& value, float lo, float hi, 
 
 void InfoRow(const char* label, const char* text) {
     Row(label);
+    ImGui::PushTextWrapPos(0.0f);
     ImGui::TextDisabled("%s", text);
+    ImGui::PopTextWrapPos();
     ImGui::PopID();
 }
 
@@ -339,18 +352,26 @@ const char* UpscalerLabel(int upscaler) {
 }
 
 
-// tlg: menu language. TLG_UI_LANG=pt_BR or en_US; otherwise the system locale (LANG/LC_*):
-// Portuguese when it starts with "pt", English otherwise.
-bool UiPortuguese() {
-    static const bool pt = [] {
-        for (const char* name : {"TLG_UI_LANG", "LC_MESSAGES", "LANG"}) {
-            if (const char* v = std::getenv(name); v && *v) return v[0] == 'p' && v[1] == 't';
+// The interface language: TLG_UI_LANG (the launcher passes its own, ru or en), ISS_UI_LANG, else
+// the system locale (LANG/LC_*). Russian when it starts with "ru", English otherwise.
+bool UiRussian() {
+    static const bool ru = [] {
+        for (const char* name : {"TLG_UI_LANG", "ISS_UI_LANG", "LC_MESSAGES", "LANG"}) {
+            if (const char* v = std::getenv(name); v && *v) return (v[0] | 0x20) == 'r' && (v[1] | 0x20) == 'u';
         }
         return false;
     }();
-    return pt;
+    return ru;
 }
-const char* TL(const char* en, const char* pt) { return UiPortuguese() ? pt : en; }
+const char* TL(const char* en, const char* ru) { return UiRussian() ? ru : en; }
+
+// A count's word: English one/many, Russian one (1, 21), few (2-4, 22-24) or many (5-20, 25...).
+const char* Plural(int n, const char* en_one, const char* en_many, const char* ru_one, const char* ru_few,
+                   const char* ru_many) {
+    if (!UiRussian()) return n == 1 ? en_one : en_many;
+    const int tens = n % 100, ones = n % 10;
+    return tens / 10 == 1 ? ru_many : ones == 1 ? ru_one : ones >= 2 && ones <= 4 ? ru_few : ru_many;
+}
 const Vulkan::Instance* overlay_instance = nullptr; // for the overlay's measurements
 
 // The performance overlay's text with the current settings (also the menu's preview).
@@ -374,12 +395,12 @@ constexpr const char* Unsupported = "Unavailable: game version or code signature
 void ImageTab() {
     namespace G = TlgGraphics;
     auto& s = TlgSettings::Get();
-    ImGui::SeparatorText(TL("Display", "Tela"));
+    ImGui::SeparatorText(TL("Display", "Экран"));
     if (BeginRows("##display")) {
-        static const char* const modes[] = {TL("Windowed", "Janela"), TL("Borderless window", "Janela sem borda"), TL("Fullscreen", "Tela cheia")};
-        ChoiceRow(TL("Display mode", "Modo de exibição"), s.display_mode, G::DisplayModeCount == 3 ? modes : G::DisplayModeNames.data(),
-                  nullptr, G::DisplayModeCount, TL("Windowed, borderless window or exclusive fullscreen.", "Janela, janela sem borda ou tela cheia exclusiva."));
-        CheckRow("VSync", s.vsync, TL("Waits for the monitor: no tearing, a little more input delay.", "Espera o monitor: sem tearing, um pouco mais de atraso de entrada."));
+        static const char* const modes[] = {TL("Windowed", "Оконный"), TL("Borderless window", "Окно без рамки"), TL("Fullscreen", "Полный экран")};
+        ChoiceRow(TL("Display mode", "Режим экрана"), s.display_mode, G::DisplayModeCount == 3 ? modes : G::DisplayModeNames.data(),
+                  nullptr, G::DisplayModeCount, TL("Windowed, borderless window or exclusive fullscreen.", "Окно, окно без рамки или эксклюзивный полный экран."));
+        CheckRow("VSync", s.vsync, TL("Waits for the monitor: no tearing, a little more input delay.", "Ждёт монитор: без разрывов кадра, но задержка ввода чуть больше."));
         ImGui::EndTable();
     }
     const int iw = s.image_width, ih = s.image_height, ww = s.window_width, wh = s.window_height;
@@ -388,54 +409,54 @@ void ImageTab() {
     const bool rcas_blocked = s.rcas && !s.rcas_applied;
     // tlg: only spatial filters on the final image. The temporal upscalers (FSR 3/4, TAA, DLSS) were
     // built for GoW3's pipeline and make TLG's image shake, so they are not offered here.
-    ImGui::SeparatorText(TL("Scaling and sharpening", "Escala e nitidez"));
+    ImGui::SeparatorText(TL("Scaling and sharpening", "Масштабирование и резкость"));
     if (BeginRows("##scaling")) {
-        CheckRow(TL("Upscale with FSR 1", "Ampliar com FSR 1"), s.fsr1,
-                 TL("Enlarges the game image when it is smaller than the window (spatial filter, no shimmer).", "Amplia a imagem do jogo quando ela é menor que a janela (filtro espacial, sem tremor)."));
+        CheckRow(TL("Upscale with FSR 1", "Увеличение через FSR 1"), s.fsr1,
+                 TL("Enlarges the game image when it is smaller than the window (spatial filter, no shimmer).", "Увеличивает картинку игры, когда она меньше окна (пространственный фильтр, без дрожания)."));
         ImGui::BeginDisabled(rcas_blocked);
-        CheckRow(TL("Sharpening (RCAS)", "Nitidez (RCAS)"), s.rcas,
-                 rcas_blocked && downscaling ? TL("No effect: the game's image is larger than the window.", "Sem efeito: a imagem do jogo é maior que a janela.")
-                 : rcas_blocked              ? TL("Needs FSR 1: the game's image is smaller than the window.", "Precisa do FSR 1: a imagem do jogo é menor que a janela.")
-                                             : TL("Sharpens the final image.", "Deixa a imagem final mais nítida."));
+        CheckRow(TL("Sharpening (RCAS)", "Резкость (RCAS)"), s.rcas,
+                 rcas_blocked && downscaling ? TL("No effect: the game's image is larger than the window.", "Не действует: картинка игры больше окна.")
+                 : rcas_blocked              ? TL("Needs FSR 1: the game's image is smaller than the window.", "Нужен FSR 1: картинка игры меньше окна.")
+                                             : TL("Sharpens the final image.", "Делает итоговую картинку чётче."));
         ImGui::EndDisabled();
         ImGui::BeginDisabled(!s.rcas || rcas_blocked);
-        SliderRow(TL("Sharpening strength", "Intensidade da nitidez"), s.rcas_strength, 0, 100, "%d%%", TL("How strong the sharpening is.", "Quão forte é a nitidez."));
+        SliderRow(TL("Sharpening strength", "Сила резкости"), s.rcas_strength, 0, 100, "%d%%", TL("How strong the sharpening is.", "Насколько сильно повышается резкость."));
         ImGui::EndDisabled();
         ImGui::EndTable();
     }
-    ImGui::SeparatorText(TL("Draw distance and detail", "Distância de visão e detalhe"));
+    ImGui::SeparatorText(TL("Draw distance and detail", "Дальность прорисовки и детализация"));
     if (BeginRows("##view")) {
         ImGui::BeginDisabled(!s.view_supported);
-        FloatRow(TL("LOD distance", "Distância do LOD"), s.lod_scale, 0.25f, 4.0f, "%.2fx",
+        FloatRow(TL("LOD distance", "Дальность LOD"), s.lod_scale, 0.25f, 4.0f, "%.2fx",
                  s.view_supported ? TL("How far objects keep their detailed models (every LOD band). Above 1x costs CPU and GPU; "
                                        "the game still lowers it on its own in heavy scenes.",
-                                       "Até onde os objetos mantêm os modelos detalhados (todas as faixas de LOD). Acima de 1x pesa na CPU e na GPU; "
-                                       "o jogo ainda reduz sozinho em cenas pesadas.")
-                                  : TL(Unsupported, "Indisponível: versão do jogo ou assinatura do código diferente."));
-        FloatRow(TL("Regions' LOD_ADJUST", "LOD_ADJUST das regiões"), s.region_lod, 0.0f, 1.0f, "%.2f",
+                                       "Как далеко объекты сохраняют детальные модели (все ступени LOD). Выше 1x нагружает CPU и GPU; "
+                                       "в тяжёлых сценах игра всё равно снижает её сама.")
+                                  : TL(Unsupported, "Недоступно: другая версия игры или не совпала сигнатура кода."));
+        FloatRow(TL("Regions' LOD_ADJUST", "LOD_ADJUST регионов"), s.region_lod, 0.0f, 1.0f, "%.2f",
                  TL("How much the map regions' own LOD changes count: 1 as in the game, 0 ignored.",
-                    "Quanto contam as mudanças de LOD das regiões do mapa: 1 como no jogo, 0 ignoradas."));
-        FloatRow(TL("Regions' FADE_DISTANCE", "FADE_DISTANCE das regiões"), s.region_fade, 0.25f, 4.0f, "%.2fx",
+                    "Насколько учитываются собственные изменения LOD у регионов карты: 1 — как в игре, 0 — не учитываются."));
+        FloatRow(TL("Regions' FADE_DISTANCE", "FADE_DISTANCE регионов"), s.region_fade, 0.25f, 4.0f, "%.2fx",
                  TL("Distance over which a region's lighting, haze and LOD settings blend in (multiplier).",
-                    "Distância em que a luz, a névoa e o LOD de uma região se misturam ao entrar nela (multiplicador)."));
-        FloatRow(TL("Near clip (NEAR_CLIP)", "Plano próximo (NEAR_CLIP)"), s.near_clip, 1.0f, 100.0f, "%.1f",
+                    "Расстояние, на котором свет, дымка и LOD региона плавно сменяются при входе в него (множитель)."));
+        FloatRow(TL("Near clip (NEAR_CLIP)", "Ближняя плоскость (NEAR_CLIP)"), s.near_clip, 1.0f, 100.0f, "%.1f",
                  TL("Default near plane of the cameras (the game uses 10). Lower shows objects closer to the camera, "
                     "higher reduces depth flicker far away. Applies to the next camera (load, cutscene).",
-                    "Plano próximo padrão das câmeras (o jogo usa 10). Menor mostra objetos mais perto da câmera, "
-                    "maior reduz o tremido de profundidade ao longe. Vale na próxima câmera (carregamento, cena)."));
-        FloatRow(TL("Far clip (FAR_CLIP)", "Plano distante (FAR_CLIP)"), s.far_clip, 1000.0f, 1.0e7f, "%.0f",
+                    "Ближняя плоскость отсечения камер (в игре 10). Меньше — объекты видны ближе к камере, "
+                    "больше — меньше мерцания глубины вдали. Действует со следующей камеры (загрузка, ролик)."));
+        FloatRow(TL("Far clip (FAR_CLIP)", "Дальняя плоскость (FAR_CLIP)"), s.far_clip, 1000.0f, 1.0e7f, "%.0f",
                  TL("Default far plane of the cameras (the game uses 10000000, unlimited). Lower cuts the view; "
                     "applies to the next camera.",
-                    "Plano distante padrão das câmeras (o jogo usa 10000000, sem limite). Menor corta a visão; "
-                    "vale na próxima câmera."),
+                    "Дальняя плоскость отсечения камер (в игре 10000000, без ограничения). Меньше — обрезает обзор; "
+                    "действует со следующей камеры."),
                  ImGuiSliderFlags_Logarithmic);
         ImGui::EndDisabled();
-        FloatRow(TL("Texture LOD bias (MipLodBias)", "Bias de LOD das texturas (MipLodBias)"), s.mip_lod_bias, -3.0f, 3.0f,
+        FloatRow(TL("Texture LOD bias (MipLodBias)", "Смещение LOD текстур (MipLodBias)"), s.mip_lod_bias, -3.0f, 3.0f,
                  "%+.2f",
                  TL("Negative: sharper textures at a distance (more shimmer, a little more GPU). Positive: blurrier.",
-                    "Negativo: texturas mais nítidas ao longe (mais cintilação, um pouco mais de GPU). Positivo: mais borradas."));
-        Row(TL("Restore the game's values", "Voltar aos valores do jogo"));
-        if (ImGui::SmallButton(TL("Restore", "Restaurar"))) {
+                    "Отрицательное: текстуры вдали чётче (больше мерцания, чуть больше нагрузка на GPU). Положительное: размытее."));
+        Row(TL("Restore the game's values", "Вернуть значения игры"));
+        if (ImGui::SmallButton(TL("Restore", "Сбросить"))) {
             s.lod_scale = 1.0f;
             s.region_lod = 1.0f;
             s.region_fade = 1.0f;
@@ -449,15 +470,15 @@ void ImageTab() {
         ImGui::PopID();
         ImGui::EndTable();
     }
-    ImGui::SeparatorText(TL("Information", "Informações"));
+    ImGui::SeparatorText(TL("Information", "Сведения"));
     if (BeginRows("##image_info")) {
         char text[96];
         std::snprintf(text, sizeof(text), "%d x %d", iw, ih);
-        InfoRow(TL("Game image", "Imagem do jogo"), text);
+        InfoRow(TL("Game image", "Картинка игры"), text);
         std::snprintf(text, sizeof(text), "%d x %d", ww, wh);
-        InfoRow(TL("Windowed", "Janela"), text);
-        InfoRow("FSR 1", !s.fsr1 ? TL("off", "desligado") : upscaling ? TL("active", "ativo") : TL("no effect (image not smaller than window)", "sem efeito (imagem não é menor que a janela)"));
-        InfoRow(TL("Sharpening", "Nitidez"), s.rcas_applied ? TL("applied", "aplicada") : TL("not applied", "não aplicada"));
+        InfoRow(TL("Windowed", "Окно"), text);
+        InfoRow("FSR 1", !s.fsr1 ? TL("off", "выкл.") : upscaling ? TL("active", "работает") : TL("no effect (image not smaller than window)", "не действует (картинка не меньше окна)"));
+        InfoRow(TL("Sharpening", "Резкость"), s.rcas_applied ? TL("applied", "применяется") : TL("not applied", "не применяется"));
         ImGui::EndTable();
     }
 }
@@ -466,31 +487,31 @@ void FixesSection();
 
 void PerformanceTab() {
     if (TlgPerf::Enabled()) {
-        ImGui::SeparatorText(TL("Performance capture", "Captura de desempenho"));
+        ImGui::SeparatorText(TL("Performance capture", "Запись производительности"));
         static int category = 0;
-        const char* labels[] = {TL("Absorb smoke", "Absorver fumaça"), TL("Use power", "Usar poder"),
-                                TL("Movement", "Movimentação"), TL("Other", "Outro")};
-        ImGui::Combo(TL("Event", "Evento"), &category, labels, 4);
-        if (ImGui::Button(TL("Mark performance event", "Marcar evento de desempenho"))) {
+        const char* labels[] = {TL("Absorb smoke", "Поглощение дыма"), TL("Use power", "Применение силы"),
+                                TL("Movement", "Передвижение"), TL("Other", "Другое")};
+        ImGui::Combo(TL("Event", "Событие"), &category, labels, 4);
+        if (ImGui::Button(TL("Mark performance event", "Отметить событие"))) {
             const bool accepted = TlgPerf::Mark(static_cast<unsigned>(category + 1));
-            TlgOverlay::Notice(accepted ? TL("Event marked", "Evento marcado") :
-                                          TL("Capture queue full", "Fila de captura cheia"), 2.0f);
+            TlgOverlay::Notice(accepted ? TL("Event marked", "Событие отмечено") :
+                                          TL("Capture queue full", "Очередь записи заполнена"), 2.0f);
         }
     }
     namespace G = TlgGraphics;
     auto& s = TlgSettings::Get();
     // tlg: GoW3's render-resolution and engine-frame-rate patches and the readback shortcuts are not
     // offered: they do not apply to TLG, and the readback ones crash it (it needs precise readbacks).
-    ImGui::SeparatorText(TL("Live", "Em tempo real"));
+    ImGui::SeparatorText(TL("Live", "Действуют сразу"));
     if (BeginRows("##live")) {
-        static const char* const fps_labels[] = {"30", "120", "240", TL("Unlimited", "Sem limite")};
-        ChoiceRow(TL("Frame rate limit", "Limite de FPS"), s.fps_limit, fps_labels, G::FpsLimits.data(), int(G::FpsLimits.size()),
-                  TL("Caps the presented frames. The game runs at 30 FPS (as on PS4).", "Limita os quadros apresentados. O jogo roda a 30 FPS (como no PS4)."));
-        static const char* const queued_labels[] = {TL("1 (lowest latency)", "1 (menor atraso)"), "2", TL("Unlimited", "Sem limite")};
-        ChoiceRow(TL("Frames queued", "Quadros na fila"), s.frames_queued, queued_labels, G::FramesQueued.data(),
-                  int(G::FramesQueued.size()), TL("More frames queued: steadier FPS, slower response to input.", "Mais quadros na fila: FPS mais estável, resposta mais lenta."));
-        CheckRow(TL("Compile new shaders in the background", "Compilar shaders novos em segundo plano"), s.async_shaders,
-                 TL("Fewer stutters in new areas; an object or effect may appear a moment later.", "Menos engasgos em áreas novas; um objeto ou efeito pode aparecer um instante depois."));
+        static const char* const fps_labels[] = {"30", "120", "240", TL("Unlimited", "Без ограничения")};
+        ChoiceRow(TL("Frame rate limit", "Ограничение FPS"), s.fps_limit, fps_labels, G::FpsLimits.data(), int(G::FpsLimits.size()),
+                  TL("Caps the presented frames. The game runs at 30 FPS (as on PS4).", "Ограничивает число выводимых кадров. Сама игра идёт в 30 FPS (как на PS4)."));
+        static const char* const queued_labels[] = {TL("1 (lowest latency)", "1 (меньше задержка)"), "2", TL("Unlimited", "Без ограничения")};
+        ChoiceRow(TL("Frames queued", "Кадров в очереди"), s.frames_queued, queued_labels, G::FramesQueued.data(),
+                  int(G::FramesQueued.size()), TL("More frames queued: steadier FPS, slower response to input.", "Больше кадров в очереди: ровнее FPS, но медленнее отклик."));
+        CheckRow(TL("Compile new shaders in the background", "Компилировать новые шейдеры в фоне"), s.async_shaders,
+                 TL("Fewer stutters in new areas; an object or effect may appear a moment later.", "Меньше подтормаживаний в новых местах; объект или эффект может появиться на мгновение позже."));
         ImGui::EndTable();
     }
     FixesSection();
@@ -504,10 +525,9 @@ void PerformanceTab() {
 void FixesSection() {
     namespace B = Common::Backports;
     auto& s = TlgSettings::Get();
-    ImGui::SeparatorText(TL("Fixes", "Correções"));
+    ImGui::SeparatorText(TL("Fixes", "Исправления"));
     ImGui::TextDisabled("%s", TL("Marked (next start) are saved now and apply the next time the game starts.",
-                                 "As marcadas (próxima partida) são gravadas agora e valem na próxima vez que o jogo abrir."));
-    const ImVec4 amber(0.85f, 0.72f, 0.45f, 1.0f);
+                                 "Пункты с пометкой «(след. запуск)» сохраняются сразу, а действуют со следующего запуска игры."));
     if (ImGui::BeginTable("##fixes", 4, ImGuiTableFlags_SizingStretchProp)) {
         ImGui::TableSetupColumn("name", ImGuiTableColumnFlags_WidthStretch, 0.50f);
         ImGui::TableSetupColumn("on", ImGuiTableColumnFlags_WidthFixed);
@@ -535,14 +555,14 @@ void FixesSection() {
                     dirty = true;
                 }
             }
-            Help(live ? TL("Applies at once.", "Vale na hora.")
-                      : TL("Applies on next start.", "Vale na próxima partida."));
+            Help(live ? TL("Applies at once.", "Действует сразу.")
+                      : TL("Applies on next start.", "Действует со следующего запуска."));
             ImGui::PopID();
             if (!live) {
                 ImGui::SameLine();
                 const bool differs = shown != running;
-                ImGui::TextColored(differs ? amber : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled), "%s",
-                                   TL("(next start)", "(próxima partida)"));
+                ImGui::TextColored(differs ? Theme::Warn : Theme::Faint, "%s",
+                                   TL("(next start)", "(след. запуск)"));
             }
             ImGui::TableNextColumn();
             ImGui::TextDisabled("%llu", static_cast<unsigned long long>(B::Hits(id)));
@@ -553,7 +573,7 @@ void FixesSection() {
     }
 
     // A/B switches read once at start (recompiler or device creation): next start only.
-    ImGui::SeparatorText(TL("A/B switches (next start)", "Chaves A/B (próxima partida)"));
+    ImGui::SeparatorText(TL("A/B switches (next start)", "Переключатели A/B (след. запуск)"));
     struct Extra { const char* name; bool (*current)(); };
     static const Extra extras[] = {
         {"WQM", Shader::Toggles::WholeQuadMode},
@@ -568,17 +588,17 @@ void FixesSection() {
     };
     static_assert(sizeof(extras) / sizeof(extras[0]) == TlgSettings::kExtraPrefs);
     if (BeginRows("##extras")) {
-        static const char* const choices[] = {TL("Default", "Padrão"), TL("Off", "Desligado"), TL("On", "Ligado")};
+        static const char* const choices[] = {TL("Default", "По умолчанию"), TL("Off", "Выкл."), TL("On", "Вкл.")};
         static const int values[] = {-1, 0, 1};
         for (int e = 0; e < TlgSettings::kExtraPrefs; ++e) {
             char label[64];
             std::snprintf(label, sizeof(label), "%s%s", extras[e].name,
-                          extras[e].current ? (extras[e].current() ? TL("  (running: on)", "  (rodando: ligado)")
-                                                                    : TL("  (running: off)", "  (rodando: desligado)"))
+                          extras[e].current ? (extras[e].current() ? TL("  (running: on)", "  (сейчас: вкл.)")
+                                                                    : TL("  (running: off)", "  (сейчас: выкл.)"))
                                             : "");
             ChoiceRow(label, s.extra_pref[e], choices, values, 3,
                       TL("Read once at start; saved in tlg.ini and applied on the next start.",
-                         "Lida uma vez ao iniciar; gravada no tlg.ini e aplicada na próxima partida."));
+                         "Читается один раз при запуске; сохраняется в tlg.ini и применяется при следующем запуске."));
         }
         ImGui::EndTable();
     }
@@ -590,66 +610,66 @@ void ControlsTab() {
     auto& s = TlgSettings::Get();
     // Mouse (src/runtime_pad.c): the camera settings apply at once. The buttons and the touchpad
     // mode are fixed unless TLG_KEY_MAP / TLG_MOUSE_PAD_* (or tlg.ini key_map) change them.
-    ImGui::SeparatorText(TL("Mouse", "Mouse"));
+    ImGui::SeparatorText(TL("Mouse", "Мышь"));
     if (BeginRows("##mouse")) {
-        CheckRow(TL("Mouse turns the camera", "Mouse gira a câmera"), s.mouse_enabled,
+        CheckRow(TL("Mouse turns the camera", "Мышь управляет камерой"), s.mouse_enabled,
                  TL("The game window takes the mouse while it has focus. Esc releases it; a click in the window takes it back.",
-                    "A janela do jogo prende o mouse enquanto tem o foco. Esc solta; um clique na janela prende de novo."));
+                    "Окно игры захватывает мышь, пока оно в фокусе. Esc отпускает её, щелчок по окну захватывает снова."));
         ImGui::BeginDisabled(!s.mouse_enabled);
-        FloatRow(TL("Sensitivity", "Sensibilidade"), s.mouse_sensitivity, 0.1f, 5.0f, "%.2f",
-                 TL("How far the camera turns for the same mouse movement.", "Quanto a câmera gira para o mesmo movimento do mouse."));
-        CheckRow(TL("Invert Y axis", "Inverter eixo Y"), s.mouse_invert_y,
-                 TL("Moving the mouse forward looks down.", "Empurrar o mouse para frente olha para baixo."));
-        FloatRow(TL("Smoothing", "Suavização"), s.mouse_smoothing, 0.0f, 0.9f, "%.2f",
+        FloatRow(TL("Sensitivity", "Чувствительность"), s.mouse_sensitivity, 0.1f, 5.0f, "%.2f",
+                 TL("How far the camera turns for the same mouse movement.", "Насколько поворачивается камера при одном и том же движении мыши."));
+        CheckRow(TL("Invert Y axis", "Инвертировать ось Y"), s.mouse_invert_y,
+                 TL("Moving the mouse forward looks down.", "Движение мыши от себя опускает взгляд."));
+        FloatRow(TL("Smoothing", "Сглаживание"), s.mouse_smoothing, 0.0f, 0.9f, "%.2f",
                  TL("Evens out the camera motion; higher values feel softer and a little slower.",
-                    "Deixa o movimento da câmera mais uniforme; valores altos ficam mais suaves e um pouco mais lentos."));
-        FloatRow(TL("Acceleration", "Aceleração"), s.mouse_accel, 0.0f, 2.0f, "%.2f",
-                 TL("Fast movements turn more than slow ones. 0 is linear.", "Movimentos rápidos giram mais que os lentos. 0 é linear."));
-        FloatRow(TL("Anti-dead zone", "Anti-zona morta"), s.mouse_deadzone, 0.0f, 0.5f, "%.2f",
+                    "Делает движение камеры ровнее; при больших значениях оно мягче и чуть медленнее."));
+        FloatRow(TL("Acceleration", "Ускорение"), s.mouse_accel, 0.0f, 2.0f, "%.2f",
+                 TL("Fast movements turn more than slow ones. 0 is linear.", "Быстрые движения поворачивают сильнее медленных. 0 — линейно."));
+        FloatRow(TL("Anti-dead zone", "Компенсация мёртвой зоны"), s.mouse_deadzone, 0.0f, 0.5f, "%.2f",
                  TL("Small mouse movements skip the game's stick dead zone. Raise it if slow movements do nothing.",
-                    "Movimentos pequenos do mouse pulam a zona morta do analógico do jogo. Aumente se movimentos lentos não fizerem nada."));
+                    "Мелкие движения мыши перескакивают мёртвую зону стика в игре. Увеличьте, если медленные движения ничего не делают."));
         ImGui::EndDisabled();
-        InfoRow(TL("Left / right / middle", "Esquerdo / direito / do meio"), "R2 / L2 / R3");
-        InfoRow(TL("Touchpad mode", "Modo touchpad"), TL("hold Left Ctrl or Mouse X1", "segure Ctrl esquerdo ou botão X1 do mouse"));
-        InfoRow(TL("In touchpad mode", "No modo touchpad"),
-                TL("left touch/click/drag, middle touch, right two fingers", "esquerdo toca/clica/arrasta, do meio toca, direito dois dedos"));
-        InfoRow(TL("Release the mouse", "Soltar o mouse"), "Esc");
+        InfoRow(TL("Left / right / middle", "Левая / правая / средняя"), "R2 / L2 / R3");
+        InfoRow(TL("Touchpad mode", "Режим тачпада"), TL("hold Left Ctrl or Mouse X1", "удерживайте левый Ctrl или кнопку мыши X1"));
+        InfoRow(TL("In touchpad mode", "В режиме тачпада"),
+                TL("left touch/click/drag, middle touch, right two fingers", "левая — касание/нажатие/свайп, средняя — касание, правая — два пальца"));
+        InfoRow(TL("Release the mouse", "Отпустить мышь"), "Esc");
         const char* env = std::getenv("TLG_KEY_MAP");
         const std::string remap = env && env[0] ? std::string(env) : s.key_map;
         if (!remap.empty()) {
-            InfoRow(TL("Remapped", "Remapeado"), remap.c_str());
+            InfoRow(TL("Remapped", "Переназначено"), remap.c_str());
         }
         ImGui::EndTable();
     }
-    ImGui::SeparatorText(TL("Sensor mode (graffiti)", "Modo sensor (grafite)"));
+    ImGui::SeparatorText(TL("Sensor mode (graffiti)", "Режим сенсора (граффити)"));
     if (BeginRows("##sensor")) {
-        SliderRow(TL("Graffiti aiming speed", "Velocidade da mira do grafite"), s.sensor_aim, 25, 200, "%d%%",
+        SliderRow(TL("Graffiti aiming speed", "Скорость прицела граффити"), s.sensor_aim, 25, 200, "%d%%",
                   TL("How fast the stick moves the graffiti cursor in sensor mode (100% = default).",
-                     "Quão rápido o analógico move o cursor do grafite no modo sensor (100% = padrão)."));
+                     "Как быстро стик двигает курсор граффити в режиме сенсора (100% — по умолчанию)."));
         ImGui::EndTable();
     }
-    if (ImGui::Button(TL("How to do the graffiti without a gyro", "Como fazer o grafite sem giroscópio"))) {
+    if (ImGui::Button(TL("How to do the graffiti without a gyro", "Как рисовать граффити без гироскопа"))) {
         SetOpen(false);
         OpenGuide();
     }
     Help(TL("Shows the steps again (the same screen as the first time).",
-            "Mostra os passos de novo (a mesma tela da primeira vez)."));
+            "Снова показывает шаги (тот же экран, что и в первый раз)."));
 }
 
 void OverlayTab() {
     namespace P = TlgPerfStats;
     auto& s = TlgSettings::Get();
     if (BeginRows("##overlay_on")) {
-        CheckRow(TL("Show overlay (F10)", "Mostrar overlay (F10)"), s.show_fps, TL("The performance overlay in a corner of the screen.", "O overlay de desempenho num canto da tela."));
+        CheckRow(TL("Show overlay (F10)", "Показывать оверлей (F10)"), s.show_fps, TL("The performance overlay in a corner of the screen.", "Оверлей производительности в углу экрана."));
         ImGui::EndTable();
     }
     ImGui::BeginDisabled(!s.show_fps);
-    ImGui::SeparatorText(TL("What to show", "O que mostrar"));
+    ImGui::SeparatorText(TL("What to show", "Что показывать"));
     if (ImGui::BeginTable("##overlay_items", 2, ImGuiTableFlags_SizingStretchProp)) {
         ImGui::TableNextColumn();
-        static const char* const names[] = {"FPS", TL("Frametime", "Tempo de quadro"), "Upscaler", TL("GPU (name and use)", "GPU (nome e uso)"), TL("CPU (game)", "CPU (jogo)"),
-                                            TL("RAM (game / total)", "RAM (jogo / total)"), TL("VRAM (used / available)", "VRAM (usada / disponível)"),
-                                            TL("Frametime graph", "Gráfico do tempo de quadro")};
+        static const char* const names[] = {"FPS", TL("Frametime", "Время кадра"), "Upscaler", TL("GPU (name and use)", "GPU (название и загрузка)"), TL("CPU (game)", "CPU (игра)"),
+                                            TL("RAM (game / total)", "RAM (игра / всего)"), TL("VRAM (used / available)", "VRAM (занято / доступно)"),
+                                            TL("Frametime graph", "График времени кадра")};
         for (unsigned item = 0; item < P::NumItems; ++item) {
             const unsigned bit = 1u << item;
             bool on = (s.overlay_items & bit) != 0;
@@ -659,40 +679,40 @@ void OverlayTab() {
             }
         }
         ImGui::TableNextColumn();
-        ImGui::TextDisabled(TL("Preview", "Prévia"));
+        ImGui::TextDisabled("%s", TL("Preview", "Предпросмотр"));
         ImGui::BeginChild("##preview", ImVec2(0, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
         ImGui::SetWindowFontScale(s.overlay_scale / 100.0f);
         const std::string text = OverlayText();
-        ImGui::TextUnformatted(text.empty() ? TL("(nothing selected)", "(nada selecionado)") : text.c_str());
+        ImGui::TextUnformatted(text.empty() ? TL("(nothing selected)", "(ничего не выбрано)") : text.c_str());
         ImGui::SetWindowFontScale(1.0f);
         ImGui::EndChild();
         ImGui::EndTable();
     }
-    ImGui::SeparatorText(TL("Appearance", "Aparência"));
+    ImGui::SeparatorText(TL("Appearance", "Внешний вид"));
     if (BeginRows("##appearance")) {
-        SliderRow(TL("Font size", "Tamanho da fonte"), s.overlay_scale, 50, 300, "%d%%", TL("Size of the overlay text.", "Tamanho do texto do overlay."));
-        static const char* const corners[] = {TL("Top left", "Superior esquerdo"), TL("Top right", "Superior direito"), TL("Bottom left", "Inferior esquerdo"), TL("Bottom right", "Inferior direito")};
-        ChoiceRow(TL("Corner", "Canto"), s.overlay_corner, corners, nullptr, 4, TL("Where the overlay sits.", "Onde o overlay fica."));
-        SliderRow(TL("Background opacity", "Opacidade do fundo"), s.overlay_opacity, 0, 100, "%d%%", TL("0% is no background.", "0% é sem fundo."));
-        static const char* const layouts[] = {TL("One line", "Uma linha"), TL("One item per line", "Um item por linha")};
-        ChoiceRow(TL("Layout", "Disposição"), s.overlay_layout, layouts, nullptr, 2, TL("Items side by side or stacked.", "Itens lado a lado ou empilhados."));
+        SliderRow(TL("Font size", "Размер шрифта"), s.overlay_scale, 50, 300, "%d%%", TL("Size of the overlay text.", "Размер текста оверлея."));
+        static const char* const corners[] = {TL("Top left", "Слева сверху"), TL("Top right", "Справа сверху"), TL("Bottom left", "Слева снизу"), TL("Bottom right", "Справа снизу")};
+        ChoiceRow(TL("Corner", "Угол"), s.overlay_corner, corners, nullptr, 4, TL("Where the overlay sits.", "В каком углу экрана оверлей."));
+        SliderRow(TL("Background opacity", "Непрозрачность фона"), s.overlay_opacity, 0, 100, "%d%%", TL("0% is no background.", "0% — без фона."));
+        static const char* const layouts[] = {TL("One line", "В одну строку"), TL("One item per line", "Каждый пункт с новой строки")};
+        ChoiceRow(TL("Layout", "Расположение"), s.overlay_layout, layouts, nullptr, 2, TL("Items side by side or stacked.", "Пункты в ряд или столбиком."));
         ImGui::EndTable();
     }
     ImGui::EndDisabled();
-    ImGui::SeparatorText(TL("About", "Sobre"));
+    ImGui::SeparatorText(TL("About", "О программе"));
     if (BeginRows("##about")) {
         const auto& elf = Common::ElfInfo::Instance();
         char text[160];
         std::snprintf(text, sizeof(text), "%.*s v%.*s", int(elf.GameSerial().size()), elf.GameSerial().data(),
                       int(elf.AppVer().size()), elf.AppVer().data());
-        InfoRow(TL("Game", "Jogo"), text);
+        InfoRow(TL("Game", "Игра"), text);
         const u32 total = background_total;
         if (total) {
-            std::snprintf(text, sizeof(text), TL("loading %u%%", "carregando %u%%"), u32(u64(background_done) * 100 / total));
+            std::snprintf(text, sizeof(text), TL("loading %u%%", "загрузка %u%%"), u32(u64(background_done) * 100 / total));
         } else {
-            std::snprintf(text, sizeof(text), TL("ready", "pronto"));
+            std::snprintf(text, sizeof(text), "%s", TL("ready", "готов"));
         }
-        InfoRow(TL("Shader cache", "Cache de shaders"), text);
+        InfoRow(TL("Shader cache", "Кэш шейдеров"), text);
         ImGui::EndTable();
     }
 }
@@ -721,7 +741,11 @@ void Menu() {
         return std::string(!title.empty() ? title : app_name && *app_name ? app_name : "The Last Guardian") +
                PadText("  (Insert / R3+L2)", "  (Insert / RS+LT)", "  (Insert / RS+ZL)");
     }();
-    if (!ImGui::Begin(heading.c_str(), &keep_open, ImGuiWindowFlags_NoCollapse)) {
+    // The launcher's popover fill, so the game's own menus do not show through the text.
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, Theme::Fade(Theme::Popover, Theme::PopoverAlpha));
+    const bool shown = ImGui::Begin(heading.c_str(), &keep_open, ImGuiWindowFlags_NoCollapse);
+    ImGui::PopStyleColor();
+    if (!shown) {
         ImGui::End();
         return;
     }
@@ -739,8 +763,8 @@ void Menu() {
     }
     const float footer = ImGui::GetFrameHeightWithSpacing() * 2.0f + ImGui::GetTextLineHeightWithSpacing() * 2.0f;
     if (ImGui::BeginTabBar("##tabs")) {
-        static const char* const tabs[TabCount] = {"Overlay", TL("Image", "Imagem"), TL("Performance", "Desempenho"),
-                                                   TL("Controls", "Controle")};
+        static const char* const tabs[TabCount] = {TL("Overlay", "Оверлей"), TL("Image", "Изображение"), TL("Performance", "Производительность"),
+                                                   TL("Controls", "Управление")};
         for (int tab = 0; tab < TabCount; ++tab) {
             const ImGuiTabItemFlags flags = requested_tab == tab ? ImGuiTabItemFlags_SetSelected : 0;
             if (!ImGui::BeginTabItem(tabs[tab], nullptr, flags)) {
@@ -775,16 +799,20 @@ void Menu() {
                               : TL(PadText("L1 / R1 or Q / E: switch tabs. Settings are saved in tlg.ini.",
                                            "LB / RB or Q / E: switch tabs. Settings are saved in tlg.ini.",
                                            "L / R or Q / E: switch tabs. Settings are saved in tlg.ini."),
-                                   PadText("L1 / R1 ou Q / E: trocar de aba. As configurações ficam salvas em tlg.ini.",
-                                           "LB / RB ou Q / E: trocar de aba. As configurações ficam salvas em tlg.ini.",
-                                           "L / R ou Q / E: trocar de aba. As configurações ficam salvas em tlg.ini.")));
+                                   PadText("L1 / R1 или Q / E: смена вкладки. Настройки сохраняются в tlg.ini.",
+                                           "LB / RB или Q / E: смена вкладки. Настройки сохраняются в tlg.ini.",
+                                           "L / R или Q / E: смена вкладки. Настройки сохраняются в tlg.ini.")));
     ImGui::PopTextWrapPos();
     if (const int changes = RestartChanges()) {
-        ImGui::TextColored(ImVec4(0.85f, 0.72f, 0.45f, 1.0f), "%d change%s need%s a restart (unsaved progress is lost).",
-                           changes, changes == 1 ? "" : "s", changes == 1 ? "s" : "");
+        ImGui::TextColored(Theme::Warn, "%d %s", changes,
+                           Plural(changes, "change needs a restart (unsaved progress is lost).",
+                                  "changes need a restart (unsaved progress is lost).",
+                                  "изменение требует перезапуска (несохранённый прогресс пропадёт).",
+                                  "изменения требуют перезапуска (несохранённый прогресс пропадёт).",
+                                  "изменений требуют перезапуска (несохранённый прогресс пропадёт)."));
         ImGui::SameLine();
         ImGui::BeginDisabled(!std::getenv("TLG_RESTART_COMMAND"));
-        if (ImGui::Button(TL("Apply and restart", "Aplicar e reiniciar"))) {
+        if (ImGui::Button(TL("Apply and restart", "Применить и перезапустить"))) {
             // The new launch confirms the options once the game shows; run.py restores the
             // previous ones if it never does (restart_unconfirmed).
             s.restart_unconfirmed = true;
@@ -795,9 +823,9 @@ void Menu() {
     } else {
         ImGui::NewLine();
     }
-    const float close_width = ImGui::CalcTextSize(TL("Close", "Fechar")).x + ImGui::GetStyle().FramePadding.x * 2;
+    const float close_width = ImGui::CalcTextSize(TL("Close", "Закрыть")).x + ImGui::GetStyle().FramePadding.x * 2;
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - close_width);
-    if (ImGui::Button(TL("Close", "Fechar"))) {
+    if (ImGui::Button(TL("Close", "Закрыть"))) {
         keep_open = false;
     }
     ImGui::End();
@@ -863,32 +891,37 @@ void TextEntryBox() {
                             ImGuiCond_Always, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSizeConstraints(ImVec2(viewport->WorkSize.x * 0.32f, 0.0f),
                                         ImVec2(viewport->WorkSize.x * 0.8f, FLT_MAX));
-    ImGui::SetNextWindowBgAlpha(0.92f);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, Theme::Fade(Theme::Popover, Theme::PopoverAlpha));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.0f * base_scale, 16.0f * base_scale));
     ImGui::Begin("##text_entry", nullptr,
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
                      ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
                      ImGuiWindowFlags_NoFocusOnAppearing);
-    ImGui::TextColored(ImVec4(0.85f, 0.72f, 0.45f, 1.0f), "%s", text_entry_prompt.c_str());
+    ImGui::TextColored(Theme::Muted, "%s", text_entry_prompt.c_str());
     ImGui::Separator();
     ImGui::SetWindowFontScale(1.4f);
-    ImGui::Text("%s_", text_entry_text.c_str());
+    ImGui::Text("%s", text_entry_text.c_str());
+    ImGui::SameLine(0.0f, 0.0f);
+    ImGui::TextColored(Theme::Accent, "_");
     ImGui::SetWindowFontScale(1.0f);
     ImGui::Separator();
-    ImGui::TextDisabled("Keyboard: type, Backspace to erase, Enter = OK, Esc = cancel");
-    ImGui::TextDisabled("%s", TL(PadText("Controller: Cross (A) = OK, Circle (B) = cancel", "Controller: A = OK, B = cancel", "Controller: B = OK, A = cancel"),
-                                 PadText("Controle: Xis (A) = OK, Círculo (B) = cancelar", "Controle: A = OK, B = cancelar", "Controle: B = OK, A = cancelar")));
+    ImGui::TextColored(Theme::Muted, "%s", TL("Keyboard: type, Backspace to erase, Enter = OK, Esc = cancel",
+                                              "Клавиатура: ввод текста, Backspace — стереть, Enter — OK, Esc — отмена"));
+    ImGui::TextColored(Theme::Muted, "%s", TL(PadText("Controller: Cross (A) = OK, Circle (B) = cancel", "Controller: A = OK, B = cancel", "Controller: B = OK, A = cancel"),
+                                 PadText("Геймпад: крестик (A) — OK, кружок (B) — отмена", "Геймпад: A — OK, B — отмена", "Геймпад: B — OK, A — отмена")));
     ImGui::End();
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
 }
 
 // ---- Save dialogs: drawing. The layout is in design pixels of a 1280x720 screen, times k. ----
-constexpr u32 kSaveAccent = 0x5aa9ff, kSaveText = 0xeef2f8, kSaveMuted = 0xaab5c7, kSaveDim = 0x8b97ab,
-              kSavePanel = 0x141923, kSaveLine = 0x263042, kSaveCard = 0x161c28, kSaveCardOn = 0x1f2a3d,
-              kSaveThumb = 0x1d2433, kSaveBorder = 0x2b3445, kSaveKnob = 0x3a4659, kSaveWarn = 0xf0a43a,
-              kSaveOk = 0x4fd1a5;
+// The colours and radii are the launcher's (Theme); its sizes are on a 1080-line stage, so a
+// launcher pixel is kStage design pixels here.
+constexpr float kStage = 720.0f / 1080.0f;
+constexpr float kPanelRadius = Theme::PanelRadius * kStage, kItemRadius = Theme::ItemRadius * kStage;
 
-ImU32 SaveColor(u32 rgb, float alpha = 1.0f) {
-    return IM_COL32(rgb >> 16, (rgb >> 8) & 255, rgb & 255, int(std::clamp(alpha, 0.0f, 1.0f) * 255.0f));
-}
+// Semibold Segoe UI for titles and buttons (Init), else bold is drawn twice a hair apart.
+ImFont* font_bold = nullptr;
 
 struct SavePainter {
     ImDrawList* dl;
@@ -897,89 +930,111 @@ struct SavePainter {
     ImVec2 at; // the panel's top-left corner, in display pixels
 
     ImVec2 P(float x, float y) const { return ImVec2(at.x + x * k, at.y + y * k); }
-    float Width(float size, const std::string& text) const {
-        return font->CalcTextSizeA(size * k, FLT_MAX, 0.0f, text.c_str()).x / k;
+    ImFont* Face(bool bold) const { return bold && font_bold ? font_bold : font; }
+    float Width(float size, const std::string& text, bool bold = false) const {
+        return Face(bold)->CalcTextSizeA(size * k, FLT_MAX, 0.0f, text.c_str()).x / k;
     }
     // The text cut with "..." to fit `width` design pixels.
-    std::string Fit(float size, const std::string& text, float width) const {
-        if (Width(size, text) <= width) return text;
+    std::string Fit(float size, const std::string& text, float width, bool bold = false) const {
+        if (Width(size, text, bold) <= width) return text;
         std::string cut = text;
         while (!cut.empty()) {
             while (!cut.empty() && (u8(cut.back()) & 0xc0) == 0x80) cut.pop_back(); // UTF-8 tail
             if (!cut.empty()) cut.pop_back();
-            if (Width(size, cut + "...") <= width) return cut + "...";
+            if (Width(size, cut + "...", bold) <= width) return cut + "...";
         }
         return "...";
     }
-    // Text at (x, y) design pixels; bold is drawn twice, a hair apart (one embedded face).
-    void Text(float x, float y, float size, u32 rgb, const std::string& text, bool bold = false,
+    // Text at (x, y) design pixels.
+    void Text(float x, float y, float size, const ImVec4& color, const std::string& text, bool bold = false,
               float alpha = 1.0f, float wrap = 0.0f) const {
-        const ImU32 col = SaveColor(rgb, alpha);
-        dl->AddText(font, size * k, P(x, y), col, text.c_str(), nullptr, wrap * k);
-        if (bold) dl->AddText(font, size * k, P(x + 0.55f, y), col, text.c_str(), nullptr, wrap * k);
+        const ImU32 col = Theme::U32(color, alpha);
+        dl->AddText(Face(bold), size * k, P(x, y), col, text.c_str(), nullptr, wrap * k);
+        if (bold && !font_bold) dl->AddText(font, size * k, P(x + 0.55f, y), col, text.c_str(), nullptr, wrap * k);
     }
-    void TextRight(float right, float y, float size, u32 rgb, const std::string& text, bool bold = false) const {
-        Text(right - Width(size, text), y, size, rgb, text, bold);
+    void TextRight(float right, float y, float size, const ImVec4& color, const std::string& text,
+                   bool bold = false) const {
+        Text(right - Width(size, text, bold), y, size, color, text, bold);
     }
-    void Box(float x0, float y0, float x1, float y1, u32 fill, float rounding, float alpha = 1.0f) const {
-        dl->AddRectFilled(P(x0, y0), P(x1, y1), SaveColor(fill, alpha), rounding * k);
+    void Box(float x0, float y0, float x1, float y1, const ImVec4& fill, float rounding, float alpha = 1.0f) const {
+        dl->AddRectFilled(P(x0, y0), P(x1, y1), Theme::U32(fill, alpha), rounding * k);
     }
-    void Frame(float x0, float y0, float x1, float y1, u32 rgb, float rounding, float thickness,
+    void Frame(float x0, float y0, float x1, float y1, const ImVec4& color, float rounding, float thickness,
                float alpha = 1.0f) const {
-        dl->AddRect(P(x0, y0), P(x1, y1), SaveColor(rgb, alpha), rounding * k, 0, thickness * k);
+        dl->AddRect(P(x0, y0), P(x1, y1), Theme::U32(color, alpha), rounding * k, 0, thickness * k);
     }
-    void Line(float x0, float y0, float x1, float y1, u32 rgb, float thickness, float alpha = 1.0f) const {
-        dl->AddLine(P(x0, y0), P(x1, y1), SaveColor(rgb, alpha), thickness * k);
+    void Line(float x0, float y0, float x1, float y1, const ImVec4& color, float thickness, float alpha = 1.0f) const {
+        dl->AddLine(P(x0, y0), P(x1, y1), Theme::U32(color, alpha), thickness * k);
+    }
+    // The launcher's focus ring: a white outline a little outside the item.
+    void Ring(float x0, float y0, float x1, float y1, float rounding) const {
+        const float gap = 3.0f * kStage;
+        Frame(x0 - gap, y0 - gap, x1 + gap, y1 + gap, Theme::White(0.95f), rounding + gap, 3.0f * kStage);
     }
     // A controller button: 0 confirm (bottom face button), 1 back (right one), centred at (x, y):
-    // Cross / Circle, or the letters of TLG_GLYPHS=xbox (A / B) and nintendo (B / A).
-    void Button(float x, float y, int which) const {
+    // Cross / Circle, or the letters of TLG_GLYPHS=xbox (A / B) and nintendo (B / A). `light`: on a
+    // white button.
+    void Button(float x, float y, int which, bool light = false) const {
         const ImVec2 c = P(x, y);
-        dl->AddCircleFilled(c, 11.0f * k, SaveColor(kSaveThumb));
-        dl->AddCircle(c, 11.0f * k, SaveColor(kSaveKnob), 0, 1.0f * k);
+        const ImVec4 ground = light ? Theme::Ink : Theme::Text;
+        dl->AddCircleFilled(c, 11.0f * k, Theme::U32(ground, 0.08f));
+        dl->AddCircle(c, 11.0f * k, Theme::U32(ground, 0.28f), 0, 1.0f * k);
+        const ImVec4& mark = which == 0 ? Theme::Accent : Theme::Bad;
         if (const char* letter = PadText(nullptr, which == 0 ? "A" : "B", which == 0 ? "B" : "A")) {
-            const u32 rgb = which == 0 ? kSaveOk : 0xff8a8a;
-            Text(x - Width(13.0f, letter) / 2, y - 8.0f, 13.0f, rgb, letter, true);
+            Text(x - Width(13.0f, letter, true) / 2, y - 8.5f, 13.0f, which == 0 ? Theme::Good : Theme::Bad, letter, true);
             return;
         }
         if (which == 0) {
-            Line(x - 4, y - 4, x + 4, y + 4, 0x8fb6ff, 2.0f);
-            Line(x + 4, y - 4, x - 4, y + 4, 0x8fb6ff, 2.0f);
+            Line(x - 4, y - 4, x + 4, y + 4, mark, 2.0f);
+            Line(x + 4, y - 4, x - 4, y + 4, mark, 2.0f);
         } else {
-            dl->AddCircle(c, 5.0f * k, SaveColor(0xff8a8a), 0, 2.0f * k);
+            dl->AddCircle(c, 5.0f * k, Theme::U32(mark), 0, 2.0f * k);
         }
     }
-    // The panel itself: shadow, fill, border; then the discreet credit under its right corner.
+    // The panel itself (the launcher's popover): a soft shadow, fill, faint border; then the
+    // discreet credit under its right corner.
     void Panel(float w, float h) const {
-        dl->AddRectFilled(P(0, 18), P(w, h + 18), SaveColor(0x000000, 0.35f), 18.0f * k);
-        Box(0, 0, w, h, kSavePanel, 18.0f, 0.97f);
-        Frame(0, 0, w, h, kSaveBorder, 18.0f, 1.0f);
+        for (int i = 3; i >= 1; --i) {
+            const float spread = 4.0f * i;
+            Box(-spread, 12 - spread, w + spread, h + 12 + spread, Theme::Ink, kPanelRadius + spread, 0.14f);
+        }
+        Box(0, 0, w, h, Theme::Popover, kPanelRadius, Theme::PopoverAlpha);
+        Frame(0, 0, w, h, Theme::Line, kPanelRadius, 1.0f);
         const std::string credit = "@hayatog-dev";
-        Text(w - 6.0f - Width(11.0f, credit), h + 10.0f, 11.0f, 0x4a5568, credit);
+        Text(w - 6.0f - Width(11.0f, credit), h + 10.0f, 11.0f, Theme::Faint, credit, false, 0.7f);
     }
     // A save's picture (16:9) or a placeholder; `is_new` draws the dashed "+" slot.
     void Picture(float x, float y, float w, float h, ImTextureData* tex, bool is_new) const {
         if (tex) {
             dl->AddImageRounded(tex->GetTexRef(), P(x, y), P(x + w, y + h), ImVec2(0, 0), ImVec2(1, 1),
-                                IM_COL32_WHITE, 10.0f * k);
-            Frame(x, y, x + w, y + h, 0x323d52, 10.0f, 1.0f);
+                                IM_COL32_WHITE, kItemRadius * k);
+            Frame(x, y, x + w, y + h, Theme::Line, kItemRadius, 1.0f);
             return;
         }
         if (is_new) {
             for (float t = 0; t < 1.0f; t += 0.1f) { // dashes around the slot
-                Line(x + w * t, y, x + w * (t + 0.05f), y, kSaveKnob, 2.0f);
-                Line(x + w * t, y + h, x + w * (t + 0.05f), y + h, kSaveKnob, 2.0f);
+                Line(x + w * t, y, x + w * (t + 0.05f), y, Theme::Faint, 1.5f);
+                Line(x + w * t, y + h, x + w * (t + 0.05f), y + h, Theme::Faint, 1.5f);
             }
             for (float t = 0; t < 1.0f; t += 0.18f) {
-                Line(x, y + h * t, x, y + h * (t + 0.09f), kSaveKnob, 2.0f);
-                Line(x + w, y + h * t, x + w, y + h * (t + 0.09f), kSaveKnob, 2.0f);
+                Line(x, y + h * t, x, y + h * (t + 0.09f), Theme::Faint, 1.5f);
+                Line(x + w, y + h * t, x + w, y + h * (t + 0.09f), Theme::Faint, 1.5f);
             }
-            Line(x + w / 2, y + h / 2 - 11, x + w / 2, y + h / 2 + 11, kSaveDim, 2.0f);
-            Line(x + w / 2 - 11, y + h / 2, x + w / 2 + 11, y + h / 2, kSaveDim, 2.0f);
+            Line(x + w / 2, y + h / 2 - 11, x + w / 2, y + h / 2 + 11, Theme::Muted, 2.0f);
+            Line(x + w / 2 - 11, y + h / 2, x + w / 2 + 11, y + h / 2, Theme::Muted, 2.0f);
             return;
         }
-        Box(x, y, x + w, y + h, kSaveThumb, 10.0f);
-        Frame(x, y, x + w, y + h, 0x323d52, 10.0f, 1.0f);
+        Box(x, y, x + w, y + h, Theme::White(0.06f), kItemRadius);
+        Frame(x, y, x + w, y + h, Theme::Line, kItemRadius, 1.0f);
+    }
+    // A dialog button: the focused one white with black text (the launcher's Play button), the
+    // others faint.
+    void ActionButton(float x0, float y0, float x1, float y1, const char* label, int glyph, bool focused) const {
+        Box(x0, y0, x1, y1, focused ? Theme::Text : Theme::White(0.08f), kItemRadius);
+        if (!focused) Frame(x0, y0, x1, y1, Theme::Line, kItemRadius, 1.0f);
+        const float mid = (y0 + y1) / 2;
+        Button(x0 + 32, mid, glyph, focused);
+        Text(x0 + 52, mid - 10, 15.0f, focused ? Theme::Ink : Theme::Text, label, true);
     }
 };
 
@@ -997,7 +1052,7 @@ void SaveBackdrop(float alpha) {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     ImGui::GetForegroundDrawList()->AddRectFilled(
         viewport->WorkPos, ImVec2(viewport->WorkPos.x + viewport->WorkSize.x, viewport->WorkPos.y + viewport->WorkSize.y),
-        SaveColor(0x05070c, alpha));
+        Theme::U32(Theme::Ink, alpha));
 }
 
 std::string SaveWhen(s64 mtime) {
@@ -1010,11 +1065,11 @@ std::string SaveWhen(s64 mtime) {
     localtime_r(&t, &tm);
 #endif
     char out[64];
-    if (UiPortuguese()) {
-        std::snprintf(out, sizeof(out), "%02d/%02d/%04d · %02d:%02d", tm.tm_mday, tm.tm_mon + 1,
+    if (UiRussian()) {
+        std::snprintf(out, sizeof(out), "%02d.%02d.%04d · %02d:%02d", tm.tm_mday, tm.tm_mon + 1,
                       tm.tm_year + 1900, tm.tm_hour, tm.tm_min);
     } else {
-        static const char* months[] = {"Jan", "Mar", "Apr", "May", "Jun",
+        static const char* months[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
                                        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
         const int hour = tm.tm_hour % 12 ? tm.tm_hour % 12 : 12;
         std::snprintf(out, sizeof(out), "%s %d, %d · %d:%02d %s", months[tm.tm_mon % 12], tm.tm_mday,
@@ -1026,21 +1081,21 @@ std::string SaveWhen(s64 mtime) {
 std::string SaveAgo(s64 mtime) {
     const s64 seconds = s64(std::time(nullptr)) - mtime;
     if (mtime <= 0 || seconds < 0) return {};
-    const bool pt = UiPortuguese();
     char out[64];
-    if (seconds < 60) return pt ? "agora mesmo" : "just now";
+    if (seconds < 60) return TL("just now", "только что");
     if (seconds < 3600) {
         const int m = int(seconds / 60);
-        std::snprintf(out, sizeof(out), pt ? (m == 1 ? "há %d minuto" : "há %d minutos")
-                                           : (m == 1 ? "%d minute ago" : "%d minutes ago"), m);
+        std::snprintf(out, sizeof(out), "%d %s", m,
+                      Plural(m, "minute ago", "minutes ago", "минуту назад", "минуты назад", "минут назад"));
     } else if (seconds < 86400) {
         const int h = int(seconds / 3600);
-        std::snprintf(out, sizeof(out), pt ? (h == 1 ? "há %d hora" : "há %d horas")
-                                           : (h == 1 ? "%d hour ago" : "%d hours ago"), h);
+        std::snprintf(out, sizeof(out), "%d %s", h,
+                      Plural(h, "hour ago", "hours ago", "час назад", "часа назад", "часов назад"));
     } else {
         const int d = int(seconds / 86400);
-        if (d == 1) return pt ? "ontem" : "yesterday";
-        std::snprintf(out, sizeof(out), pt ? "há %d dias" : "%d days ago", d);
+        if (d == 1) return TL("yesterday", "вчера");
+        std::snprintf(out, sizeof(out), "%d %s", d,
+                      Plural(d, "day ago", "days ago", "день назад", "дня назад", "дней назад"));
     }
     return out;
 }
@@ -1049,10 +1104,10 @@ std::string SaveSize(u64 bytes) {
     if (!bytes) return {};
     char out[32];
     if (bytes < 1024 * 1024) {
-        std::snprintf(out, sizeof(out), "%llu KB", (unsigned long long)((bytes + 1023) / 1024));
+        std::snprintf(out, sizeof(out), "%llu %s", (unsigned long long)((bytes + 1023) / 1024), TL("KB", "КБ"));
     } else {
-        std::snprintf(out, sizeof(out), "%.1f MB", double(bytes) / (1024.0 * 1024.0));
-        if (UiPortuguese()) {
+        std::snprintf(out, sizeof(out), "%.1f %s", double(bytes) / (1024.0 * 1024.0), TL("MB", "МБ"));
+        if (UiRussian()) {
             for (char* c = out; *c; ++c) if (*c == '.') *c = ',';
         }
     }
@@ -1060,8 +1115,8 @@ std::string SaveSize(u64 bytes) {
 }
 
 const char* SaveTitle(int kind) {
-    return kind == 2 ? TL("Load game", "Carregar jogo") : kind == 3 ? TL("Delete save", "Excluir save")
-                                                         : TL("Save game", "Salvar jogo");
+    return kind == 2 ? TL("Load game", "Загрузка игры") : kind == 3 ? TL("Delete save", "Удаление сохранения")
+                                                         : TL("Save game", "Сохранение игры");
 }
 
 ImTextureData* SaveTexture(size_t i) {
@@ -1072,19 +1127,16 @@ ImTextureData* SaveTexture(size_t i) {
 void SaveCard(const SavePainter& p, float x0, float y0, float x1, const SaveRow& row, ImTextureData* tex,
               bool selected, float picture_w) {
     const float picture_h = picture_w * 9.0f / 16.0f, h = picture_h + 24.0f;
+    p.Box(x0, y0, x1, y0 + h, Theme::White(selected ? 0.12f : 0.04f), kItemRadius);
     if (selected) {
-        p.Frame(x0 - 3, y0 - 3, x1 + 3, y0 + h + 3, kSaveAccent, 16.0f, 4.0f, 0.12f);
-        p.Box(x0, y0, x1, y0 + h, kSaveCardOn, 14.0f);
-        p.Frame(x0, y0, x1, y0 + h, kSaveAccent, 14.0f, 2.0f);
-    } else {
-        p.Box(x0, y0, x1, y0 + h, kSaveCard, 14.0f);
+        p.Ring(x0, y0, x1, y0 + h, kItemRadius);
     }
     p.Picture(x0 + 16, y0 + 12, picture_w, picture_h, tex, row.is_new);
     const float text_x = x0 + 16 + picture_w + 18;
     std::string when, ago;
     if (row.is_new) {
-        p.Text(text_x, y0 + h / 2 - 20, 17.0f, kSaveText, TL("New save", "Novo save"), true);
-        p.Text(text_x, y0 + h / 2 + 4, 13.5f, kSaveMuted, TL("Create a new save", "Criar um save novo"));
+        p.Text(text_x, y0 + h / 2 - 20, 17.0f, Theme::Text, TL("New save", "Новое сохранение"), true);
+        p.Text(text_x, y0 + h / 2 + 4, 13.5f, Theme::Muted, TL("Create a new save", "Создать новое сохранение"));
         return;
     }
     when = SaveWhen(row.mtime);
@@ -1092,15 +1144,15 @@ void SaveCard(const SavePainter& p, float x0, float y0, float x1, const SaveRow&
     const std::string size = SaveSize(row.bytes);
     if (!size.empty()) ago = ago.empty() ? size : ago + " · " + size;
     const float right = x1 - 16;
-    const float right_w = std::max(p.Width(14.0f, when), p.Width(12.5f, ago));
+    const float right_w = std::max(p.Width(14.0f, when, true), p.Width(12.5f, ago));
     const float text_w = right - text_x - (right_w > 0 ? right_w + 20 : 0);
     std::string line = row.subtitle;
     if (!row.detail.empty()) line = line.empty() ? row.detail : line + " · " + row.detail;
     for (char& c : line) if (c == '\n' || c == '\r') c = ' ';
-    p.Text(text_x, y0 + h / 2 - 20, 17.0f, kSaveText, p.Fit(17.0f, row.title, text_w), true);
-    p.Text(text_x, y0 + h / 2 + 4, 13.5f, kSaveMuted, p.Fit(13.5f, line, text_w));
-    p.TextRight(right, y0 + h / 2 - 18, 14.0f, 0xdfe6f1, when, true);
-    p.TextRight(right, y0 + h / 2 + 5, 12.5f, kSaveDim, ago);
+    p.Text(text_x, y0 + h / 2 - 20, 17.0f, Theme::Text, p.Fit(17.0f, row.title, text_w, true), true);
+    p.Text(text_x, y0 + h / 2 + 4, 13.5f, Theme::Muted, p.Fit(13.5f, line, text_w));
+    p.TextRight(right, y0 + h / 2 - 18, 14.0f, Theme::Text, when, true);
+    p.TextRight(right, y0 + h / 2 + 5, 12.5f, Theme::Faint, ago);
 }
 
 void SaveListBox() {
@@ -1109,23 +1161,23 @@ void SaveListBox() {
     const float w = 880, row_h = 96, gap = 10, header_h = 78, footer_h = 54, pad = 18;
     const float list_h = shown * row_h + std::max(shown - 1, 0) * gap + pad * 2;
     const float h = header_h + list_h + footer_h;
-    SaveBackdrop(0.62f);
+    SaveBackdrop(0.6f);
     SavePainter p = SavePainterFor(w, h);
     p.Panel(w, h);
 
     // Header: a floppy, the title, the game and the number of saves.
     const float ix = 28, iy = 25;
-    p.Frame(ix, iy, ix + 26, iy + 26, kSaveAccent, 4.0f, 1.8f);
-    p.Frame(ix + 6, iy, ix + 20, iy + 9, kSaveAccent, 1.0f, 1.8f);
-    p.Frame(ix + 6, iy + 15, ix + 20, iy + 26, kSaveAccent, 1.0f, 1.8f);
-    p.Text(70, 18, 24.0f, kSaveText, SaveTitle(save_kind), true);
+    p.Frame(ix, iy, ix + 26, iy + 26, Theme::Text, 4.0f, 1.8f);
+    p.Frame(ix + 6, iy, ix + 20, iy + 9, Theme::Text, 1.0f, 1.8f);
+    p.Frame(ix + 6, iy + 15, ix + 20, iy + 26, Theme::Text, 1.0f, 1.8f);
+    p.Text(70, 17, 24.0f, Theme::Text, SaveTitle(save_kind), true);
     const int saves = count - int(std::count_if(save_rows.begin(), save_rows.end(), [](const SaveRow& r) { return r.is_new; }));
-    char sub[160];
+    char sub[200];
     const char* game = std::getenv("TLG_APP_NAME");
     std::snprintf(sub, sizeof(sub), "%s%s%d %s", game && *game ? game : "", game && *game ? " · " : "", saves,
-                  saves == 1 ? "save" : "saves");
-    p.Text(70, 48, 13.0f, kSaveDim, sub);
-    p.Line(0, header_h, w, header_h, kSaveLine, 1.0f);
+                  Plural(saves, "save", "saves", "сохранение", "сохранения", "сохранений"));
+    p.Text(70, 48, 13.0f, Theme::Faint, sub);
+    p.Line(0, header_h, w, header_h, Theme::Line, 1.0f);
 
     // Rows, scrolled so the selected one is shown.
     if (choice_index < choice_first) choice_first = choice_index;
@@ -1140,23 +1192,26 @@ void SaveListBox() {
     if (count > shown) { // scroll bar
         const float track = list_h - pad * 2, y0 = header_h + pad;
         const float knob = track * shown / count, top = y0 + track * choice_first / count;
-        p.Box(w - 11, y0, w - 8, y0 + track, kSaveLine, 2.0f);
-        p.Box(w - 11, top, w - 8, top + knob, kSaveDim, 2.0f);
+        p.Box(w - 11, y0, w - 8, y0 + track, Theme::Line, 2.0f);
+        p.Box(w - 11, top, w - 8, top + knob, Theme::Faint, 2.0f);
     }
 
     // Footer: what the buttons do.
     const float fy = header_h + list_h;
-    p.Line(0, fy, w, fy, kSaveLine, 1.0f);
-    const char* confirm = save_kind == 2 ? TL("Load", "Carregar") : save_kind == 3 ? TL("Delete", "Excluir")
-                                                                                  : TL("Save here", "Salvar aqui");
+    p.Line(0, fy, w, fy, Theme::Line, 1.0f);
+    const char* confirm = save_kind == 2 ? TL("Load", "Загрузить") : save_kind == 3 ? TL("Delete", "Удалить")
+                                                                                  : TL("Save here", "Сохранить сюда");
+    const char* back = TL("Back", "Назад");
     float x = 40;
     p.Button(x, fy + footer_h / 2, 0);
-    p.Text(x + 18, fy + footer_h / 2 - 9, 13.5f, 0xb8c2d3, confirm);
+    p.Text(x + 18, fy + footer_h / 2 - 9, 13.5f, Theme::Muted, confirm);
     x += 18 + p.Width(13.5f, confirm) + 34;
     p.Button(x, fy + footer_h / 2, 1);
-    p.Text(x + 18, fy + footer_h / 2 - 9, 13.5f, 0xb8c2d3, TL("Back", "Voltar"));
-    p.TextRight(w - 28, fy + footer_h / 2 - 8, 12.5f, 0x7f8ba0,
-                TL("Enter / click: choose · Esc / right click: back", "Enter / clique: escolher · Esc / botão direito: voltar"));
+    p.Text(x + 18, fy + footer_h / 2 - 9, 13.5f, Theme::Muted, back);
+    x += 18 + p.Width(13.5f, back) + 30;
+    const std::string hint = TL("Enter / click: choose · Esc / right click: back",
+                                "Enter / щелчок: выбрать · Esc / правая кнопка: назад");
+    p.TextRight(w - 28, fy + footer_h / 2 - 8, 12.5f, Theme::Faint, p.Fit(12.5f, hint, w - 28 - x));
 }
 
 // The message's words for a system message type (sceSaveDataDialog), the game's own text or an
@@ -1168,46 +1223,45 @@ struct SaveMessageWords {
 };
 
 SaveMessageWords SaveMessageFor(int kind, int code, u64 value, const std::string& text) {
-    const bool pt = UiPortuguese();
     switch (code) {
     case 1:
-        return {TL("No saved data", "Nenhum save encontrado"),
-                TL("There is no saved data to load.", "Não há nenhum save para carregar."), 0, false};
+        return {TL("No saved data", "Нет сохранений"),
+                TL("There is no saved data to load.", "Загружать нечего: сохранений нет."), 0, false};
     case 2:
-        if (kind == 2) return {TL("Load this save?", "Carregar este save?"),
-                               TL("Progress that was not saved will be lost.", "O progresso não salvo será perdido."), 1, false};
-        if (kind == 3) return {TL("Delete this save?", "Excluir este save?"),
-                               TL("This cannot be undone.", "Não dá para desfazer."), 1, true};
-        return {TL("Save the game?", "Salvar o jogo?"), TL("A new save will be created.", "Um save novo será criado."), 1, false};
+        if (kind == 2) return {TL("Load this save?", "Загрузить это сохранение?"),
+                               TL("Progress that was not saved will be lost.", "Несохранённый прогресс будет потерян."), 1, false};
+        if (kind == 3) return {TL("Delete this save?", "Удалить это сохранение?"),
+                               TL("This cannot be undone.", "Это действие нельзя отменить."), 1, true};
+        return {TL("Save the game?", "Сохранить игру?"), TL("A new save will be created.", "Будет создано новое сохранение."), 1, false};
     case 3:
-        return {TL("Overwrite this save?", "Sobrescrever este save?"),
+        return {TL("Overwrite this save?", "Перезаписать это сохранение?"),
                 TL("The current progress will replace this save. This cannot be undone.",
-                   "O progresso atual vai substituir este save. Não dá para desfazer."), 1, true};
+                   "Текущий прогресс заменит это сохранение. Это действие нельзя отменить."), 1, true};
     case 4:
     case 8:
-        return {TL("Not enough space", "Sem espaço suficiente"),
-                TL("Free some disk space and try again.", "Libere espaço no disco e tente de novo."), 0, true};
+        return {TL("Not enough space", "Недостаточно места"),
+                TL("Free some disk space and try again.", "Освободите место на диске и попробуйте снова."), 0, true};
     case 6:
-        return {TL("This save is damaged", "Este save está corrompido"),
-                TL("It cannot be used.", "Não dá para usar este save."), 0, true};
+        return {TL("This save is damaged", "Сохранение повреждено"),
+                TL("It cannot be used.", "Его нельзя использовать."), 0, true};
     case 10:
-        return {TL("A damaged save was found", "Um save corrompido foi encontrado"),
-                TL("It was deleted.", "Ele foi excluído."), 0, true};
+        return {TL("A damaged save was found", "Найдено повреждённое сохранение"),
+                TL("It was deleted.", "Оно удалено."), 0, true};
     case 11:
-        return {TL("A damaged save was found", "Um save corrompido foi encontrado"),
-                TL("A new save was created in its place.", "Um save novo foi criado no lugar."), 0, true};
+        return {TL("A damaged save was found", "Найдено повреждённое сохранение"),
+                TL("A new save was created in its place.", "Вместо него создано новое."), 0, true};
     case 13:
-        return {TL("A damaged save was found", "Um save corrompido foi encontrado"),
-                TL("It was restored.", "Ele foi restaurado."), 0, true};
+        return {TL("A damaged save was found", "Найдено повреждённое сохранение"),
+                TL("It was restored.", "Оно восстановлено."), 0, true};
     case 14:
-        return {TL("The saves are too large", "Os saves estão grandes demais"),
-                TL("Delete some saves and try again.", "Exclua alguns saves e tente de novo."), 0, true};
+        return {TL("The saves are too large", "Сохранения слишком большие"),
+                TL("Delete some saves and try again.", "Удалите несколько сохранений и попробуйте снова."), 0, true};
     case 100:
         return {SaveTitle(kind), text, 0, false};
     case 101: {
         char body[96];
-        std::snprintf(body, sizeof(body), pt ? "Código do erro: 0x%08X" : "Error code: 0x%08X", unsigned(value));
-        return {TL("Save data error", "Erro nos dados salvos"), body, 0, true};
+        std::snprintf(body, sizeof(body), TL("Error code: 0x%08X", "Код ошибки: 0x%08X"), unsigned(value));
+        return {TL("Save data error", "Ошибка данных сохранения"), body, 0, true};
     }
     default:
         return {SaveTitle(kind), text, 0, false};
@@ -1226,25 +1280,25 @@ void SaveMessageBox() {
         : font->CalcTextSizeA(14.5f * k0, FLT_MAX, inner * k0, words.body.c_str()).y / k0;
     const float card_h = message_has_entry ? 87.0f : 0.0f;
     float h = pad + 30 + 20 + (card_h ? card_h + 20 : 0) + (body_h ? body_h + 20 : 0) + 46 + pad;
-    SaveBackdrop(0.72f);
+    SaveBackdrop(0.6f);
     SavePainter p = SavePainterFor(w, h);
     p.Panel(w, h);
 
     float y = pad;
     if (words.warn) { // triangle
         const ImVec2 a = p.P(pad + 13, y + 2), b = p.P(pad + 26, y + 26), c = p.P(pad, y + 26);
-        p.dl->AddTriangle(a, b, c, SaveColor(kSaveWarn), 2.0f * p.k);
-        p.Line(pad + 13, y + 11, pad + 13, y + 18, kSaveWarn, 2.0f);
-        p.dl->AddCircleFilled(p.P(pad + 13, y + 22), 1.4f * p.k, SaveColor(kSaveWarn));
+        p.dl->AddTriangle(a, b, c, Theme::U32(Theme::Warn), 2.0f * p.k);
+        p.Line(pad + 13, y + 11, pad + 13, y + 18, Theme::Warn, 2.0f);
+        p.dl->AddCircleFilled(p.P(pad + 13, y + 22), 1.4f * p.k, Theme::U32(Theme::Warn));
     } else {
-        p.dl->AddCircle(p.P(pad + 13, y + 14), 12.0f * p.k, SaveColor(kSaveAccent), 0, 2.0f * p.k);
-        p.Text(pad + 8.5f, y + 4, 16.0f, kSaveAccent, "?", true);
+        p.dl->AddCircle(p.P(pad + 13, y + 14), 12.0f * p.k, Theme::U32(Theme::Accent), 0, 2.0f * p.k);
+        p.Text(pad + 13 - p.Width(16.0f, "?", true) / 2, y + 3.5f, 16.0f, Theme::Accent, "?", true);
     }
-    p.Text(pad + 40, y + 1, 22.0f, kSaveText, p.Fit(22.0f, words.title, inner - 40), true);
+    p.Text(pad + 40, y + 1, 22.0f, Theme::Text, p.Fit(22.0f, words.title, inner - 40, true), true);
     y += 30 + 20;
     if (message_has_entry) {
-        p.Box(pad, y, w - pad, y + card_h, kSaveCard, 14.0f);
-        p.Frame(pad, y, w - pad, y + card_h, kSaveBorder, 14.0f, 1.0f);
+        p.Box(pad, y, w - pad, y + card_h, Theme::White(0.04f), kItemRadius);
+        p.Frame(pad, y, w - pad, y + card_h, Theme::Line, kItemRadius, 1.0f);
         p.Picture(pad + 14, y + 12, 112, 63, SaveTexture(0), message_entry.is_new);
         const float tx = pad + 14 + 112 + 16, tw = w - pad - 14 - tx;
         std::string line = message_entry.subtitle;
@@ -1253,32 +1307,29 @@ void SaveMessageBox() {
         std::string when = SaveWhen(message_entry.mtime);
         const std::string ago = SaveAgo(message_entry.mtime);
         if (!when.empty() && !ago.empty()) when += " (" + ago + ")";
-        p.Text(tx, y + 16, 16.0f, kSaveText,
-               p.Fit(16.0f, message_entry.is_new ? std::string(TL("New save", "Novo save")) : message_entry.title, tw), true);
-        p.Text(tx, y + 39, 13.0f, kSaveMuted, p.Fit(13.0f, line, tw));
-        p.Text(tx, y + 59, 12.5f, kSaveDim, p.Fit(12.5f, when, tw));
+        p.Text(tx, y + 16, 16.0f, Theme::Text,
+               p.Fit(16.0f, message_entry.is_new ? std::string(TL("New save", "Новое сохранение")) : message_entry.title, tw, true),
+               true);
+        p.Text(tx, y + 39, 13.0f, Theme::Muted, p.Fit(13.0f, line, tw));
+        p.Text(tx, y + 59, 12.5f, Theme::Faint, p.Fit(12.5f, when, tw));
         y += card_h + 20;
     }
     if (body_h) {
-        p.Text(pad, y, 14.5f, 0xc3ccdb, words.body, false, 1.0f, inner);
+        p.Text(pad, y, 14.5f, Theme::Muted, words.body, false, 1.0f, inner);
         y += body_h + 20;
     }
 
-    // Buttons, right-aligned: [no/cancel] [yes/OK]; the focused one is filled.
-    const char* yes = buttons == 1 ? TL("Yes", "Sim") : "OK";
-    const char* no = buttons == 1 ? TL("No", "Não") : TL("Cancel", "Cancelar");
+    // Buttons, right-aligned: [no/cancel] [yes/OK]; the focused one is white.
+    const char* yes = buttons == 1 ? TL("Yes", "Да") : "OK";
+    const char* no = buttons == 1 ? TL("No", "Нет") : TL("Cancel", "Отмена");
     const bool two = buttons == 1 || buttons == 3;
     if (!two) message_focus = 1;
     float right = w - pad;
     save_button_rects[0] = save_button_rects[1] = ImRect();
     for (int b = 1; b >= (two ? 0 : 1); --b) {
         const char* label = b == 1 ? yes : no;
-        const float bw = 22 + 20 + 10 + p.Width(15.0f, label) + 22, x0 = right - bw;
-        const bool focused = b == message_focus;
-        p.Box(x0, y, right, y + 46, focused ? kSaveAccent : kSaveCard, 12.0f);
-        if (!focused) p.Frame(x0, y, right, y + 46, kSaveKnob, 12.0f, 1.0f);
-        p.Button(x0 + 32, y + 23, b == 1 ? 0 : 1);
-        p.Text(x0 + 52, y + 13, 15.0f, focused ? 0x0b0e14 : 0xdfe6f1, label, true);
+        const float bw = 22 + 20 + 10 + p.Width(15.0f, label, true) + 22, x0 = right - bw;
+        p.ActionButton(x0, y, right, y + 46, label, b == 1 ? 0 : 1, b == message_focus);
         save_button_rects[b] = ImRect(p.P(x0, y), p.P(right, y + 46));
         right = x0 - 12;
     }
@@ -1292,51 +1343,52 @@ void SaveProgressBox(SaveClock::time_point now) {
     // A spinning arc.
     const float t = std::chrono::duration<float>(now - progress_since).count();
     const ImVec2 c = p.P(28 + 13, 26 + 13);
+    p.dl->AddCircle(c, 11.0f * p.k, Theme::U32(Theme::Line), 0, 2.4f * p.k);
     p.dl->PathArcTo(c, 11.0f * p.k, t * 6.0f, t * 6.0f + 4.4f, 24);
-    p.dl->PathStroke(SaveColor(kSaveAccent), 0, 2.4f * p.k);
-    const char* title = progress_kind == 2 ? TL("Loading...", "Carregando...")
-                        : progress_kind == 3 ? TL("Deleting...", "Excluindo...")
-                                             : TL("Saving...", "Salvando...");
-    p.Text(66, 20, 21.0f, kSaveText, title, true);
-    p.Text(66, 47, 13.0f, kSaveDim, TL("Do not close the game.", "Não feche o jogo."));
+    p.dl->PathStroke(Theme::U32(Theme::Accent), 0, 2.4f * p.k);
+    const char* title = progress_kind == 2 ? TL("Loading...", "Загрузка...")
+                        : progress_kind == 3 ? TL("Deleting...", "Удаление...")
+                                             : TL("Saving...", "Сохранение...");
+    p.Text(66, 19, 21.0f, Theme::Text, title, true);
+    p.Text(66, 47, 13.0f, Theme::Faint, TL("Do not close the game.", "Не закрывайте игру."));
     const float bx0 = 28, bx1 = w - 28, by = 84;
-    p.Box(bx0, by, bx1, by + 10, kSaveThumb, 5.0f);
+    p.Box(bx0, by, bx1, by + 6, Theme::White(0.1f), 3.0f);
     if (progress_percent >= 0) {
         const float f = std::clamp(progress_percent, 0, 100) / 100.0f;
-        if (f > 0) p.Box(bx0, by, bx0 + (bx1 - bx0) * f, by + 10, kSaveAccent, 5.0f);
+        if (f > 0) p.Box(bx0, by, bx0 + (bx1 - bx0) * f, by + 6, Theme::Accent, 3.0f);
         char pct[16];
         std::snprintf(pct, sizeof(pct), "%d%%", std::clamp(progress_percent, 0, 100));
-        p.TextRight(bx1, by + 20, 13.0f, 0xdfe6f1, pct, true);
+        p.TextRight(bx1, by + 16, 13.0f, Theme::Text, pct, true);
     } else { // no figure: a segment sweeps the bar
         const float span = (bx1 - bx0) * 0.3f, phase = std::fmod(t * 0.8f, 1.0f);
         const float s0 = bx0 + (bx1 - bx0 + span) * phase - span;
-        p.Box(std::max(s0, bx0), by, std::min(s0 + span, bx1), by + 10, kSaveAccent, 5.0f);
+        p.Box(std::max(s0, bx0), by, std::min(s0 + span, bx1), by + 6, Theme::Accent, 3.0f);
     }
     if (!progress_text.empty()) {
         std::string text = progress_text;
         for (char& ch : text) if (ch == '\n' || ch == '\r') ch = ' ';
-        p.Text(bx0, by + 20, 13.0f, kSaveMuted, p.Fit(13.0f, text, bx1 - bx0 - 60));
+        p.Text(bx0, by + 16, 13.0f, Theme::Muted, p.Fit(13.0f, text, bx1 - bx0 - 60));
     }
 }
 
 void SaveToastBox(SaveClock::time_point now) {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    const char* text = toast_kind == 2 ? TL("Save loaded", "Save carregado")
-                       : toast_kind == 3 ? TL("Save deleted", "Save excluído")
-                                         : TL("Game saved", "Jogo salvo");
+    const char* text = toast_kind == 2 ? TL("Save loaded", "Сохранение загружено")
+                       : toast_kind == 3 ? TL("Save deleted", "Сохранение удалено")
+                                         : TL("Game saved", "Игра сохранена");
     const float in = std::chrono::duration<float>(now - toast_since).count();
     const float out = std::chrono::duration<float>(toast_until - now).count();
     const float alpha = std::clamp(std::min(in / 0.15f, out / 0.4f), 0.0f, 1.0f);
     const float k = viewport->WorkSize.y / 720.0f;
     SavePainter p{ImGui::GetForegroundDrawList(), ImGui::GetFont(), k, {}};
-    const float w = 18 + 22 + 12 + p.Width(14.0f, text) + 20, h = 46;
+    const float w = 18 + 22 + 12 + p.Width(14.0f, text, true) + 20, h = 46;
     p.at = ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - (32 + w) * k,
                   viewport->WorkPos.y + viewport->WorkSize.y - (28 + h) * k);
-    p.Box(0, 0, w, h, kSavePanel, 14.0f, 0.92f * alpha);
-    p.Frame(0, 0, w, h, kSaveBorder, 14.0f, 1.0f, alpha);
-    p.Line(18, 24, 24, 30, kSaveOk, 2.4f, alpha); // a check mark
-    p.Line(24, 30, 36, 17, kSaveOk, 2.4f, alpha);
-    p.Text(52, 14, 14.0f, kSaveText, text, true, alpha);
+    p.Box(0, 0, w, h, Theme::Popover, kPanelRadius, Theme::PopoverAlpha * alpha);
+    p.Frame(0, 0, w, h, Theme::Line, kPanelRadius, 1.0f, alpha);
+    p.Line(18, 24, 24, 30, Theme::Good, 2.4f, alpha); // a check mark
+    p.Line(24, 30, 36, 17, Theme::Good, 2.4f, alpha);
+    p.Text(52, 13, 14.0f, Theme::Text, text, true, alpha);
 }
 
 // ---- The graffiti guide: how to paint without a gyro (sensor mode). Shown in the middle of the
@@ -1346,21 +1398,23 @@ std::atomic<bool> guide_active{false};
 ImRect guide_button_rect;
 
 void GuideBox() {
-    const bool pt = UiPortuguese();
+    const bool ru = UiRussian();
     const char* sticks = PadText("L3+R3", "LS+RS", "LS+RS");
-    const char* shake = PadText(pt ? "✕ (Xis)" : "✕ (cross)", "A", "B");
+    const char* shake = PadText(ru ? "✕ (крестик)" : "✕ (cross)", "A", "B");
     const char* spray = PadText("R2", "RT", "ZR");
-    char steps[4][200];
-    std::snprintf(steps[0], sizeof(steps[0]), pt ? "Toque em %s juntos: liga o modo sensor e a lata já fica de lado."
-                                                 : "Tap %s together: sensor mode turns on and the can is held sideways.", sticks);
-    std::snprintf(steps[1], sizeof(steps[1]), pt ? "Segure %s para sacudir a lata." : "Hold %s to shake the can.", shake);
-    std::snprintf(steps[2], sizeof(steps[2]), pt ? "Segure %s para pintar e mire com o analógico esquerdo (pouco inclinado vai devagar)."
-                                                 : "Hold %s to spray and aim with the left stick (a small push is slow).", spray);
-    std::snprintf(steps[3], sizeof(steps[3]), pt ? "Toque em %s de novo para voltar a andar." : "Tap %s again to walk again.", sticks);
+    char steps[4][320];
+    std::snprintf(steps[0], sizeof(steps[0]), TL("Tap %s together: sensor mode turns on and the can is held sideways.",
+                                                 "Нажмите %s одновременно: включится режим сенсора, и баллончик повернётся набок."),
+                  sticks);
+    std::snprintf(steps[1], sizeof(steps[1]), TL("Hold %s to shake the can.", "Удерживайте %s, чтобы встряхнуть баллончик."), shake);
+    std::snprintf(steps[2], sizeof(steps[2]), TL("Hold %s to spray and aim with the left stick (a small push is slow).",
+                                                 "Удерживайте %s, чтобы распылять краску, и цельтесь левым стиком (лёгкий наклон — медленнее)."),
+                  spray);
+    std::snprintf(steps[3], sizeof(steps[3]), TL("Tap %s again to walk again.", "Снова нажмите %s, чтобы вернуться к ходьбе."), sticks);
     const char* keys = TL("Keyboard: hold T or G (can sideways), Y shakes, F sprays, the arrow keys aim.",
-                          "Teclado: segure T ou G (lata de lado), Y sacode, F pinta, as setas miram.");
+                          "Клавиатура: удерживайте T или G (баллончик набок), Y — встряхнуть, F — распылять, стрелки — прицел.");
     const char* again = TL("The Insert menu, Controls tab, shows this again.",
-                           "O menu Insert, aba Controle, mostra isto de novo.");
+                           "Это окно снова открывается в меню Insert, вкладка «Управление».");
     const float w = 640, pad = 30, inner = w - pad * 2, text_x = pad + 40;
     ImFont* font = ImGui::GetFont();
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -1375,34 +1429,33 @@ void GuideBox() {
     }
     const float keys_h = height(keys, 13.0f, inner);
     h += 8 + keys_h + 22 + 46 + pad;
-    SaveBackdrop(0.70f);
+    SaveBackdrop(0.6f);
     SavePainter p = SavePainterFor(w, h);
     p.Panel(w, h);
     float y = pad;
-    p.Text(pad, y, 23.0f, kSaveText, TL("Graffiti without a gyro", "Grafite sem giroscópio"), true);
+    p.Text(pad, y, 23.0f, Theme::Text, TL("Graffiti without a gyro", "Граффити без гироскопа"), true);
     y += 30 + 8;
-    p.Text(pad, y, 14.0f, kSaveMuted, TL("No motion sensor on your controller? Use sensor mode:",
-                                         "Seu controle não tem sensor de movimento? Use o modo sensor:"));
+    p.Text(pad, y, 14.0f, Theme::Muted, TL("No motion sensor on your controller? Use sensor mode:",
+                                           "На геймпаде нет датчика движения? Включите режим сенсора:"));
     y += 20 + 22;
     for (int i = 0; i < 4; ++i) {
         const ImVec2 c = p.P(pad + 13, y + 11);
-        p.dl->AddCircleFilled(c, 13.0f * p.k, SaveColor(kSaveCardOn));
-        p.dl->AddCircle(c, 13.0f * p.k, SaveColor(kSaveAccent), 0, 1.5f * p.k);
+        p.dl->AddCircleFilled(c, 13.0f * p.k, Theme::U32(Theme::Accent, 0.16f));
+        p.dl->AddCircle(c, 13.0f * p.k, Theme::U32(Theme::Accent), 0, 1.5f * p.k);
         char number[4];
         std::snprintf(number, sizeof(number), "%d", i + 1);
-        p.Text(pad + 13 - p.Width(14.0f, number) / 2, y + 2, 14.0f, kSaveAccent, number, true);
-        p.Text(text_x, y + 1, 15.0f, kSaveText, steps[i], false, 1.0f, inner - 40);
+        p.Text(pad + 13 - p.Width(14.0f, number, true) / 2, y + 1.5f, 14.0f, Theme::Text, number, true);
+        p.Text(text_x, y + 1, 15.0f, Theme::Text, steps[i], false, 1.0f, inner - 40);
         y += step_h[i] + 12;
     }
     y += 8;
-    p.Text(pad, y, 13.0f, kSaveDim, keys, false, 1.0f, inner);
+    p.Text(pad, y, 13.0f, Theme::Muted, keys, false, 1.0f, inner);
     y += keys_h + 22;
-    p.Text(pad, y + 15, 12.5f, 0x6f7c92, again, false, 1.0f, inner - 180);
-    const char* ok = TL("Got it", "Entendi");
-    const float bw = 22 + 20 + 10 + p.Width(15.0f, ok) + 22, x0 = w - pad - bw;
-    p.Box(x0, y, w - pad, y + 46, kSaveAccent, 12.0f);
-    p.Button(x0 + 32, y + 23, 0);
-    p.Text(x0 + 52, y + 13, 15.0f, 0x0b0e14, ok, true);
+    const char* ok = TL("Got it", "Понятно");
+    const float bw = 22 + 20 + 10 + p.Width(15.0f, ok, true) + 22, x0 = w - pad - bw;
+    const float again_w = x0 - pad - 20;
+    p.Text(pad, y + 23 - height(again, 12.5f, again_w) / 2, 12.5f, Theme::Faint, again, false, 1.0f, again_w);
+    p.ActionButton(x0, y, w - pad, y + 46, ok, 0, true);
     guide_button_rect = ImRect(p.P(x0, y), p.P(w - pad, y + 46));
 }
 
@@ -1454,9 +1507,9 @@ void LoadingScreen() {
     const u32 done = loading_done, total = loading_total;
     const bool compile = loading_compile;
     ImGui::SetWindowFontScale(1.6f);
-    ImGui::TextUnformatted(compile ? TL("Compiling shaders...", "Compilando shaders...")
-                           : total ? TL("Loading shader cache...", "Carregando o cache de shaders...")
-                                   : TL("Preparing graphics...", "Preparando os gráficos..."));
+    ImGui::TextUnformatted(compile ? TL("Compiling shaders...", "Компиляция шейдеров...")
+                           : total ? TL("Loading shader cache...", "Загрузка кэша шейдеров...")
+                                   : TL("Preparing graphics...", "Подготовка графики..."));
     ImGui::SetWindowFontScale(1.0f);
     if (total) {
         char count[64];
@@ -1469,15 +1522,15 @@ void LoadingScreen() {
                                                              loading_compile_started)
                                    .count();
         const u32 left = u32(elapsed * double(total - done) / double(done)) + 1;
-        ImGui::Text(TL("About %u:%02u left", "Faltam cerca de %u:%02u"), left / 60, left % 60);
+        ImGui::Text(TL("About %u:%02u left", "Осталось около %u:%02u"), left / 60, left % 60);
     }
     ImGui::PushTextWrapPos(0.0f);
     ImGui::TextDisabled("%s", compile ? TL("Only on the first start on this computer and after updates: "
                                            "then the game runs without compiling shaders.",
-                                           "Só na primeira abertura neste computador e depois de "
-                                           "atualizações: depois o jogo roda sem compilar shaders.")
+                                           "Только при первом запуске на этом компьютере и после "
+                                           "обновлений: дальше игра работает без компиляции шейдеров.")
                                       : TL("The first start after an update takes longer.",
-                                           "A primeira abertura depois de uma atualização demora mais."));
+                                           "Первый запуск после обновления занимает больше времени."));
     ImGui::PopTextWrapPos();
     ImGui::End();
 }
@@ -1620,8 +1673,8 @@ void FpsCounter() {
         ImGui::Dummy(ImVec2(0.0f, 2.0f * base_scale));
         FrameGraph(250.0f * base_scale * font_scale, 64.0f * base_scale * font_scale, font_scale);
         ImGui::SetWindowFontScale(font_scale * 0.8f);
-        ImGui::TextColored(Theme::Muted, "%s %.0f   %s %.0f   1%% %.0f   %s %d", TL("min", "mín"), stats.min_fps,
-                           TL("avg", "méd"), stats.avg_fps, stats.low1_fps, TL("stutters", "travadas"),
+        ImGui::TextColored(Theme::Muted, "%s %.0f   %s %.0f   1%% %.0f   %s %d", TL("min", "мин"), stats.min_fps,
+                           TL("avg", "сред"), stats.avg_fps, stats.low1_fps, TL("stutters", "фризы"),
                            stats.stutters);
     }
     ImGui::SetWindowFontScale(1.0f);
@@ -1637,7 +1690,8 @@ void NoticeBox() {
     ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f,
                                    viewport->WorkPos.y + 40.0f * base_scale),
                             ImGuiCond_Always, ImVec2(0.5f, 0.0f));
-    ImGui::SetNextWindowBgAlpha(0.75f);
+    ImGui::SetNextWindowBgAlpha(Theme::GlassAlpha);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.0f * base_scale, 12.0f * base_scale));
     ImGui::Begin("##notice", nullptr,
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
                      ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
@@ -1645,6 +1699,7 @@ void NoticeBox() {
     ImGui::SetWindowFontScale(1.3f);
     ImGui::TextUnformatted(notice_text.c_str());
     ImGui::End();
+    ImGui::PopStyleVar();
 }
 
 // The mouse's touchpad (touchpad mode): the pad as the game sees it and the finger on it.
@@ -1665,16 +1720,17 @@ void MousePadBox() {
     const ImVec2 origin = ImVec2(ImGui::GetWindowPos().x + 8.0f * base_scale, ImGui::GetWindowPos().y + 8.0f * base_scale);
     ImDrawList* list = ImGui::GetWindowDrawList();
     const bool click = mouse_pad_click, touch = mouse_pad_touch;
-    list->AddRectFilled(origin, ImVec2(origin.x + w, origin.y + h), IM_COL32(20, 20, 20, 160), 6.0f * base_scale);
-    list->AddRect(origin, ImVec2(origin.x + w, origin.y + h), click ? IM_COL32(255, 200, 60, 255) : IM_COL32(220, 220, 220, 200),
-                  6.0f * base_scale, 0, 2.0f * base_scale);
+    const float radius = Theme::ItemRadius * base_scale;
+    list->AddRectFilled(origin, ImVec2(origin.x + w, origin.y + h), Theme::U32(Theme::Ink, 0.35f), radius);
+    list->AddRect(origin, ImVec2(origin.x + w, origin.y + h), click ? Theme::U32(Theme::Warn) : Theme::U32(Theme::Muted),
+                  radius, 0, 2.0f * base_scale);
     const ImVec2 finger(origin.x + std::clamp(mouse_pad_x.load(), 0.0f, 1.0f) * w,
                         origin.y + std::clamp(mouse_pad_y.load(), 0.0f, 1.0f) * h);
     const float r = 7.0f * base_scale;
     if (touch) {
-        list->AddCircleFilled(finger, r, click ? IM_COL32(255, 200, 60, 255) : IM_COL32(80, 200, 255, 255));
+        list->AddCircleFilled(finger, r, click ? Theme::U32(Theme::Warn) : Theme::U32(Theme::Accent));
     } else {
-        list->AddCircle(finger, r, IM_COL32(255, 255, 255, 220), 0, 2.0f * base_scale);
+        list->AddCircle(finger, r, Theme::U32(Theme::White(0.86f)), 0, 2.0f * base_scale);
     }
     ImGui::End();
 }
@@ -1691,7 +1747,7 @@ void BackgroundLoading() {
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
                      ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
                      ImGuiWindowFlags_NoFocusOnAppearing);
-    ImGui::TextDisabled("Loading shader cache %u%%", u32(u64(done) * 100 / total));
+    ImGui::TextDisabled(TL("Loading shader cache %u%%", "Загрузка кэша шейдеров %u%%"), u32(u64(done) * 100 / total));
     ImGui::End();
 }
 
@@ -1733,9 +1789,12 @@ void Init(const Vulkan::Instance& instance, vk::Format format, u32 image_count) 
     ImVec4* c = style.Colors;
     c[ImGuiCol_Text] = Theme::Text;
     c[ImGuiCol_TextDisabled] = Theme::Muted;
-    c[ImGuiCol_WindowBg] = ImVec4(Theme::Glass.x, Theme::Glass.y, Theme::Glass.z, 0.78f);
+    c[ImGuiCol_WindowBg] = Theme::Fade(Theme::Glass, Theme::GlassAlpha);
     c[ImGuiCol_ChildBg] = white(0.03f);
-    c[ImGuiCol_PopupBg] = ImVec4(36.0f / 255, 36.0f / 255, 40.0f / 255, 0.97f);
+    c[ImGuiCol_PopupBg] = Theme::Fade(Theme::Popover, Theme::PopoverAlpha);
+    c[ImGuiCol_PlotHistogram] = accent(1.0f); // progress bars (loading screen)
+    c[ImGuiCol_PlotHistogramHovered] = accent(1.0f);
+    c[ImGuiCol_TextSelectedBg] = accent(0.35f);
     c[ImGuiCol_Border] = white(0.1f);
     c[ImGuiCol_FrameBg] = white(0.07f);
     c[ImGuiCol_FrameBgHovered] = white(0.12f);
@@ -1763,30 +1822,42 @@ void Init(const Vulkan::Instance& instance, vk::Format format, u32 image_count) 
     c[ImGuiCol_TableBorderStrong] = white(0.08f);
     c[ImGuiCol_TableBorderLight] = white(0.05f);
 
-    // The launcher's font (Segoe UI, every Windows has it; Cyrillic included), else the one
-    // built in.
+    // The launcher's font (Segoe UI, every Windows has it; Cyrillic included), with the built-in
+    // DejaVu Sans merged in for the glyphs it lacks (✕); else DejaVu alone. Semibold Segoe UI is
+    // the save dialogs' bold. Glyphs are rasterized on demand (dynamic atlas), so no ranges.
+    const auto add_file = [&io](const std::string& path, float size) -> ImFont* {
+        std::FILE* f = std::fopen(path.c_str(), "rb");
+        if (!f) return nullptr;
+        std::fclose(f);
+        return io.Fonts->AddFontFromFileTTF(path.c_str(), size);
+    };
+    const auto add_dejavu = [&io](bool merge) {
+        ImFontConfig font_config;
+        font_config.FontDataOwnedByAtlas = false;
+        font_config.MergeMode = merge;
+        return io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(tlg_font_ttf),
+                                              int(tlg_font_ttf_end - tlg_font_ttf), 18.0f, &font_config);
+    };
     ImFont* font = nullptr;
 #ifdef _WIN32
-    {
-        char windir[260] = {};
-        const DWORD n = GetEnvironmentVariableA("WINDIR", windir, sizeof(windir));
-        const std::string fonts = std::string(n ? windir : "C:\Windows") + "\Fonts\\";
-        for (const char* name : {"segoeui.ttf", "segoeuisl.ttf"}) {
-            const std::string path = fonts + name;
-            if (std::FILE* f = std::fopen(path.c_str(), "rb")) {
-                std::fclose(f);
-                font = io.Fonts->AddFontFromFileTTF(path.c_str(), 19.0f);
-                break;
-            }
+    char windir[260] = {};
+    const DWORD n = GetEnvironmentVariableA("WINDIR", windir, sizeof(windir));
+    const std::string fonts = std::string(n ? windir : "C:\\Windows") + "\\Fonts\\";
+    for (const char* name : {"segoeui.ttf", "segoeuisl.ttf"}) {
+        if ((font = add_file(fonts + name, 19.0f))) {
+            add_dejavu(true);
+            break;
         }
+    }
+    if (font) {
+        font_bold = add_file(fonts + "segoeuisb.ttf", 19.0f);
+        if (font_bold) add_dejavu(true);
     }
 #endif
     if (!font) {
-        ImFontConfig font_config;
-        font_config.FontDataOwnedByAtlas = false;
-        io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(tlg_font_ttf),
-                                       int(tlg_font_ttf_end - tlg_font_ttf), 18.0f, &font_config);
+        font = add_dejavu(false);
     }
+    io.FontDefault = font;
 
     const vk::Instance vk_instance = instance.GetInstance();
     ImGui_ImplVulkan_LoadFunctions(
