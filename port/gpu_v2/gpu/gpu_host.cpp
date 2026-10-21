@@ -136,8 +136,11 @@ extern "C" int tlggpu_cpu_write(void*, const void*, int, uint64_t) {
     return 0; // the runtime writes normally (faults reach tlggpu_handle_fault)
 }
 
+namespace ImGui::Core { extern std::atomic<uint64_t> g_shown_frames; }
 extern "C" void tlggpu_frame_counters(TlgGpuFrameCounters* out) {
+    // Only the frames presented: the freeze report (src/runtime_freeze.c) needs nothing else.
     *out = {};
+    out->shown = out->presented = ImGui::Core::g_shown_frames.load(std::memory_order_relaxed);
 }
 namespace Vulkan { extern std::atomic<u64> g_iss_total_draws; }
 extern "C" uint64_t tlggpu_total_draws(void) {

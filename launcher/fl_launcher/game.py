@@ -145,8 +145,10 @@ def renderer_v2_probe(port):
 def renderer_env(renderer, game_dir, port):
     """The environment renderer v2 starts with, as iss_pc's launcher passes it
     (infamous_run.renderer_v2_env): its defaults file, the game folder its shader index reads,
-    native passes on and unified memory off on Windows (measured: 11-20 FPS with it on, ~40-45 off,
-    RTX 3060); TLG_PROBE picks the v2 probe. Nothing for the core's own renderer."""
+    unified memory off on Windows (measured: 11-20 FPS with it on, ~40-45 off, RTX 3060);
+    TLG_PROBE picks the v2 probe. Nothing for the core's own renderer.
+    Native passes off, unlike iss_pc: in First Light they gained ~2 FPS and crashed in NVIDIA's
+    driver (nvoglv64.dll) after 4 minutes, and their pause guard only knows Second Son's eboot."""
     probe = renderer_v2_probe(port) if renderer == '2' else None
     if probe is None:
         return {}
@@ -159,5 +161,5 @@ def renderer_env(renderer, game_dir, port):
     except OSError:
         pass
     env.update({'TLG_PROBE': str(probe), 'ISS_GAME_DIR': str(game_dir),
-                'ISS_NATIVE_PASSES': '1', 'ISS_UNIFIED_MEMORY': '0'})
+                'ISS_NATIVE_PASSES': '0', 'ISS_UNIFIED_MEMORY': '0'})
     return env

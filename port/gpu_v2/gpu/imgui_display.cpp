@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // The source presenter draws the game image through ImGui; retain actual rendering.
 #include <SDL3/SDL.h>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <vector>
@@ -42,10 +43,13 @@ void Initialize(const ::Vulkan::Instance& instance,const Frontend::WindowSDL& w,
     };
     ImGui::Vulkan::Init(info);TextureManager::StartWorker();last_tick=SDL_GetPerformanceCounter();
 }
+// New game frames presented: the loader's freeze report (tlggpu_frame_counters) watches it.
+std::atomic<uint64_t> g_shown_frames{0};
 void OnSurfaceFormatChange(vk::Format f){ImGui::Vulkan::OnSurfaceFormatChange(f);}
 void Shutdown(vk::Device d){d.waitIdle();TextureManager::StopWorker();ImGui::Vulkan::Shutdown();ImGui::DestroyContext();}
 ImGuiID NewFrame(bool reused){
     static unsigned frames=0;++frames;
+    if(!reused)g_shown_frames.fetch_add(1,std::memory_order_relaxed);
     if(frames==120){const char *p=std::getenv("ISS_CAPTURE_OVERLAY");if(p&&p[0]=='1')VideoCore::RequestScreenshot(VideoCore::ScreenshotRequest::WithOverlays);}
     static uint64_t capture_tick=0;const uint64_t tick=SDL_GetTicks();
     static const bool capture=[] {const char *p=std::getenv("ISS_CAPTURE_FRAMES");return p&&p[0]=='1';}();
