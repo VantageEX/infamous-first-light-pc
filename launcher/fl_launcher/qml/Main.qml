@@ -140,7 +140,17 @@ Window {
             anchors.rightMargin: 72
             y: 130
         }
+        UpdateCard {
+            z: 19
+            anchors.right: parent.right
+            anchors.rightMargin: 72
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: 72
+        }
     }
+
+    // the last update's outcome, then one look for a newer release
+    Component.onCompleted: updater.check()
 
     WindowChrome {
         z: 100

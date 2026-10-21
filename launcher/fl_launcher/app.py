@@ -9,6 +9,7 @@ from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuickControls2 import QQuickStyle
 
 from .controller import Launcher
+from .updates import Updater
 
 QML = Path(__file__).resolve().parent / 'qml'
 
@@ -22,8 +23,12 @@ def create(argv):
     app.setWindowIcon(QIcon(str(Path(__file__).resolve().parent / 'assets' / 'icon.png')))
     app.styleHints().setColorScheme(Qt.ColorScheme.Dark)   # dark title bar
     launcher = Launcher()
+    updater = Updater(lambda: launcher.t, launcher.settings.folder, lambda: launcher.runner.running, launcher)
+    updater.notice.connect(launcher.notice)
+    launcher.textsChanged.connect(updater.changed)
     engine = QQmlApplicationEngine()
     engine.rootContext().setContextProperty('launcher', launcher)
+    engine.rootContext().setContextProperty('updater', updater)
     engine.load(QUrl.fromLocalFile(str(QML / 'Main.qml')))
     if not engine.rootObjects():
         raise SystemExit('the launcher interface (qml/Main.qml) did not load')

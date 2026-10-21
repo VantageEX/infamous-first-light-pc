@@ -16,7 +16,7 @@ TEST_BUILD = (REPO / 'TEST_BUILD').is_file()
 VERSION_FILE = REPO / 'VERSION'
 
 
-def _writable(folder):
+def writable(folder):
     try:
         folder.mkdir(parents=True, exist_ok=True)
         probe = folder / '.write-test'
@@ -34,7 +34,7 @@ def data_dir():
     if os.environ.get('FL_DATA_DIR'):
         return Path(os.environ['FL_DATA_DIR'])
     beside = REPO / 'data'
-    if not FROZEN or _writable(beside):
+    if not FROZEN or writable(beside):
         return beside
     local = os.environ.get('LOCALAPPDATA')
     return Path(local) / 'inFAMOUS First Light PC' if local else beside

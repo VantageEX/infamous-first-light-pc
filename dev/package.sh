@@ -92,6 +92,14 @@ cp -r port/tools/xpps "$dest/port/tools/"
 find "$dest" -name __pycache__ -prune -exec rm -r {} +
 cp port/LICENSE "$dest/LICENSE.txt"
 git rev-parse --short HEAD > "$dest/VERSION"
+# The release tag (RELEASE=v0.3.2, else this port's vX.Y.Z tag on HEAD): the launcher compares it
+# with the latest GitHub release to offer updates. A package without it never updates itself.
+release=${RELEASE:-$(git tag --points-at HEAD | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || true)}
+if [[ -n $release ]]; then
+    echo "$release" > "$dest/RELEASE"
+else
+    echo 'No release tag (RELEASE=vX.Y.Z): this package will not offer updates' >&2
+fi
 if [[ ${TEST:-0} == 1 ]]; then
     echo 'Test build: play, then Log > Create report, and send the zip.' > "$dest/TEST_BUILD"
 fi
