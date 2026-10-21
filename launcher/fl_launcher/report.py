@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """The report a player sends to the developer: recent run logs, the system, the settings.
-Full user paths stay out of it: the home folder and the game folder are replaced by placeholders."""
+Full user paths stay out of it: the game, data, install and home folders are replaced by placeholders."""
 import json
 import os
 import platform
@@ -8,6 +8,8 @@ import re
 import time
 import zipfile
 from pathlib import Path
+
+from .settings import REPO
 
 RUN_LOGS = 3
 GPU_LINE = re.compile(r'^(GPU \d+:|GPU: using)')
@@ -59,10 +61,14 @@ def _ram_gb():
     return status.ullTotalPhys / 1024 ** 3
 
 
-def _private(text, game_dir):
-    """The text with the game folder and the home folder replaced (any letter case, either slash)."""
-    for path, placeholder in ((game_dir, f'<game>/{Path(game_dir).name}' if game_dir else ''),
-                              (str(Path.home()), '%USERPROFILE%')):
+def _private(text, game_dir, data_dir=None):
+    """The text with the game, data, install and home folders replaced (any letter case, either
+    slash), the longest first: the game or data folder may sit inside the install or home folder."""
+    folders = [(str(game_dir or ''), f'<game>/{Path(game_dir).name}' if game_dir else ''),
+               (str(data_dir or ''), '<data>'),
+               (str(REPO), '<install>'),
+               (str(Path.home()), '%USERPROFILE%')]
+    for path, placeholder in sorted(folders, key=lambda folder: -len(folder[0])):
         if path:
             pattern = re.escape(str(path).replace('/', '\\')).replace(r'\\', r'[\\/]')
             text = re.sub(pattern, lambda _: placeholder, text, flags=re.IGNORECASE)
@@ -100,15 +106,15 @@ def create(data_dir, launcher_settings, game=None, version_file=None):
     if game is not None:
         launcher['title_id'] = game.title_id
         launcher['game_version'] = game.version
-    launcher['extra_env'] = _private(launcher.get('extra_env', ''), game_dir)
+    launcher['extra_env'] = _private(launcher.get('extra_env', ''), game_dir, data_dir)
 
     with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED) as archive:
         for log in logs:
-            archive.writestr(f'logs/{log.name}', _private(log.read_text(encoding='utf-8', errors='replace'), game_dir))
-        archive.writestr('system.txt', _private(system_text(logs), game_dir))
+            archive.writestr(f'logs/{log.name}', _private(log.read_text(encoding='utf-8', errors='replace'), game_dir, data_dir))
+        archive.writestr('system.txt', _private(system_text(logs), game_dir, data_dir))
         ini = data_dir / 'tlg.ini'
         if ini.is_file():
-            archive.writestr('tlg.ini', _private(ini.read_text(encoding='utf-8', errors='replace'), game_dir))
+            archive.writestr('tlg.ini', _private(ini.read_text(encoding='utf-8', errors='replace'), game_dir, data_dir))
         archive.writestr('launcher.json', json.dumps(launcher, indent=2, ensure_ascii=False))
         if version_file and Path(version_file).is_file():
             archive.writestr('VERSION', Path(version_file).read_text(encoding='utf-8', errors='replace'))

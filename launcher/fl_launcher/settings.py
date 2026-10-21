@@ -16,9 +16,28 @@ TEST_BUILD = (REPO / 'TEST_BUILD').is_file()
 VERSION_FILE = REPO / 'VERSION'
 
 
+def _writable(folder):
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        probe = folder / '.write-test'
+        probe.write_bytes(b'')
+        probe.unlink()
+        return True
+    except OSError:
+        return False
+
+
 def data_dir():
-    """FL_DATA_DIR, else data/ beside the launcher executable (packaged) or in the repository."""
-    return Path(os.environ.get('FL_DATA_DIR') or REPO / 'data')
+    """FL_DATA_DIR, else data/ beside the launcher executable (packaged) or in the repository.
+    A package unzipped where it cannot write (Program Files) keeps its data in
+    %LOCALAPPDATA%/inFAMOUS First Light PC instead."""
+    if os.environ.get('FL_DATA_DIR'):
+        return Path(os.environ['FL_DATA_DIR'])
+    beside = REPO / 'data'
+    if not FROZEN or _writable(beside):
+        return beside
+    local = os.environ.get('LOCALAPPDATA')
+    return Path(local) / 'inFAMOUS First Light PC' if local else beside
 
 
 # tlg.ini keys the core reads at start (port/gpu/shim/tlg_settings.cpp) and their defaults.

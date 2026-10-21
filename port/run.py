@@ -168,7 +168,13 @@ def main():
         run_script('content_profile.py', game, '--out', out, '--sku', env.get('TLG_CONTENT_SKU', 'full'))
 
         from patches import game_patchable, game_profile, game_title_id, patch_requirements, selected_patches
-        profile = game_profile(game_title_id(game))
+        title_id = game_title_id(game)
+        profile = game_profile(title_id)
+        # The switches this game was measured with (scripts/game_defaults.py), under the ones set.
+        import game_defaults
+        if defaults := game_defaults.apply(env, title_id):
+            derived += defaults
+            print(f'Game defaults for {title_id}: ' + ' '.join(f'{k}={env[k]}' for k in defaults), flush=True)
         patched = bool(profile) and (game_patchable(game) or bool(env.get('TLG_FORCE_PATCHES')))
         engine_fps = 60
         # The window shows the game's icon (BMP: the format SDL loads without extra libraries).

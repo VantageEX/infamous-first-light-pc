@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Starts the core (port/run.py prepares the game image and runs tlg-probe.exe) and keeps its log."""
+import codecs
 import os
 import subprocess
 import sys
@@ -71,6 +72,8 @@ class GameRunner(QObject):
         for key, value in (extra_env or {}).items():
             env.insert(key, value)
 
+        self._decoder = codecs.getincrementaldecoder('utf-8')('replace')
+        self._partial = ''
         self.process = QProcess(self)
         self.process.setProcessEnvironment(env)
         self.process.setWorkingDirectory(str(PORT))
@@ -98,16 +101,23 @@ class GameRunner(QObject):
                                creationflags=subprocess.CREATE_NO_WINDOW)
             self.process.kill()
 
-    def _read(self):
-        text = bytes(self.process.readAllStandardOutput()).decode('utf-8', 'replace')
+    def _read(self, final=False):
+        # Output arrives in arbitrary chunks: a UTF-8 character or a line may be cut between two
+        # of them, so the decoder and the unfinished line carry over to the next chunk.
+        text = self._decoder.decode(bytes(self.process.readAllStandardOutput()), final)
         if self.log_file:
             self.log_file.write(text)
             self.log_file.flush()
-        for row in text.splitlines():
-            self.line.emit(row)
+        rows = (self._partial + text).split('\n')
+        self._partial = rows.pop()
+        if final and self._partial:
+            rows.append(self._partial)
+            self._partial = ''
+        for row in rows:
+            self.line.emit(row.rstrip('\r'))
 
     def _finished(self, code, _status):
-        self._read()
+        self._read(final=True)
         if self.log_file:
             self.log_file.close()
             self.log_file = None

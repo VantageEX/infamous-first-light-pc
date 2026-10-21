@@ -228,8 +228,9 @@ class Launcher(QObject):
             self.settings.save()
 
     def _extra_env(self):
-        """The advanced variables (when the box is on); the ones run.py reads from tlg.ini go there."""
-        extra = dict(game.FIRST_LIGHT_ENV)
+        """The advanced variables (when the box is on); the ones run.py reads from tlg.ini go there.
+        The game's own core switches come from run.py (port/scripts/game_defaults.py)."""
+        extra = {}
         if self.info:
             extra.update(game.renderer_env(self.renderer, self.info.folder, PORT))
         if TEST_BUILD:

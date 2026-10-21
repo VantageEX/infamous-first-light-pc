@@ -38,6 +38,11 @@ def run_script():
 
 if len(sys.argv) > 2 and sys.argv[1] == '--script':
     sys.exit(run_script())
+if len(sys.argv) > 1 and sys.argv[1] == '--run':
+    # The in-game restart (run.py's TLG_RESTART_COMMAND: `<launcher> --run --after <pid>`) starts
+    # port/run.py again, not a second launcher.
+    sys.argv[1:2] = ['--script', str(Path(sys.executable).resolve().parent / 'port' / 'run.py')]
+    sys.exit(run_script())
 
 try:
     from .app import main
