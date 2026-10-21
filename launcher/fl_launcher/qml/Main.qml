@@ -14,6 +14,8 @@ Window {
     visible: true
     color: 'black'
     title: launcher.tr.window_title
+    // no system title bar: WindowChrome draws the buttons over the launcher's own background
+    flags: Qt.Window | Qt.FramelessWindowHint
 
     readonly property real k: Math.min(width / 1920, height / 1080)
 
@@ -138,5 +140,10 @@ Window {
             anchors.rightMargin: 72
             y: 130
         }
+    }
+
+    WindowChrome {
+        z: 100
+        window: root
     }
 }
