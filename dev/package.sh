@@ -11,6 +11,9 @@ cd -- "$(dirname -- "$0")/.."
 root=$PWD
 [[ -f port/out/tlg-probe.exe ]] || { echo 'Build the core first: cd port && bash build.sh' >&2; exit 1; }
 name=inFAMOUS-First-Light-PC
+# TEST=1: the test build for players' reports (a TEST_BUILD file: the launcher turns the readback
+# statistics on and asks for a report after playing).
+if [[ ${TEST:-0} == 1 ]]; then name=$name-test; fi
 exe_name='inFAMOUS First Light'
 
 python=${WINPYTHON:-}
@@ -78,6 +81,9 @@ cp -r port/scripts port/patches "$dest/port/"
 find "$dest" -name __pycache__ -prune -exec rm -r {} +
 cp port/LICENSE "$dest/LICENSE.txt"
 git rev-parse --short HEAD > "$dest/VERSION"
+if [[ ${TEST:-0} == 1 ]]; then
+    echo 'Test build: play, then Log > Create report, and send the zip.' > "$dest/TEST_BUILD"
+fi
 # Nothing of the player's may ship.
 if find "$dest" -iname 'eboot.bin' -o -iname '*.sfo' -o -iname 'param.sfo' | grep -q .; then
     echo 'A game file ended up in the package' >&2; exit 1

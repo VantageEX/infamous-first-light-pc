@@ -46,3 +46,4 @@ __pycache__/
 /dev/shader_tests/ps_*
 /dev/shader_tests/*.spv
 /dist/
+/public/
