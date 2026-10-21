@@ -133,19 +133,20 @@ Window {
             id: picker
             z: 10
         }
+        UpdateCard {
+            id: updateCard
+            z: 19
+            anchors.right: parent.right
+            anchors.rightMargin: 72
+            y: 130
+        }
         Toast {
             id: toast
             z: 20
             anchors.right: parent.right
             anchors.rightMargin: 72
-            y: 130
-        }
-        UpdateCard {
-            z: 19
-            anchors.right: parent.right
-            anchors.rightMargin: 72
-            anchors.bottom: parent.bottom
-            anchors.bottomMargin: 72
+            // under the update card while it is up
+            y: updateCard.shown ? 130 + updateCard.height + 24 : 130
         }
     }
 
