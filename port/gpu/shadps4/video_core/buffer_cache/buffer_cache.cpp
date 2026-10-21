@@ -7,6 +7,7 @@
 #include <chrono>
 #include <array>
 #include <map>
+#include <mutex>
 #include <unordered_map>
 #include <algorithm>
 #include <bit>
@@ -20,6 +21,7 @@
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/buffer_cache/buffer_cache.h"
 #include "video_core/buffer_cache/memory_tracker.h"
+#include "video_core/buffer_cache/unified_memory.h"
 #include "video_core/renderer_vulkan/vk_graphics_pipeline.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
@@ -122,9 +124,17 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
     runtime.FillBuffer(bda_pagetable_buffer.get(), 0u, bda_pagetable_size, 0u);
 }
 
-BufferCache::~BufferCache() = default;
+BufferCache::~BufferCache() {
+    if (unified_buffer) {
+        unified_buffer.reset();
+        instance.GetDevice().freeMemory(unified_memory);
+    }
+}
 
 void BufferCache::InvalidateMemory(VAddr device_addr, u64 size, bool assume_locks) {
+    if (IsUnified(device_addr, size)) {
+        return; // the GPU reads the guest's bytes: nothing to upload again
+    }
     memory_tracker->InvalidateRegion(device_addr, size, [this, device_addr, size, assume_locks] {
         ReadMemory(device_addr, size, true, assume_locks);
     });
@@ -181,6 +191,8 @@ struct ReadbackStats {
     /// Waits for a readback copy tick (WaitReadbackTick): the scheduler's own waits do not
     /// count them.
     std::atomic<u64> guest_waits{0}, guest_wait_ns{0};
+    /// Lagged reads (TLG_LAGGED_READS): faults served without a wait, copies written back.
+    std::atomic<u64> lagged{0}, lagged_recorded{0}, lagged_applied{0}, nowait_writes{0};
     std::atomic<s64> window_start{0};
 };
 ReadbackStats& Readbacks() {
@@ -238,7 +250,8 @@ void ReportReadbacks() {
                 r.finish_ns.exchange(0) / 1e6, r.bytes.exchange(0) / 1048576.0);
     std::printf("  deferred: %llu recorded, %llu joined (%llu without the GPU thread), %llu applied, "
                 "%llu stale (downloaded), guest wait %.1f ms, %.1f MB; eager: %llu pages copied, "
-                "%llu used, %llu stale unread, %llu skipped (backoff)\n",
+                "%llu used, %llu stale unread, %llu skipped (backoff); lagged: %llu reads, "
+                "%llu copies recorded, %llu written; no-wait writes: %llu\n",
                 static_cast<unsigned long long>(r.deferred.exchange(0)),
                 static_cast<unsigned long long>(r.joined.exchange(0)),
                 static_cast<unsigned long long>(r.local_joined.exchange(0)),
@@ -248,7 +261,11 @@ void ReportReadbacks() {
                 static_cast<unsigned long long>(r.eager_copied.exchange(0)),
                 static_cast<unsigned long long>(r.eager_used.exchange(0)),
                 static_cast<unsigned long long>(r.eager_stale.exchange(0)),
-                static_cast<unsigned long long>(r.eager_skipped.exchange(0)));
+                static_cast<unsigned long long>(r.eager_skipped.exchange(0)),
+                static_cast<unsigned long long>(r.lagged.exchange(0)),
+                static_cast<unsigned long long>(r.lagged_recorded.exchange(0)),
+                static_cast<unsigned long long>(r.lagged_applied.exchange(0)),
+                static_cast<unsigned long long>(r.nowait_writes.exchange(0)));
     std::printf("  waits for a readback copy: %llu, %.1f ms\n",
                 static_cast<unsigned long long>(r.guest_waits.exchange(0)),
                 r.guest_wait_ns.exchange(0) / 1e6);
@@ -378,6 +395,129 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
 
 void BufferCache::ReleaseReadProtection(VAddr device_addr, u64 size) {
     memory_tracker->UnmarkRegionAsGpuModified(device_addr, size);
+}
+
+bool BufferCache::LaggedRead(VAddr device_addr, u64 size) {
+    if (!DeferredReadbackEnabled() || TlgToggle::Disabled(TlgToggle::DeferredReadback)) {
+        return false;
+    }
+    const VAddr page = Common::AlignDown(device_addr, TRACKER_BYTES_PER_PAGE);
+    const u64 bytes = Common::AlignUp(device_addr + size, TRACKER_BYTES_PER_PAGE) - page;
+    // The guest reads what memory holds now; the copy queued below lands there for the next
+    // read. In order with the game's commands, so it holds the GPU work submitted before it.
+    memory_tracker->UnmarkRegionAsGpuModified(page, bytes);
+    liverpool->SendCommand<false, true>([this, page, bytes] { StartLaggedReadback(page, bytes); });
+    if (ReadbackStatsEnabled()) {
+        Readbacks().lagged.fetch_add(1);
+    }
+    return true;
+}
+
+bool BufferCache::NoWaitWrite(VAddr device_addr) {
+    if (EmulatorSettings.GetReadbacksMode() != GpuReadbacksMode::Precise) {
+        return false;
+    }
+    const VAddr page = Common::AlignDown(device_addr, TRACKER_BYTES_PER_PAGE);
+    // Copies in flight over the page must not land on the bytes about to be written.
+    MarkDeferredStale(page, TRACKER_BYTES_PER_PAGE, true);
+    MarkEagerStale(page, TRACKER_BYTES_PER_PAGE);
+    memory_tracker->MarkRegionAsCpuModifiedNoReadback(page, TRACKER_BYTES_PER_PAGE);
+    // The page is the CPU's now: what the GPU wrote there before is dropped, in order with the
+    // game's commands (GPU writes recorded after this mark it again). The game reuses these
+    // pages frame after frame (a ring), so the old GPU bytes are dead.
+    liverpool->SendCommand<false, true>(
+        [this, page] { gpu_modified_ranges.Subtract(page, TRACKER_BYTES_PER_PAGE); });
+    if (ReadbackStatsEnabled()) {
+        Readbacks().nowait_writes.fetch_add(1);
+    }
+    return true;
+}
+
+void BufferCache::StartLaggedReadback(VAddr page, u64 size) {
+    PruneDeferredReadbacks();
+    {
+        // A copy in flight over this page: the next read takes its result instead.
+        std::scoped_lock lock{deferred_mutex};
+        for (const auto& readback : deferred_readbacks) {
+            if (!readback->Done() && readback->start < page + size && page < readback->end) {
+                return;
+            }
+        }
+    }
+    const auto [arena, window_start, window_end] = GetReadbackWindow(page, size);
+    if (eager_count.load(std::memory_order_acquire)) {
+        std::scoped_lock lock{eager_mutex};
+        ApplyEagerSubtractsLocked();
+    }
+    FlushMergedWrites(arena, page, size);
+    auto readback = std::make_shared<DeferredReadback>();
+    readback->lagged = true;
+    readback->arena_base = arena->cpu_addr;
+    readback->start = page;
+    readback->end = page + size;
+    // Not CollectDownloads: it only looks at pages the tracker still marks GPU modified, and
+    // LaggedRead already unmarked these. gpu_modified_ranges says what the GPU wrote.
+    u64 total_size_bytes = 0;
+    gpu_modified_ranges.ForEachInRange(page, size, [&](VAddr start, VAddr end) {
+        readback->copies.push_back(vk::BufferCopy{
+            .srcOffset = start - arena->cpu_addr,
+            .dstOffset = total_size_bytes,
+            .size = end - start,
+        });
+        total_size_bytes += Common::AlignUp(end - start, 64);
+    });
+    gpu_modified_ranges.Subtract(page, size);
+    if (total_size_bytes == 0) {
+        return;
+    }
+    readback->staging =
+        staging_pool.Request(total_size_bytes, VideoCore::MemoryType::HostCached, 0, true);
+    for (auto& copy : readback->copies) {
+        copy.dstOffset += readback->staging.offset;
+    }
+    runtime.CopyBuffer(arena, readback->staging.buffer, readback->copies);
+    readback->tick = scheduler.CurrentTick();
+    scheduler.Flush();
+    if (ReadbackStatsEnabled()) {
+        Readbacks().lagged_recorded.fetch_add(1);
+    }
+    std::scoped_lock lock{deferred_mutex};
+    deferred_readbacks.push_back(std::move(readback));
+    deferred_count.store(static_cast<u32>(deferred_readbacks.size()), std::memory_order_release);
+}
+
+bool BufferCache::ApplyLaggedReadback(DeferredReadback& readback, bool wait) {
+    if (wait) {
+        scheduler.GetWorkSemaphore()->Wait(readback.tick);
+    } else if (!scheduler.IsFree(readback.tick)) {
+        return false;
+    }
+    std::scoped_lock lock{readback.mutex};
+    if (readback.Done()) {
+        return true;
+    }
+    readback.staging.Invalidate();
+    const u8* const mapped = readback.staging.mapped - readback.staging.offset;
+    for (const auto& copy : readback.copies) {
+        const VAddr copy_start = readback.arena_base + copy.srcOffset;
+        const VAddr copy_end = copy_start + copy.size;
+        for (VAddr page = Common::AlignDown(copy_start, TRACKER_BYTES_PER_PAGE); page < copy_end;
+             page += TRACKER_BYTES_PER_PAGE) {
+            // A CPU write since the copy was recorded is newer than it.
+            if (memory_tracker->IsRegionCpuModified(page, TRACKER_BYTES_PER_PAGE)) {
+                continue;
+            }
+            const VAddr lo = std::max<VAddr>(page, copy_start);
+            const VAddr hi = std::min<VAddr>(page + TRACKER_BYTES_PER_PAGE, copy_end);
+            memory->TryWriteBacking(reinterpret_cast<void*>(lo),
+                                    mapped + copy.dstOffset + (lo - copy_start), hi - lo);
+        }
+    }
+    readback.applied.store(true, std::memory_order_release);
+    if (ReadbackStatsEnabled()) {
+        Readbacks().lagged_applied.fetch_add(1);
+    }
+    return true;
 }
 
 u64 BufferCache::CollectDownloads(const Buffer* arena, VAddr device_addr, u64 size,
@@ -522,10 +662,65 @@ void PrintBufferStats() {
 }
 } // namespace
 
+namespace {
+// tlg: TLG_WRITTEN_BINDINGS=1: every 5 s, the buffer ranges bound as written by shaders (the
+// whole range is marked GPU modified, whatever the shader stores), most bound first, to tell
+// which binding makes the pages CPU write faults wait on (TLG_FAULT_PROFILE) GPU modified.
+void NoteWrittenBinding(VAddr addr, u32 size) {
+    static const bool enabled = [] { const char* e = std::getenv("TLG_WRITTEN_BINDINGS"); return e && *e == '1'; }();
+    if (!enabled) {
+        return;
+    }
+    // TLG_WRITTEN_BINDINGS_RANGE=<lo>-<hi> (hex): only the bindings overlapping that range.
+    static const std::pair<VAddr, VAddr> range = [] {
+        const char* e = std::getenv("TLG_WRITTEN_BINDINGS_RANGE");
+        char* end = nullptr;
+        const VAddr lo = e ? std::strtoull(e, &end, 16) : 0;
+        const VAddr hi = end && *end == '-' ? std::strtoull(end + 1, nullptr, 16) : ~VAddr{0};
+        return std::pair{lo, hi};
+    }();
+    if (addr + size <= range.first || range.second <= addr) {
+        return;
+    }
+    static std::mutex mutex;
+    static std::map<std::tuple<VAddr, u32, const char*, u64>, u64> bindings;
+    static auto window = std::chrono::steady_clock::now();
+    std::scoped_lock lock{mutex};
+    ++bindings[{addr, size, written_binding_source.kind, written_binding_source.hash}];
+    const auto now = std::chrono::steady_clock::now();
+    if (now - window < std::chrono::seconds(5)) {
+        return;
+    }
+    window = now;
+    std::vector<std::pair<std::tuple<VAddr, u32, const char*, u64>, u64>> top(bindings.begin(), bindings.end());
+    std::sort(top.begin(), top.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+    std::printf("Written bindings (5 s, %zu ranges; kind, shader):", top.size());
+    for (size_t i = 0; i < top.size() && i < 16; ++i) {
+        const auto& [b_addr, b_size, b_kind, b_hash] = top[i].first;
+        std::printf(" [%#llx+%#x x%llu %s %#llx]", static_cast<unsigned long long>(b_addr), b_size,
+                    static_cast<unsigned long long>(top[i].second), b_kind,
+                    static_cast<unsigned long long>(b_hash));
+    }
+    std::printf("\n");
+    std::fflush(stdout);
+    bindings.clear();
+}
+} // namespace
+
 std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 size,
                                                         bool is_written, bool is_texel_buffer) {
+    if (Unified::Enabled()) [[unlikely]] {
+        if (unified_end == 0 && !unified_failed) {
+            EnableUnified();
+        }
+        if (IsUnified(device_addr, size)) {
+            texture_cache.ResolveReadbacks(device_addr, size, true, ReadbackSource::BufferObtain);
+            return ObtainUnified(device_addr, size, is_written);
+        }
+    }
     if (is_written) {
         NoteGpuWriteForEager(device_addr, size);
+        NoteWrittenBinding(device_addr, size);
     }
     texture_cache.ResolveReadbacks(device_addr, size, true, ReadbackSource::BufferObtain);
     const bool stats = BufferStatsEnabled();
@@ -630,7 +825,209 @@ bool BufferCache::IsRegionCpuModified(VAddr addr, size_t size) {
 }
 
 bool BufferCache::IsRegionGpuModified(VAddr addr, size_t size) {
+    if (IsUnified(addr, size)) [[unlikely]] {
+        return UnifiedTouched(addr, size);
+    }
     return memory_tracker->IsRegionGpuModified(addr, size);
+}
+
+bool BufferCache::EnableUnified() {
+    const auto fail = [this](const char* why) {
+        unified_failed = true;
+        std::printf("Unified memory off: %s\n", why);
+        return false;
+    };
+    if (!instance.HasExternalMemoryHost()) {
+        return fail("VK_EXT_external_memory_host not available");
+    }
+    const auto& range = Unified::GetRange();
+    const VAddr base = range.base;
+    const u64 size = range.size;
+    void* host = memory->BackingView(base, size);
+    if (!host) {
+        return false; // not mapped yet: the next binding tries again
+    }
+    if ((base & (block_size - 1)) != 0 || (size & (block_size - 1)) != 0) {
+        return fail("the range is not aligned to sparse blocks");
+    }
+    bool resident = false;
+    resident_ranges.ForEachInRange(base >> block_shift, (base + size) >> block_shift,
+                                   [&](const Backing&) { resident = true; });
+    if (resident) {
+        return fail("the arena already backs part of the range");
+    }
+    const auto device = instance.GetDevice();
+    const auto properties =
+        instance.GetPhysicalDevice()
+            .getProperties2<vk::PhysicalDeviceProperties2,
+                            vk::PhysicalDeviceExternalMemoryHostPropertiesEXT>();
+    const u64 alignment = std::max<u64>(
+        properties.get<vk::PhysicalDeviceExternalMemoryHostPropertiesEXT>()
+            .minImportedHostPointerAlignment,
+        4_KB);
+    if ((reinterpret_cast<u64>(host) & (alignment - 1)) != 0 || (size & (alignment - 1)) != 0) {
+        return fail("the backing is not aligned for import");
+    }
+    const vk::ExternalMemoryBufferCreateInfo external{
+        .handleTypes = vk::ExternalMemoryHandleTypeFlagBits::eHostAllocationEXT};
+    const vk::BufferCreateInfo buffer_ci{
+        .pNext = &external,
+        .size = size,
+        .usage = AllFlags,
+        .sharingMode = vk::SharingMode::eExclusive,
+    };
+    vk::Buffer handle{};
+    if (device.createBuffer(&buffer_ci, nullptr, &handle) != vk::Result::eSuccess) {
+        return fail("createBuffer");
+    }
+    const auto requirements = device.getBufferMemoryRequirements(handle);
+    vk::MemoryHostPointerPropertiesEXT host_properties{};
+    if (device.getMemoryHostPointerPropertiesEXT(
+            vk::ExternalMemoryHandleTypeFlagBits::eHostAllocationEXT, host, &host_properties) !=
+        vk::Result::eSuccess) {
+        device.destroyBuffer(handle);
+        return fail("getMemoryHostPointerPropertiesEXT");
+    }
+    const auto& memory_properties = instance.GetMemoryProperties();
+    const u32 compatible = host_properties.memoryTypeBits & requirements.memoryTypeBits;
+    u32 type = memory_properties.memoryTypeCount;
+    for (u32 i = 0; i < memory_properties.memoryTypeCount; ++i) {
+        const auto flags = memory_properties.memoryTypes[i].propertyFlags;
+        if ((compatible >> i & 1) && (flags & vk::MemoryPropertyFlagBits::eHostCoherent)) {
+            type = i;
+            break;
+        }
+    }
+    if (type == memory_properties.memoryTypeCount) {
+        device.destroyBuffer(handle);
+        return fail("no host coherent memory type for the import");
+    }
+    const vk::MemoryAllocateFlagsInfo allocate_flags{
+        .flags = vk::MemoryAllocateFlagBits::eDeviceAddress};
+    const vk::ImportMemoryHostPointerInfoEXT import_info{
+        .pNext = &allocate_flags,
+        .handleType = vk::ExternalMemoryHandleTypeFlagBits::eHostAllocationEXT,
+        .pHostPointer = host,
+    };
+    const vk::MemoryAllocateInfo alloc_info{
+        .pNext = &import_info,
+        .allocationSize = size,
+        .memoryTypeIndex = type,
+    };
+    if (device.allocateMemory(&alloc_info, nullptr, &unified_memory) != vk::Result::eSuccess) {
+        device.destroyBuffer(handle);
+        return fail("allocateMemory (import)");
+    }
+    if (device.bindBufferMemory(handle, unified_memory, 0) != vk::Result::eSuccess) {
+        device.destroyBuffer(handle);
+        device.freeMemory(unified_memory);
+        unified_memory = vk::DeviceMemory{};
+        return fail("bindBufferMemory");
+    }
+    // A Buffer around the imported handle: created as a small sparse buffer (no memory), whose
+    // handle is replaced. Its destructor destroys the handle only.
+    unified_buffer = std::make_unique<Buffer>(instance, base, 64_KB, MemoryType::Sparse,
+                                              "Unified guest memory");
+    unified_buffer->buffer.Destroy();
+    unified_buffer->buffer.buffer = handle;
+    unified_buffer->buffer.bda_addr =
+        device.getBufferAddress(vk::BufferDeviceAddressInfo{.buffer = handle});
+    unified_buffer->cpu_addr = base;
+    unified_buffer->size_bytes = size;
+    unified_buffer->mem_type = MemoryType::HostCached;
+    unified_buffer->is_coherent = true;
+    const u64 num_chunks = size >> UNIFIED_CHUNK_SHIFT;
+    unified_chunk_tick = std::make_unique<std::atomic<u64>[]>(num_chunks);
+
+    // Shaders that read guest memory through device addresses: the range's blocks resolve into
+    // the imported buffer (EnsureResident never binds them).
+    const u64 first_block = base >> block_shift;
+    const u64 num_blocks = size >> block_shift;
+    const auto staging =
+        staging_pool.Request(num_blocks * sizeof(vk::DeviceAddress), MemoryType::HostUncached);
+    auto* entries = reinterpret_cast<vk::DeviceAddress*>(staging.mapped);
+    for (u64 i = 0; i < num_blocks; ++i) {
+        entries[i] = unified_buffer->buffer.bda_addr + (i << block_shift);
+    }
+    staging.Flush();
+    const vk::BufferCopy copy{
+        .srcOffset = staging.offset,
+        .dstOffset = first_block * sizeof(vk::DeviceAddress),
+        .size = num_blocks * sizeof(vk::DeviceAddress),
+    };
+    runtime.CopyBuffer(staging.buffer, bda_pagetable_buffer.get(), std::span{&copy, 1});
+    unified_base = base;
+    unified_end = base + size;
+    std::printf("Unified memory on: guest 0x%llx size 0x%llx host %p memory type %u (bits 0x%x)\n",
+                static_cast<unsigned long long>(base), static_cast<unsigned long long>(size),
+                host, type, host_properties.memoryTypeBits);
+    return true;
+}
+
+std::pair<const Buffer*, u64> BufferCache::ObtainUnified(VAddr device_addr, u32 size,
+                                                         bool is_written) {
+    if (is_written) {
+        const u64 tick = scheduler.CurrentTick();
+        const u64 first = (device_addr - unified_base) >> UNIFIED_CHUNK_SHIFT;
+        const u64 last = (device_addr + size - 1 - unified_base) >> UNIFIED_CHUNK_SHIFT;
+        for (u64 c = first; c <= last; ++c) {
+            unified_chunk_tick[c].store(tick, std::memory_order_release);
+        }
+        Unified::Add(Unified::Writes);
+    } else {
+        Unified::Add(Unified::Reads);
+    }
+    return {unified_buffer.get(), device_addr - unified_base};
+}
+
+bool BufferCache::UnifiedTouched(VAddr addr, u64 size) {
+    // Only GPU writes not known to be complete: once done, the guest's bytes are current.
+    const u64 first = (addr - unified_base) >> UNIFIED_CHUNK_SHIFT;
+    const u64 last = (addr + size - 1 - unified_base) >> UNIFIED_CHUNK_SHIFT;
+    for (u64 c = first; c <= last; ++c) {
+        const u64 tick = unified_chunk_tick[c].load(std::memory_order_acquire);
+        if (tick != 0 && !scheduler.IsFree(tick)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void BufferCache::SyncUnifiedRead(VAddr addr, u64 size) {
+    if (!IsUnified(addr, size)) {
+        return;
+    }
+    const u64 first = (addr - unified_base) >> UNIFIED_CHUNK_SHIFT;
+    const u64 last = (addr + size - 1 - unified_base) >> UNIFIED_CHUNK_SHIFT;
+    u64 tick = 0;
+    for (u64 c = first; c <= last; ++c) {
+        tick = std::max(tick, unified_chunk_tick[c].load(std::memory_order_acquire));
+    }
+    if (tick == 0 || scheduler.IsFree(tick)) {
+        return;
+    }
+    const auto start = std::chrono::steady_clock::now();
+    if (tick >= scheduler.CurrentTick()) {
+        // Recorded in the command buffer being built: visible to the host when it completes.
+        scheduler.Record([](vk::CommandBuffer cmdbuf) {
+            const vk::MemoryBarrier2 barrier{
+                .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+                .srcAccessMask = vk::AccessFlagBits2::eMemoryWrite,
+                .dstStageMask = vk::PipelineStageFlagBits2::eHost,
+                .dstAccessMask = vk::AccessFlagBits2::eHostRead,
+            };
+            cmdbuf.pipelineBarrier2(vk::DependencyInfo{
+                .memoryBarrierCount = 1,
+                .pMemoryBarriers = &barrier,
+            });
+        });
+        scheduler.Flush();
+    }
+    scheduler.Wait(tick);
+    Unified::Add(Unified::CpReadSyncs);
+    Unified::Add(Unified::CpReadWaitUs,
+                 std::chrono::duration_cast<std::chrono::microseconds>(
+                     std::chrono::steady_clock::now() - start).count());
 }
 
 void BufferCache::ProcessFaultBuffer() {
@@ -705,6 +1102,20 @@ const Buffer* BufferCache::GetArena(u64 first_block, u64 last_block) {
 // block at a time, each range its own driver allocation and sparse bind; granules and chunks
 // make far fewer. When device memory runs out, old textures are freed and it is tried once more.
 void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_block) {
+    if (unified_end != 0) [[unlikely]] {
+        // tlg: the imported range is never bound in the arena; the parts around it are.
+        const u64 unified_first = unified_base >> block_shift;
+        const u64 unified_last = (unified_end >> block_shift) - 1;
+        if (first_block <= unified_last && unified_first <= last_block) {
+            if (first_block < unified_first) {
+                EnsureResident(arena, first_block, unified_first - 1);
+            }
+            if (last_block > unified_last) {
+                EnsureResident(arena, unified_last + 1, last_block);
+            }
+            return;
+        }
+    }
     // Granules never cross an arena page (1 GiB or more), so the widened range stays within the
     // arena.
     const u64 granule_blocks = std::max<u64>(RESIDENCY_GRANULE_SIZE >> block_shift, 1);
@@ -1217,7 +1628,8 @@ std::shared_ptr<BufferCache::DeferredReadback> BufferCache::StartDeferredReadbac
         // Another guest thread is already waiting for this memory: wait for the same copy.
         std::scoped_lock lock{deferred_mutex};
         for (const auto& readback : deferred_readbacks) {
-            if (!readback->Done() && !readback->stale && readback->start <= window_start &&
+            if (!readback->Done() && !readback->stale && !readback->lagged &&
+                readback->start <= window_start &&
                 window_end <= readback->end) {
                 if (ReadbackStatsEnabled()) {
                     Readbacks().joined.fetch_add(1);
@@ -1346,6 +1758,11 @@ void BufferCache::SettleDeferredReadbacks(VAddr start, VAddr end) {
         }
     }
     for (const auto& readback : overlapping) {
+        if (readback->lagged) {
+            // Its ranges left gpu_modified_ranges: its bytes go to memory before a newer copy.
+            ApplyLaggedReadback(*readback, true);
+            continue;
+        }
         // A stale copy won't be applied: no need to wait for it (2d2511fe).
         if (readback->stale.load() || !FinishDeferredReadback(*readback, true)) {
             RecoverDeferredReadback(*readback);
@@ -1357,17 +1774,25 @@ void BufferCache::PruneDeferredReadbacks() {
     if (!deferred_count.load(std::memory_order_acquire)) {
         return;
     }
-    boost::container::small_vector<std::shared_ptr<DeferredReadback>, 8> stale;
+    boost::container::small_vector<std::shared_ptr<DeferredReadback>, 8> stale, lagged;
     {
         std::scoped_lock lock{deferred_mutex};
         for (const auto& readback : deferred_readbacks) {
-            if (!readback->Done() && readback->stale.load()) {
+            if (readback->Done()) {
+                continue;
+            }
+            if (readback->lagged) {
+                lagged.push_back(readback);
+            } else if (readback->stale.load()) {
                 stale.push_back(readback);
             }
         }
     }
     for (const auto& readback : stale) {
         RecoverDeferredReadback(*readback);
+    }
+    for (const auto& readback : lagged) {
+        ApplyLaggedReadback(*readback, false); // once the GPU is done with it
     }
     std::scoped_lock lock{deferred_mutex};
     std::erase_if(deferred_readbacks, [this](const std::shared_ptr<DeferredReadback>& readback) {

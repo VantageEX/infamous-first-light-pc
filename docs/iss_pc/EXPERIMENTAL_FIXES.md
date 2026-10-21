@@ -4,7 +4,7 @@ No launcher novo (Qt) é a tela **Correções**; no launcher Tk de reserva (**in
 
 - **Menu do jogo (Insert):** as opções do menu do jogo que não estão no resto do launcher (imagem, desempenho, controle e overlay). Modo de exibição, VSync e o botão do overlay de FPS continuam no quadro Vídeo.
 - **Correções experimentais (BPnn):** as 12 correções portadas de outros ports de PS4 e do shadPS4 (`port/gpu/shadps4/common/backports.h`). As de padrão desligado (BP07, BP09 e BP12) e a BP06 (ligada, mas experimental) são experimentais; a BP08 vem ligada desde 16/10. Em cada uma, o launcher mostra a origem; as que mudam shader avisam que a primeira partida depois de mudar recompila os shaders (pode piscar ou ficar verde por um tempo).
-- **Chaves de diagnóstico / A-B:** chaves que só existiam como variável de ambiente, para descobrir qual mudança causa um problema. Inclui o **modo de oclusão** (`ISS_OCCLUSION_MODE`, padrão 3; veja abaixo), que também tem um seletor na tela inicial. `TLG_PIPELINE_BINARIES` ainda derruba o jogo no driver NVIDIA 595.
+- **Chaves de diagnóstico / A-B:** chaves que só existiam como variável de ambiente, para descobrir qual mudança causa um problema. Inclui o **modo de oclusão** (`ISS_OCCLUSION_MODE`, padrão 4, oclusão real; veja abaixo), que também tem um seletor na tela inicial. `TLG_PIPELINE_BINARIES` ainda derruba o jogo no driver NVIDIA 595.
 
 Botões: **Voltar ao recomendado** (apaga todas as escolhas; o perfil Recomendado são os padrões da tabela, com o selo "recomendado" nas linhas que o compõem; a janela mostra "Perfil: Recomendado" ou "Perfil: personalizado (N mudanças)") e **Como a release anterior** (grava `bp01=0` ... para todo BPnn que vem ligado; é o mesmo que iniciar com `TLG_BACKPORTS=0`, mas as caixas mostram o estado e dá para religar uma a uma).
 
@@ -44,14 +44,14 @@ Variáveis: o launcher passa `ISS_<nome>=0/1` ao jogo (o `tlg-probe` copia para 
 |  Texturas BC 1D como 2D | `block1d` | ISS_/TLG_BLOCK1D | automático | reinicia o jogo, recompila shaders |  |
 |  Texturas BC minúsculas na CPU | `bc_tiny` | ISS_/TLG_BC_TINY | automático | reinicia o jogo, recompila shaders |  |
 |  Desligar multisampling | `no_msaa` | ISS_/TLG_NO_MSAA | automático | reinicia o jogo, recompila shaders |  |
-|  Consulta de oclusão (0 a 3) | `occlusion_mode` | ISS_/TLG_OCCLUSION_MODE | 3 | reinicia o jogo | diagnóstico (`liverpool.cpp`, `ZPASS_DONE`) |
+|  Consulta de oclusão (0 a 4) | `occlusion_mode` | ISS_/TLG_OCCLUSION_MODE | 4 | reinicia o jogo | diagnóstico (`liverpool.cpp`, `ZPASS_DONE`) |
 |  Compilação assíncrona de shaders | `async_shaders` | (lido do tlg.ini) | desligado (desde 16/10: nenhum desenho pulado) | no jogo (Insert) |  |
 |  Leituras da GPU adiadas | `deferred_readback` | (lido do tlg.ini) | ligado | reinicia o jogo |  |
 |  Leituras da GPU com um quadro de atraso | `stale_readback` | (lido do tlg.ini) | desligado | reinicia o jogo |  |
 |  Carregar pipelines durante o jogo | `background_warmup` | ISS_/TLG_BACKGROUND_WARMUP | ligado | reinicia o jogo |  |
 |  Pipeline binaries (VK_KHR_pipeline_binary) | `pipeline_binaries` | ISS_/TLG_PIPELINE_BINARIES | desligado | reinicia o jogo |  |
 
-**Modo de oclusão (`occlusion_mode`):** o contador `ZPASS_DONE` que o jogo lê para saber quanto de uma luz está visível era um número falso e crescente, e isso fazia os faróis piscarem e o brilho atravessar personagens. `3` (padrão, contagem zero) corrigiu isso, confirmado no Windows e no Linux; `0` é o comportamento antigo; `1` (luzes tapadas) e `2` (luzes totalmente visíveis) são testes. Risco: o brilho das luzes pode ficar mais fraco com o `3`; nesse caso use `0`. `TLG_OCCLUSION_LOG=1` registra os eventos no log.
+**Modo de oclusão (`occlusion_mode`):** o contador `ZPASS_DONE` que o jogo lê para saber quanto de uma luz está visível era um número falso e crescente, e isso fazia os faróis piscarem e o brilho atravessar personagens. `4` (padrão) mede a oclusão real com consultas de oclusão do Vulkan: o brilho aparece só onde a luz está à vista. `3` (contagem zero, o padrão anterior) já tinha corrigido o piscar, confirmado no Windows e no Linux, tratando todo brilho como tapado; `0` é o comportamento antigo; `1` (luzes tapadas) e `2` (luzes totalmente visíveis) são testes. Se uma cena ficar pior com o `4`, use o `3`. `TLG_OCCLUSION_LOG=1` registra no log as consultas contadas.
 
 `TLG_DEFERRED_READBACK` usa a opção que o launcher já tinha (settings.json), `TLG_ASYNC_SHADERS` e `TLG_STALE_READBACK` são lidas do `tlg.ini` pelo jogo (o menu Insert escreve as mesmas chaves).
 
@@ -97,7 +97,7 @@ In the new (Qt) launcher it is the **Fixes** screen; in the fallback Tk launcher
 
 - **Game menu (Insert):** the in-game menu options the rest of the launcher does not have (image, performance, controls, overlay). Display mode, VSync and the FPS overlay switch stay in the Video box.
 - **Experimental fixes (BPnn):** the 12 fixes ported from other PS4 ports and from shadPS4 (`port/gpu/shadps4/common/backports.h`). Those off by default (BP07, BP09 and BP12) and BP06 (on, but experimental) are experimental; BP08 is on since 2026-10-16. Each shows its origin; the ones that change shaders warn that the first game after changing recompiles the shaders (it may flicker or look green for a while).
-- **Diagnostic / A-B switches:** switches that were environment variables only, to find which change causes a problem. It includes the **occlusion mode** (`ISS_OCCLUSION_MODE`, default 3; see below), which also has a selector on the home screen. `TLG_PIPELINE_BINARIES` still crashes the game on the NVIDIA 595 driver.
+- **Diagnostic / A-B switches:** switches that were environment variables only, to find which change causes a problem. It includes the **occlusion mode** (`ISS_OCCLUSION_MODE`, default 4, real occlusion; see below), which also has a selector on the home screen. `TLG_PIPELINE_BINARIES` still crashes the game on the NVIDIA 595 driver.
 
 Buttons: **Back to recommended** (clears every choice; the Recommended profile is the table defaults, rows in it carry a "recommended" badge; the window shows "Profile: Recommended" or "Profile: custom (N changes)") and **Like the previous release** (writes `bp01=0` ... for every BPnn that is on by default; same as starting with `TLG_BACKPORTS=0`, but the boxes show the state and you can turn single ones back on).
 
@@ -137,14 +137,14 @@ Variables: the launcher gives the game `ISS_<name>=0/1` (`tlg-probe` copies it t
 |  BC 1D textures as 2D | `block1d` | ISS_/TLG_BLOCK1D | automatic | restarts the game, recompiles shaders |  |
 |  Tiny BC textures on the CPU | `bc_tiny` | ISS_/TLG_BC_TINY | automatic | restarts the game, recompiles shaders |  |
 |  Disable multisampling | `no_msaa` | ISS_/TLG_NO_MSAA | automatic | restarts the game, recompiles shaders |  |
-|  Occlusion query (0 to 3) | `occlusion_mode` | ISS_/TLG_OCCLUSION_MODE | 3 | restarts the game | diagnostic (`liverpool.cpp`, `ZPASS_DONE`) |
+|  Occlusion query (0 to 4) | `occlusion_mode` | ISS_/TLG_OCCLUSION_MODE | 4 | restarts the game | diagnostic (`liverpool.cpp`, `ZPASS_DONE`) |
 |  Asynchronous shader compile | `async_shaders` | (read from tlg.ini) | off (since 2026-10-16: no skipped draws) | in game (Insert) |  |
 |  Deferred GPU readbacks | `deferred_readback` | (read from tlg.ini) | on | restarts the game |  |
 |  Stale readbacks | `stale_readback` | (read from tlg.ini) | off | restarts the game |  |
 |  Load pipelines while playing | `background_warmup` | ISS_/TLG_BACKGROUND_WARMUP | on | restarts the game |  |
 |  Pipeline binaries (VK_KHR_pipeline_binary) | `pipeline_binaries` | ISS_/TLG_PIPELINE_BINARIES | off | restarts the game |  |
 
-**Occlusion mode (`occlusion_mode`):** the `ZPASS_DONE` counter the game reads to know how much of a light is visible was a fake, ever-growing number, which made headlights flicker and glare show through characters. `3` (default, zero counts) fixed it, confirmed on Windows and on Linux; `0` is the old behavior; `1` (lights hidden) and `2` (lights fully visible) are tests. Risk: the glare of lights may look weaker with `3`; if so, use `0`. `TLG_OCCLUSION_LOG=1` logs the events in the log.
+**Occlusion mode (`occlusion_mode`):** the `ZPASS_DONE` counter the game reads to know how much of a light is visible was a fake, ever-growing number, which made headlights flicker and glare show through characters. `4` (default) measures real occlusion with Vulkan occlusion queries: the glare shows only where the light is in view. `3` (zero counts, the previous default) had already fixed the flicker, confirmed on Windows and on Linux, by treating every glare as hidden; `0` is the old behavior; `1` (lights hidden) and `2` (lights fully visible) are tests. If a scene looks worse with `4`, use `3`. `TLG_OCCLUSION_LOG=1` logs the counted queries.
 
 `TLG_DEFERRED_READBACK` uses the launcher's existing option (settings.json); `TLG_ASYNC_SHADERS` and `TLG_STALE_READBACK` are read from `tlg.ini` by the game (the Insert menu writes the same keys).
 

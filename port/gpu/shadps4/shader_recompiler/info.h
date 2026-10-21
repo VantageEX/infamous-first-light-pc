@@ -18,6 +18,7 @@
 #include "shader_recompiler/ir/reg.h"
 #include "shader_recompiler/ir/type.h"
 #include "shader_recompiler/params.h"
+#include "shader_recompiler/recompiler_toggles.h"
 #include "shader_recompiler/resource.h"
 #include "shader_recompiler/runtime_info.h"
 
@@ -274,5 +275,16 @@ struct Info : InfoPersistent {
     bool Deserialize(Serialization::Archive& ar);
 };
 DECLARE_ENUM_FLAG_OPERATORS(Info::ReadConstType);
+
+/// tlg: TLG_DYNAMIC_STRIDE: the buffer's address math reads its stride from the V# dword 1 in the
+/// flattened user data, so its specialization leaves the stride out. Only where dword 1 comes from
+/// the flattened user data (a code property): the patching pass and StageSpecialization agree.
+/// Offset 0 is excluded: a ReadConst with flags 0 means a dynamic read (EmitReadConst).
+inline bool UsesDynamicStride(const Info& info, const BufferResource& desc) {
+    const auto& fetch = desc.sharp_fetch;
+    return info.hw_stage == HwStage::Compute && !desc.IsSpecial() && (fetch.load_mask & 2) != 0 &&
+           fetch.offsets[1] != UNKNOWN_LOCATION && fetch.offsets[1] != 0 &&
+           Toggles::DynamicBufferStride();
+}
 
 } // namespace Shader

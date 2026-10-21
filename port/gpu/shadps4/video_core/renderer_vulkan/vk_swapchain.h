@@ -134,6 +134,7 @@ private:
     std::vector<vk::ImageView> images_view;
     std::vector<vk::Semaphore> image_acquired;
     std::vector<vk::Semaphore> present_ready;
+    vk::Fence acquire_fence{}; ///< tlg: TLG_PRESENT_ACQUIRE_FENCE, see AcquireNextImage
     u32 width = 0;
     u32 height = 0;
     u32 image_count = 0;

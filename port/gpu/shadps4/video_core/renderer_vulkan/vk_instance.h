@@ -137,6 +137,21 @@ public:
         return vk12_features.shaderInt8;
     }
 
+    /// tlg: occlusion queries may count the exact number of samples (TLG_OCCLUSION_MODE=4).
+    bool IsOcclusionQueryPreciseSupported() const {
+        return features.occlusionQueryPrecise;
+    }
+
+    /// tlg: host memory may be imported (TLG_UNIFIED_MEMORY).
+    bool HasExternalMemoryHost() const {
+        return external_memory_host;
+    }
+
+    /// tlg: queries may be reset from the host (vkResetQueryPool).
+    bool IsHostQueryResetSupported() const {
+        return vk12_features.hostQueryReset;
+    }
+
     /// Returns true if VK_KHR_maintenance8 is supported
     bool IsMaintenance8Supported() const {
         return maintenance_8;
@@ -634,6 +649,7 @@ private:
     bool compute_shader_derivatives{};
     bool mixed_float_dot_product{}; // tlg: VK_VALVE_shader_mixed_float_dot_product (FSR 4.1.1)
     bool supports_memory_budget{};
+    bool external_memory_host{}; ///< tlg
     bool pageable_device_local_memory{};
     bool supports_block_texel_view{};
     u64 total_memory_budget{};

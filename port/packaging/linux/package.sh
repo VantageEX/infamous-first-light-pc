@@ -35,12 +35,22 @@ cp -r "out/pyi-dist/$PORT_NAME/." "$dest/"
 cp launcher/$PORT_ICON.png "$dest/launcher/"
 strip --strip-debug -o "$dest/out/tlg-probe" out/tlg-probe
 strip --strip-debug -o "$dest/out/gpu/libtlggpu.so" out/gpu/libtlggpu.so
+# Renderer v2 (TLG_RENDERER_V2=1 build.sh): its probe (rpath $ORIGIN/gpu_v2), its library and its
+# defaults (gpu_v2/defaults.env, read by the launcher when the player picks it).
+v2_bins=()
+if [[ -f out/tlg-probe-v2 && -f out/gpu_v2/libissgpu.so ]]; then
+    mkdir -p "$dest/out/gpu_v2" "$dest/gpu_v2"
+    strip --strip-debug -o "$dest/out/tlg-probe-v2" out/tlg-probe-v2
+    strip --strip-debug -o "$dest/out/gpu_v2/libissgpu.so" out/gpu_v2/libissgpu.so
+    cp gpu_v2/defaults.env gpu_v2/README.md "$dest/gpu_v2/"
+    v2_bins=(out/tlg-probe-v2 out/gpu_v2/libissgpu.so)
+fi
 [[ -f out/tlg-gpu-capabilities ]] && strip -o "$dest/out/tlg-gpu-capabilities" out/tlg-gpu-capabilities
 # Libraries to bundle: everything the two ELF files load except the base system (glibc, the C++
 # runtime, the Vulkan loader and drivers, X11/Wayland, audio servers), which must come from the
 # player's distribution to match its drivers.
 system='^(ld-linux|libc|libm|libdl|libpthread|librt|libmvec|libresolv|libutil|libstdc\+\+|libgcc_s|libvulkan|libGL|libEGL|libGLX|libGLdispatch|libX|libxcb|libwayland|libdrm|libasound|libpulse|libpipewire|libudev|libdbus|libsystemd|libz\.|libgomp|libcap|libffi)'
-ldd out/tlg-probe out/gpu/libtlggpu.so | awk '/=> \// {print $1, $3}' | sort -u | while read -r soname path; do
+ldd out/tlg-probe out/gpu/libtlggpu.so "${v2_bins[@]}" | awk '/=> \// {print $1, $3}' | sort -u | while read -r soname path; do
     [[ $soname == libtlggpu.so ]] && continue
     [[ $soname =~ $system ]] && continue
     cp -L "$path" "$dest/out/lib/$soname"

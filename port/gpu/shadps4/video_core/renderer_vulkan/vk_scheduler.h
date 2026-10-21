@@ -667,6 +667,18 @@ private:
     CommandBase* last{};
 };
 
+/// tlg: notified when the scheduler's rendering scopes begin and end, for work that cannot span
+/// them (TLG_OCCLUSION_MODE=4: Vulkan occlusion queries begun in a rendering scope end in it).
+/// Called on the thread that owns the scheduler; record with Scheduler::Record.
+class RenderingObserver {
+public:
+    virtual ~RenderingObserver() = default;
+    /// The rendering scope has just begun.
+    virtual void OnBeginRendering() = 0;
+    /// The rendering scope is about to end.
+    virtual void OnEndRendering() = 0;
+};
+
 class Scheduler {
 public:
     /// `threaded_recording`: Vulkan commands passed to Record() are recorded by a worker thread.
@@ -859,6 +871,16 @@ public:
     /// may free memory the earlier fence then writes into (corrupted heap, guest fault).
     void WaitDeferredSignals();
 
+    /// tlg: whether a render pass is open.
+    [[nodiscard]] bool IsRendering() const noexcept {
+        return is_rendering;
+    }
+
+    /// tlg: see RenderingObserver (one at a time; nullptr removes it).
+    void SetRenderingObserver(RenderingObserver* observer) noexcept {
+        rendering_observer = observer;
+    }
+
     /// Whether a render pass with exactly this state is open.
     [[nodiscard]] bool IsRenderingWith(const RenderState& state) const {
         return is_rendering && render_state == state;
@@ -981,6 +1003,7 @@ private:
     std::jthread priority_pending_ops_thread;
     RenderState render_state;
     bool is_rendering = false;
+    RenderingObserver* rendering_observer = nullptr; ///< tlg
     // tlg: threaded recording
     std::unique_ptr<RecordChunk> record_chunk;
     void (*owner_hook)(void*, void*) = nullptr;

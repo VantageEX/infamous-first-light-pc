@@ -39,6 +39,17 @@ MINGW*|MSYS*)
     fi
     cp out/gpu/tlg-probe.exe out/gpu/tlg-gpu-capabilities.exe out/gpu/tlg-play.exe out/
     echo "Built $PWD/out/tlg-probe.exe"
+    # TLG_RENDERER_V2=1: renderer v2 (gpu_v2/README.md), linked into out/tlg-probe-v2.exe.
+    if [[ ${TLG_RENDERER_V2:-${ISS_RENDERER_V2:-}} == 1 ]]; then
+        cmake -S gpu_v2 -B out/gpu_v2 -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ >/dev/null
+        if ! ninja -C out/gpu_v2 tlg-probe-v2 > out/gpu_v2-build.log 2>&1; then
+            grep -v '^\[' out/gpu_v2-build.log | tail -60 >&2
+            echo 'Renderer v2 build failed (full log: out/gpu_v2-build.log)' >&2; exit 1
+        fi
+        cp out/gpu_v2/tlg-probe-v2.exe out/
+        echo "Built $PWD/out/tlg-probe-v2.exe (renderer v2)"
+    fi
     exit 0
     ;;
 esac
@@ -108,6 +119,19 @@ fi
 if [[ ${1:-} != --test-only ]]; then
     "$CC" -std=c11 -O2 -g -Wall -Wextra -Werror -pthread -no-pie -DTLG_BUILD_COMMIT="\"$TLG_BUILD_COMMIT\"" "${includes[@]}" -I. -Isrc src/probe.c "${runtime[@]}" src/cpu_check.c src/vulkan_smoke.c out/isa_emulate.o src/isa_rewrite.c out/libatrac9.a -lm "${gpu[@]}" "${libraries[@]}" -o out/tlg-probe
     echo "Built $PWD/out/tlg-probe"
+    # TLG_RENDERER_V2=1 (ISS_RENDERER_V2): also renderer v2 (gpu_v2/README.md) and
+    # the probe that uses it, out/tlg-probe-v2 (TLG_PROBE=tlg-probe-v2 runs it). Needs clang.
+    if [[ ${TLG_RENDERER_V2:-${ISS_RENDERER_V2:-}} == 1 ]]; then
+        cmake -S gpu_v2 -B out/gpu_v2 -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang >/dev/null
+        if ! ninja -C out/gpu_v2 issgpu > out/gpu_v2-build.log 2>&1; then
+            grep -v '^\[' out/gpu_v2-build.log | tail -40 >&2
+            echo 'Renderer v2 build failed (full log: out/gpu_v2-build.log)' >&2; exit 1
+        fi
+        cs=(-Lout/gpu_v2 -lissgpu -Wl,-rpath,'$ORIGIN/gpu_v2' -Wl,-rpath,"$PWD/out/gpu_v2" -rdynamic)
+        "$CC" -std=c11 -O2 -g -Wall -Wextra -Werror -pthread -no-pie -DTLG_BUILD_COMMIT="\"$TLG_BUILD_COMMIT\"" "${includes[@]}" -I. -Isrc src/probe.c "${runtime[@]}" src/cpu_check.c src/vulkan_smoke.c out/isa_emulate.o src/isa_rewrite.c out/libatrac9.a -lm "${cs[@]}" "${libraries[@]}" -o out/tlg-probe-v2
+        echo "Built $PWD/out/tlg-probe-v2 (renderer v2)"
+    fi
     # GPU check for run.sh (live_resolution=auto): links only the Vulkan loader.
     "$CC" -std=c11 -O2 -Wall -Wextra -Werror -Igpu/shadps4 tools/gpu_capabilities.c "${libraries[@]}" -o out/tlg-gpu-capabilities
 fi

@@ -103,6 +103,11 @@ public:
         return *Singleton<ElfInfo>::Instance();
     }
 
+    /// tlg: whether a game filled this in (tests and tools run without one).
+    [[nodiscard]] bool IsInitialized() const noexcept {
+        return Instance().initialized;
+    }
+
     [[nodiscard]] std::string_view GameSerial() const {
         ASSERT(initialized);
         return Instance().game_serial;

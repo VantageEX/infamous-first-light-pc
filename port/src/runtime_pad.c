@@ -794,12 +794,52 @@ typedef struct { uint32_t ms, buttons; uint8_t axes[4], l2, r2; } PadSample;
 static FILE *record_file;
 static uint64_t record_start;
 static PadSample record_last;
+/* Gameplay for scripted routes: two checks in a row, half a second apart, with over 1000 draws a
+ * frame (menus and loading screens draw a few dozen). The recording and every replay start at
+ * this same moment. */
+static int gameplay_seen;
+static int gameplay_started(void) {
+    static uint64_t last_check, last_draws, last_flips;
+    static int streak;
+    if (gameplay_seen) return 1;
+    const uint64_t now=now_us();
+    if (now-last_check<500000) return 0;
+    TlgGpuFrameCounters c;
+    tlggpu_frame_counters(&c);
+    const uint64_t draws=tlggpu_total_draws();
+    if (last_check && c.shown>last_flips && (draws-last_draws)/(c.shown-last_flips)>1000) {
+        if (++streak>=2) { gameplay_seen=1; puts("Runtime: gameplay detected (scripted route)"); }
+    } else {
+        streak=0;
+    }
+    last_check=now; last_draws=draws; last_flips=c.shown;
+    return gameplay_seen;
+}
 static void record_sample(const PadData *d) {
-    static const char *path; static int checked, f9_was_down;
-    if (!checked) { path=getenv("TLG_PAD_RECORD"); checked=1; }
+    static const char *path; static int checked, f9_was_down, auto_done;
+    static long auto_seconds;
+    if (!checked) {
+        path=getenv("TLG_PAD_RECORD");
+        /* TLG_PAD_RECORD_SECONDS=N: no F9, the recording starts at gameplay and stops N s later. */
+        const char *seconds=getenv("TLG_PAD_RECORD_SECONDS");
+        auto_seconds=seconds ? atol(seconds) : 0;
+        checked=1;
+    }
     if (!path || !*path || !sdl_ready) return;
+    if (auto_seconds>0) {
+        if (!record_file && !auto_done && gameplay_started() && (record_file=fopen(path,"w"))) {
+            record_start=now_us();
+            memset(&record_last,0xff,sizeof(record_last));
+            printf("Runtime: pad recording started at gameplay (%s, %ld s)\n",path,auto_seconds);
+        }
+        if (record_file && now_us()-record_start>(uint64_t)auto_seconds*1000000u) {
+            fclose(record_file); record_file=NULL; auto_done=1;
+            printf("Runtime: pad recording stopped (%s)\n",path);
+            tlggpu_overlay_notice("Route recorded",4.0f);
+        }
+    }
     const bool *k=SDL_GetKeyboardState(NULL);
-    const int f9=k && k[SDL_SCANCODE_F9];
+    const int f9=auto_seconds<=0 && k && k[SDL_SCANCODE_F9];
     if (f9 && !f9_was_down) {
         if (record_file) {
             fclose(record_file); record_file=NULL;
@@ -823,6 +863,22 @@ static void record_sample(const PadData *d) {
 }
 static PadSample *replay; static size_t replay_count, replay_next;
 static void replay_sample(PadData *d) {
+    /* TLG_PAD_REPLAY_AUTO=1: no "replay" token needed. Until gameplay, Cross is tapped every two
+     * seconds (title screen, Continue); the recording starts at gameplay, as it was recorded. */
+    static int auto_checked, auto_replay;
+    if (!auto_checked) {
+        const char *a=getenv("TLG_PAD_REPLAY_AUTO");
+        auto_replay=a && a[0]=='1' && getenv("TLG_PAD_REPLAY");
+        auto_checked=1;
+    }
+    if (auto_replay && !replay_armed) {
+        if (gameplay_started()) {
+            replay_armed=1; replay_start=0;
+        } else {
+            if ((now_us()/1000)%2000<150) d->buttons|=BTN_CROSS;
+            return;
+        }
+    }
     if (!replay_armed) return;
     if (!replay_start) {
         static int loaded;

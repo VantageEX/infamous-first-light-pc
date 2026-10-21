@@ -34,6 +34,8 @@
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 #include "video_core/renderer_vulkan/vk_depth_stencil_state.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
+#include "video_core/renderer_vulkan/vk_occlusion.h"
+#include "video_core/buffer_cache/unified_memory.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/renderer_vulkan/vk_gpu_profiler.h"
@@ -75,6 +77,14 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
     camera_motion->SetObjectMotion(object_motion.get());
     upscaler = std::make_unique<TemporalUpscaler>(instance, scheduler, texture_cache, runtime,
                                                   *camera_motion, *scene_targets);
+    if (Common::Backports::OcclusionMode() == 4) {
+        if (instance.IsHostQueryResetSupported()) {
+            occlusion = std::make_unique<OcclusionQueries>(instance, scheduler);
+        }
+        std::printf("Occlusion: real queries %s (precise %d)\n",
+                    occlusion ? "on" : "off: no host query reset, zero counts as mode 3",
+                    instance.IsOcclusionQueryPreciseSupported() ? 1 : 0);
+    }
     if (!EmulatorSettings.IsNullGPU()) {
         liverpool->BindRasterizer(this);
     }
@@ -2008,6 +2018,9 @@ void NoteHugeBind(VAddr base, u64 size) {
 
 void Rasterizer::OnSubmit() {
     DrainDrawPipe();
+    if (occlusion) {
+        occlusion->OnSubmit();
+    }
     if (fault_process_pending) {
         fault_process_pending = false;
         buffer_cache.ProcessFaultBuffer();
@@ -2792,6 +2805,7 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
                 if (!desc.is_written && size >= HugeBindSize) {
                     NoteHugeBind(vsharp.base_address, size);
                 }
+                VideoCore::written_binding_source = {"shader", stage.pgm_hash};
                 const auto [buffer, offset] = buffer_cache.ObtainBuffer(
                     vsharp.base_address, size, desc.is_written, desc.is_formatted);
                 const u64 offset_aligned = Common::AlignDown(offset, alignment);
@@ -3807,6 +3821,7 @@ void Rasterizer::FillBuffer(VAddr address, u32 num_bytes, u32 value, bool is_gds
         if (is_gds) {
             return {buffer_cache.GetGdsBuffer(), address};
         }
+        VideoCore::written_binding_source = {"fill", 0};
         return buffer_cache.ObtainBuffer(address, num_bytes, true);
     }();
     runtime.FillBuffer(buffer, offset, num_bytes, value);
@@ -3834,6 +3849,7 @@ void Rasterizer::CopyBuffer(VAddr dst, VAddr src, u32 num_bytes, bool dst_gds, b
         if (dst_gds) {
             return {gds_buffer, dst};
         }
+        VideoCore::written_binding_source = {"copy", 0};
         return buffer_cache.ObtainBuffer(dst, num_bytes, true, true);
     }();
     const vk::BufferCopy copy = {
@@ -3842,6 +3858,125 @@ void Rasterizer::CopyBuffer(VAddr dst, VAddr src, u32 num_bytes, bool dst_gds, b
         .size = num_bytes,
     };
     runtime.CopyBuffer(src_buffer, dst_buffer, std::span{&copy, 1});
+}
+
+bool Rasterizer::DeferUnifiedFence(Common::UniqueFunction<void>&& write) {
+    if (!buffer_cache.UnifiedActive()) {
+        return false;
+    }
+    // Every fence, not only those in the range: labels stay in order (a later fence written
+    // first lets the guest free memory an earlier one still writes into).
+    scheduler.Record([](vk::CommandBuffer cmdbuf) {
+        const vk::MemoryBarrier2 barrier{
+            .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+            .srcAccessMask = vk::AccessFlagBits2::eMemoryWrite,
+            .dstStageMask = vk::PipelineStageFlagBits2::eHost,
+            .dstAccessMask = vk::AccessFlagBits2::eHostRead,
+        };
+        cmdbuf.pipelineBarrier2(vk::DependencyInfo{
+            .memoryBarrierCount = 1,
+            .pMemoryBarriers = &barrier,
+        });
+    });
+    scheduler.DeferPriorityOperation(std::move(write));
+    scheduler.Flush();
+    VideoCore::Unified::Add(VideoCore::Unified::FencesDeferred);
+    VideoCore::Unified::MaybeReport(static_cast<u64>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count()));
+    return true;
+}
+
+void Rasterizer::SyncUnifiedRead(VAddr address, u64 size) {
+    if (!buffer_cache.UnifiedActive() || !buffer_cache.IsUnified(address, size)) {
+        return;
+    }
+    DrainDrawPipe();
+    buffer_cache.SyncUnifiedRead(address, size);
+}
+
+void Rasterizer::WriteHiddenOcclusion(VAddr address, u32 num_pairs) {
+    static constexpr u64 CounterValid = 1ULL << 63;
+    num_pairs = std::clamp<u32>(num_pairs, 1, OcclusionQueries::MaxCounterPairs);
+    const u32 size = num_pairs * 2 * sizeof(u64);
+    if (IsMapped(address, size) && buffer_cache.IsRegionGpuModified(address, size)) {
+        // Results the GPU wrote before (a counted query at this address): written there too.
+        texture_cache.InvalidateMemoryFromGPU(address, size);
+        VideoCore::written_binding_source = {"occlusion", 0};
+        const auto [buffer, offset] = buffer_cache.ObtainBuffer(address, size, true);
+        runtime.WriteOcclusionResults(buffer, offset, num_pairs,
+                                      occlusion ? occlusion->Pool() : vk::QueryPool{}, {});
+        return;
+    }
+    u64* results = std::bit_cast<u64*>(address);
+    std::fill(results, results + 2 * num_pairs, CounterValid);
+}
+
+void Rasterizer::OcclusionDump(VAddr address, u32 num_pairs) {
+    // TLG_OCCLUSION_LOG=1: counted and hidden queries, every 4096 dumps.
+    static const bool log = [] {
+        const char* v = std::getenv("TLG_OCCLUSION_LOG");
+        return v && *v && std::atoi(v) != 0;
+    }();
+    static u64 dumps, counted, hidden, segments_used;
+    const auto report = [&] {
+        if (log && (++dumps % 4096) == 0) {
+            std::printf("Occlusion: %llu dumps, %llu queries counted (%llu segments), %llu hidden, "
+                        "%llu segments dropped, %u open\n",
+                        static_cast<unsigned long long>(dumps),
+                        static_cast<unsigned long long>(counted),
+                        static_cast<unsigned long long>(segments_used),
+                        static_cast<unsigned long long>(hidden),
+                        static_cast<unsigned long long>(occlusion ? occlusion->Dropped() : 0),
+                        occlusion ? occlusion->NumOpen() : 0u);
+        }
+    };
+    num_pairs = std::clamp<u32>(num_pairs, 1, OcclusionQueries::MaxCounterPairs);
+    const u32 size = num_pairs * 2 * sizeof(u64);
+    if (!occlusion) {
+        WriteHiddenOcclusion(address, num_pairs);
+        report();
+        return;
+    }
+    if (address % 16 == 0) {
+        // Begin dump: nothing is written, the GPU writes the whole query at the end dump.
+        if (!IsMapped(address, size) || !occlusion->Begin(address, num_pairs)) {
+            WriteHiddenOcclusion(address, num_pairs);
+            ++hidden;
+        }
+        report();
+        return;
+    }
+    if (address % 16 != sizeof(u64)) {
+        WriteHiddenOcclusion(address, num_pairs);
+        ++hidden;
+        report();
+        return;
+    }
+    // End dump: the whole query, from its begin counters.
+    const VAddr results = address - sizeof(u64);
+    if (log && counted + hidden < 64) {
+        std::printf("Occlusion: query at %llx, %u pairs\n", static_cast<unsigned long long>(results),
+                    num_pairs);
+    }
+    OcclusionQueries::QueryList queries;
+    if (!occlusion->End(results, queries)) {
+        WriteHiddenOcclusion(results, num_pairs);
+        ++hidden;
+    } else {
+        texture_cache.InvalidateMemoryFromGPU(results, size);
+        VideoCore::written_binding_source = {"occlusion", 0};
+        const auto [buffer, offset] = buffer_cache.ObtainBuffer(results, size, true);
+        const std::span<const u32> used{queries.data(), queries.size()};
+        runtime.WriteOcclusionResults(buffer, offset, num_pairs, occlusion->Pool(), used);
+        occlusion->MarkUsed(used);
+        ++counted;
+        segments_used += queries.size();
+    }
+    // Writing the results ended the rendering scope: the other open queries go on counting from
+    // the next one.
+    occlusion->Resume();
+    report();
 }
 
 u32 Rasterizer::ReadDataFromGds(u32 gds_offset) {
@@ -3864,7 +3999,14 @@ bool Rasterizer::InvalidateMemory(VAddr addr, u64 size, bool assume_locks) {
     return true;
 }
 
-bool Rasterizer::OnWriteFault(VAddr addr, bool assume_locks) {
+bool Rasterizer::OnWriteFault(VAddr addr, bool assume_locks, bool nowait) {
+    // tlg: a no-wait write takes the page over at once (BufferCache::NoWaitWrite): no draw pipe
+    // drain, no GPU wait. Images there are still invalidated.
+    if (nowait && !assume_locks && IsMapped(addr, 8) && buffer_cache.NoWaitWrite(addr)) {
+        texture_cache.InvalidateMemory(addr, 8);
+        buffer_cache.ExtendWriteFault(addr);
+        return true;
+    }
     DrainDrawPipe();
     if (!InvalidateMemory(addr, 8, assume_locks)) {
         return false;
@@ -3873,7 +4015,12 @@ bool Rasterizer::OnWriteFault(VAddr addr, bool assume_locks) {
     return true;
 }
 
-bool Rasterizer::ReadMemory(VAddr addr, u64 size, bool assume_locks) {
+bool Rasterizer::ReadMemory(VAddr addr, u64 size, bool assume_locks, bool lagged) {
+    // tlg: a lagged read takes the bytes already in memory (the GPU data of an earlier frame)
+    // and only queues the copy for the next read: no draw pipe drain, no GPU wait.
+    if (lagged && !assume_locks && IsMapped(addr, size) && buffer_cache.LaggedRead(addr, size)) {
+        return true;
+    }
     DrainDrawPipe();
     if (!IsMapped(addr, size)) {
         // Not GPU mapped memory, can skip invalidation logic entirely.

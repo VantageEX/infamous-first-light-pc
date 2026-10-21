@@ -26,7 +26,7 @@ Escolher grava a chave por `save_settings` e vale na próxima partida; a ajuda d
 
 ## Oclusão (Início)
 
-Seletor **Brilho das luzes (oclusão)** na tela Início, com os quatro valores de `ISS_OCCLUSION_MODE` (0 como antes, 1 luzes tapadas, 2 luzes totalmente visíveis, 3 contagem zero, o padrão); grava `occlusion_mode` pela mesma tabela da tela Correções (`Backend.occlusionOptions/occlusionIndex/setOcclusion`) e vale na próxima partida. O modo 3 corrigiu os faróis que piscavam e o brilho que atravessava personagens (confirmado no Windows e no Linux); veja o [README](../README.md#luzes-e-oclusão). O launcher Tk tem a mesma caixa.
+Seletor **Brilho das luzes (oclusão)** na tela Início, com os cinco valores de `ISS_OCCLUSION_MODE` (0 como antes, 1 luzes tapadas, 2 luzes totalmente visíveis, 3 contagem zero, 4 oclusão real, o padrão); grava `occlusion_mode` pela mesma tabela da tela Correções (`Backend.occlusionOptions/occlusionIndex/setOcclusion`) e vale na próxima partida. O modo 3 corrigiu os faróis que piscavam e o brilho que atravessava personagens (confirmado no Windows e no Linux); veja o [README](../README.md#luzes-e-oclusão). O launcher Tk tem a mesma caixa.
 
 ## O que a tela Início lê
 

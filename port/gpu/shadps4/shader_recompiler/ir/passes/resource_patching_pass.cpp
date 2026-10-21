@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <limits>
+#include <optional>
 #include "shader_recompiler/info.h"
 #include "shader_recompiler/ir/basic_block.h"
 #include "shader_recompiler/ir/breadth_first_search.h"
@@ -544,7 +545,8 @@ void PatchGlobalDataShareAccess(IR::Inst& inst, Info& info, Descriptors& descrip
 }
 
 IR::U32 CalculateBufferAddress(IR::IREmitter& ir, const IR::Inst& inst, const Info& info,
-                               const AmdGpu::Buffer& buffer, u32 stride) {
+                               const AmdGpu::Buffer& buffer, u32 stride,
+                               std::optional<IR::U32> dynamic_stride = std::nullopt) {
     const auto inst_info = inst.Flags<IR::BufferInstInfo>();
     const u32 inst_offset = inst_info.inst_offset.Value();
     const auto is_inst_typed = inst_info.inst_data_fmt != AmdGpu::DataFormat::FormatInvalid;
@@ -557,8 +559,9 @@ IR::U32 CalculateBufferAddress(IR::IREmitter& ir, const IR::Inst& inst, const In
 
     // If address calculation is of the form "index * const_stride + offset" with offset constant
     // and both const_stride and offset are divisible with the element size, apply shift directly.
-    if (inst_info.index_enable && !inst_info.voffset_enable && soffset.IsImmediate() &&
-        !buffer.swizzle_enable && !buffer.add_tid_enable && (stride & mask) == 0) {
+    if (!dynamic_stride && inst_info.index_enable && !inst_info.voffset_enable &&
+        soffset.IsImmediate() && !buffer.swizzle_enable && !buffer.add_tid_enable &&
+        (stride & mask) == 0) {
         const u32 total_offset = soffset.U32() + inst_offset;
         if ((total_offset & mask) == 0) {
             // buffer_offset = index * (const_stride >> shift) + (offset >> shift)
@@ -587,7 +590,7 @@ IR::U32 CalculateBufferAddress(IR::IREmitter& ir, const IR::Inst& inst, const In
         const IR::U32 voffset = IR::GetBufferVOffsetArg(&inst);
         offset = ir.IAdd(offset, voffset);
     }
-    const IR::U32 const_stride = ir.Imm32(stride);
+    const IR::U32 const_stride = dynamic_stride ? *dynamic_stride : ir.Imm32(stride);
     IR::U32 buffer_offset;
     if (buffer.swizzle_enable) {
         const IR::U32 const_index_stride = ir.Imm32(buffer.GetIndexStride());
@@ -630,8 +633,22 @@ void PatchBufferArgs(IR::Inst& inst, Info& info) {
     }
 
     IR::IREmitter ir{*inst.GetParent(), IR::Block::InstructionList::s_iterator_to(inst)};
+    // tlg: TLG_DYNAMIC_STRIDE: the stride comes from the bound V# (dword 1, bits 16-29), so the
+    // module does not depend on it (UsesDynamicStride, StageSpecialization).
+    std::optional<IR::U32> dynamic_stride;
+    const auto inst_info = inst.Flags<IR::BufferInstInfo>();
+    if ((inst_info.index_enable || buffer.add_tid_enable) && UsesDynamicStride(info, buffer_res)) {
+        const IR::U32 dw1 =
+            ir.ReadConst(ir.CompositeConstruct(ir.Imm32(0U), ir.Imm32(0U)), ir.Imm32(0U));
+        dw1.Inst()->SetFlags(u32{buffer_res.sharp_fetch.offsets[1]});
+        IR::U32 word = dw1;
+        if (buffer_res.post_op == SharpFetchPostOp::BitwiseOrDw1WithImm) {
+            word = ir.BitwiseOr(word, ir.Imm32(buffer_res.post_op_dw1_mask));
+        }
+        dynamic_stride = ir.BitFieldExtract(word, ir.Imm32(16U), ir.Imm32(14U));
+    }
     inst.SetArg(IR::LoadBufferArgs::Address,
-                CalculateBufferAddress(ir, inst, info, buffer, buffer.stride));
+                CalculateBufferAddress(ir, inst, info, buffer, buffer.stride, dynamic_stride));
 }
 
 IR::Value FixCubeCoords(IR::IREmitter& ir, const AmdGpu::Image& image, const IR::Value& x,

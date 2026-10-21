@@ -41,6 +41,14 @@ class StagingBufferPool;
 
 namespace VideoCore {
 
+/// tlg: who binds the next written buffer (TLG_WRITTEN_BINDINGS diagnostic): a short kind and,
+/// for shader bindings, the program hash. Set by the caller of ObtainBuffer on its thread.
+struct WrittenBindingSource {
+    const char* kind = "?";
+    u64 hash = 0;
+};
+inline thread_local WrittenBindingSource written_binding_source;
+
 class TextureCache;
 class MemoryTracker;
 class PageManager;
@@ -105,6 +113,23 @@ public:
     /// faulting thread instead of a round trip through the GPU command thread.
     void ReleaseReadProtection(VAddr device_addr, u64 size);
 
+    /// tlg: a read fault from a TLG_LAGGED_READS instruction (a value the game smooths over
+    /// frames, such as the auto exposure). The read protection of the faulting page is lifted
+    /// at once, so the guest reads the bytes already there: the GPU data of an earlier frame.
+    /// The copy of the newer data is only queued (in order, on the GPU command thread) and
+    /// written to memory once the GPU is done with it, for the next read. Guest threads.
+    /// False when deferred readbacks are off: the caller reads back as usual.
+    bool LaggedRead(VAddr device_addr, u64 size);
+
+    /// tlg: a write fault from a TLG_NOWAIT_WRITES instruction (the game fills records the CPU
+    /// owns, next to small values the GPU writes for itself in the same pages; inFAMOUS: the
+    /// per-object matrices, in a ring reused every frame). The faulting page becomes writable at
+    /// once, without reading the GPU data back: the GPU bytes there are dropped (dead data from
+    /// an earlier pass over the ring) and the whole page is uploaded from the CPU copy. Only for
+    /// pages whose GPU-written bytes the CPU never reads. Guest threads. False when readbacks
+    /// are not precise.
+    bool NoWaitWrite(VAddr device_addr);
+
     /// Finds a buffer for the specified region.
     [[nodiscard]] std::pair<const Buffer*, u64> ObtainBuffer(VAddr device_addr, u32 size,
                                                              bool is_written,
@@ -118,6 +143,19 @@ public:
 
     /// Return true when a region is modified from the GPU
     [[nodiscard]] bool IsRegionGpuModified(VAddr addr, size_t size);
+
+    /// tlg: TLG_UNIFIED_MEMORY (unified_memory.h): the range is in the imported guest memory.
+    [[nodiscard]] bool IsUnified(VAddr addr, u64 size) const noexcept {
+        return addr >= unified_base && addr + size <= unified_end;
+    }
+    /// tlg: the range is imported (EnableUnified succeeded).
+    [[nodiscard]] bool UnifiedActive() const noexcept {
+        return unified_end != 0;
+    }
+    /// tlg: GPU writes to the range recorded and not known to be complete.
+    [[nodiscard]] bool UnifiedTouched(VAddr addr, u64 size);
+    /// tlg: a command processor read of the range: waits for the GPU writes recorded before it.
+    void SyncUnifiedRead(VAddr addr, u64 size);
 
     /// Processes the fault buffer.
     void ProcessFaultBuffer();
@@ -143,6 +181,10 @@ private:
     }
 
     const Buffer* GetArena(u64 first_block, u64 last_block);
+
+    /// tlg: TLG_UNIFIED_MEMORY: imports the range at its first binding (false: not yet / failed).
+    bool EnableUnified();
+    std::pair<const Buffer*, u64> ObtainUnified(VAddr device_addr, u32 size, bool is_written);
 
     void EnsureResident(const Buffer* arena, u64 first_block, u64 last_block);
 
@@ -239,6 +281,10 @@ private:
         u64 tick{};
         std::atomic<bool> stale{};
         std::atomic<bool> applied{};
+        /// A lagged read's copy (LaggedRead): written to memory as it is once the GPU is done,
+        /// never joined, never waited for by a guest thread, never marked out of date (its data
+        /// is older than the GPU writes that follow it on purpose).
+        bool lagged{};
         /// Won't be applied; its ranges are back in gpu_modified_ranges.
         std::atomic<bool> recovered{};
         std::mutex mutex;
@@ -267,6 +313,12 @@ private:
     std::shared_ptr<DeferredReadback> PendingDeferredReadback(VAddr device_addr, u64 size);
     /// Waits for the copy (if `wait`) and applies it. False when it is stale. Any thread.
     bool FinishDeferredReadback(DeferredReadback& readback, bool wait);
+    /// Records the copy of a lagged read's pages. GPU-side threads.
+    void StartLaggedReadback(VAddr page, u64 size);
+    /// Writes a lagged read's copy to memory, waiting for the GPU if `wait`; false while the
+    /// GPU is not done and `wait` is false. Pages the CPU wrote since are left alone. GPU-side
+    /// threads.
+    bool ApplyLaggedReadback(DeferredReadback& readback, bool wait);
     /// Puts the ranges of a copy that won't be applied back into gpu_modified_ranges.
     /// GPU-side threads.
     void RecoverDeferredReadback(DeferredReadback& readback);
@@ -346,6 +398,16 @@ private:
     vk::DeviceMemory residency_chunk{};
     u64 residency_chunk_used{};
     u64 residency_allocations{};
+
+    // tlg: TLG_UNIFIED_MEMORY (unified_memory.h).
+    static constexpr u32 UNIFIED_CHUNK_SHIFT = 16;
+    VAddr unified_base{};
+    VAddr unified_end{};
+    bool unified_failed{};
+    vk::DeviceMemory unified_memory{};
+    std::unique_ptr<Buffer> unified_buffer;
+    /// GPU tick of the last recorded write of each 64 KiB chunk.
+    std::unique_ptr<std::atomic<u64>[]> unified_chunk_tick;
 
     u32 arena_memory_type_index{};
     u32 block_size{};

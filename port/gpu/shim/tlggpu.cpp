@@ -44,6 +44,7 @@ int runtime_memory_is_mapped(uintptr_t address, uint64_t size);
 int runtime_memory_write_backing(uintptr_t address, const void* data, uint64_t size);
 int runtime_memory_fill_backing(uintptr_t address, int value, uint64_t size);
 int runtime_memory_read_backing(uintptr_t address, void* data, uint64_t size);
+void* runtime_memory_backing_view(uintptr_t address, uint64_t size);
 uint64_t runtime_memory_clamp(uintptr_t address, uint64_t size);
 int runtime_memory_region(uintptr_t address, uintptr_t* start, uintptr_t* end, int* mapped);
 void runtime_memory_gpu_protect(uintptr_t address, uint64_t size, int read, int write);
@@ -154,6 +155,9 @@ bool MemoryManager::TryWriteBacking(void* address, const void* data, u64 size) {
         rasterizer->GetTextureCache().NoteBackingWrite(reinterpret_cast<VAddr>(address), size);
     }
     return written;
+}
+void* MemoryManager::BackingView(VAddr address, u64 size) {
+    return runtime_memory_backing_view(address, size);
 }
 bool MemoryManager::FillBacking(void* address, int fill, u64 size) {
     // The write log keeps only the first bytes of a write; the pattern stands in for the fill
@@ -402,6 +406,16 @@ extern "C" void tlggpu_set_wait_hooks(TlgGpuWaitBegin begin, TlgGpuWaitEnd end) 
     TlgFreeze::begin_hook.store(begin);
 }
 
+namespace TlgGuestImage {
+std::atomic<uintptr_t> base{0};
+std::atomic<uint64_t> size{0};
+} // namespace TlgGuestImage
+
+extern "C" void tlggpu_set_guest_image(uintptr_t base, uint64_t size) {
+    TlgGuestImage::size.store(size);
+    TlgGuestImage::base.store(base);
+}
+
 extern "C" void tlggpu_note_open(const char* guest_path) {
     TlgRegion::NoteOpen(guest_path);
 }
@@ -413,6 +427,10 @@ extern "C" void tlggpu_frame_counters(TlgGpuFrameCounters* out) {
     out->vblanks = TlgFreeze::vblanks.load(std::memory_order_relaxed);
     out->faults_in_progress = TlgFreeze::faults_in_progress.load(std::memory_order_relaxed);
     out->faults_handled = TlgFreeze::faults_handled.load(std::memory_order_relaxed);
+}
+
+extern "C" uint64_t tlggpu_total_draws(void) {
+    return TlgStats::draws.load(std::memory_order_relaxed);
 }
 
 extern "C" unsigned tlggpu_symbol_count(void) {

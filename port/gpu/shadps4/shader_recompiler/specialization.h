@@ -115,8 +115,8 @@ struct StageSpecialization {
         }
         u32 binding{};
         ForEachSharp(binding, buffers, info->buffers,
-                     [](auto& spec, const auto& desc, AmdGpu::Buffer sharp) {
-                         spec.stride = sharp.GetStride();
+                     [this](auto& spec, const auto& desc, AmdGpu::Buffer sharp) {
+                         spec.stride = UsesDynamicStride(*info, desc) ? 0 : sharp.GetStride();
                          spec.is_formatted = desc.is_formatted;
                          spec.swizzle_enable = sharp.swizzle_enable;
                          if (spec.is_formatted) {

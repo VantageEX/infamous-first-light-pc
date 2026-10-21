@@ -207,6 +207,46 @@ void Runtime::InlineData(VideoCore::Buffer* dst, u64 offset, u32 value) {
                  vk::AccessFlagBits2::eTransferWrite);
 }
 
+void Runtime::WriteOcclusionResults(const VideoCore::Buffer* dst, u64 offset, u32 num_pairs,
+                                    vk::QueryPool pool, std::span<const u32> queries) {
+    static constexpr u64 CounterValid = 1ULL << 63;
+    static constexpr u32 MaxPairs = 16;
+    num_pairs = std::clamp<u32>(num_pairs, 1, MaxPairs);
+    const u64 size = u64{num_pairs} * 2 * sizeof(u64);
+    scheduler.EndRendering();
+    if (IsBufferAccessed(dst, offset, size, true)) {
+        FlushBarriers();
+    }
+
+    // The guest sums end - begin over the pairs: zero counts, then the samples counted.
+    std::array<u64, 2 * MaxPairs> counters;
+    counters.fill(CounterValid);
+    scheduler.Record([handle = dst->Handle(), offset, size, counters](vk::CommandBuffer cmdbuf) {
+        cmdbuf.updateBuffer(handle, offset, size, counters.data());
+    });
+    AccessBuffer(dst, offset, size, vk::PipelineStageFlagBits2::eCopy,
+                 vk::AccessFlagBits2::eTransferWrite);
+    if (queries.empty()) {
+        return;
+    }
+
+    // The 32-bit sample counts replace the low halves of the end counters written above.
+    FlushBarriers();
+    std::array<u32, MaxPairs> used{};
+    const u32 num_copies = std::min<u32>(static_cast<u32>(queries.size()), num_pairs);
+    std::copy_n(queries.begin(), num_copies, used.begin());
+    scheduler.Record([handle = dst->Handle(), offset, pool, used,
+                      num_copies](vk::CommandBuffer cmdbuf) {
+        for (u32 i = 0; i < num_copies; ++i) {
+            cmdbuf.copyQueryPoolResults(pool, used[i], 1, handle,
+                                        offset + (2 * i + 1) * sizeof(u64), sizeof(u32),
+                                        vk::QueryResultFlagBits::eWait);
+        }
+    });
+    AccessBuffer(dst, offset, size, vk::PipelineStageFlagBits2::eCopy,
+                 vk::AccessFlagBits2::eTransferWrite);
+}
+
 bool Runtime::Transit(VideoCore::Image* image, vk::ImageLayout dst_layout,
                       vk::PipelineStageFlags2 dst_stage, vk::AccessFlags2 dst_access,
                       std::optional<VideoCore::SubresourceRange> subres_range) {

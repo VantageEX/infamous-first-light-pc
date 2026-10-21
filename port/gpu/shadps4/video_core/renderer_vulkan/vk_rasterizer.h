@@ -36,6 +36,7 @@ namespace Vulkan {
 
 class GraphicsPipeline;
 class Runtime;
+class OcclusionQueries;
 
 class Rasterizer {
 public:
@@ -94,6 +95,10 @@ public:
 
     void FillBuffer(VAddr address, u32 num_bytes, u32 value, bool is_gds);
     void CopyBuffer(VAddr dst, VAddr src, u32 num_bytes, bool dst_gds, bool src_gds);
+    /// tlg: guest occlusion counter dump (ZPASS_DONE) with TLG_OCCLUSION_MODE=4, run in order
+    /// with the draws: counted by Vulkan occlusion queries (vk_occlusion.h); a query that
+    /// cannot be counted gets the zero counts of mode 3 (hidden).
+    void OcclusionDump(VAddr address, u32 num_pairs);
     u32 ReadDataFromGds(u32 gsd_offset);
     bool InvalidateMemory(VAddr addr, u64 size, bool assume_locks = false);
     /// GPU thread, before a write the guest can observe (see Scheduler::WaitHostCopies).
@@ -154,6 +159,12 @@ public:
     /// Stage A: guest memory the recording thread will write for work handed to it (storage
     /// buffers, DMA, WriteData, fences); constants overlapping it are bound there, not copied here.
     void NotePendingGpuWrite(VAddr address, u64 size);
+    /// tlg: TLG_UNIFIED_MEMORY: an end-of-pipe fence, written by `write` once the GPU has
+    /// finished the work recorded so far (its writes made visible to the host). False when unified
+    /// memory is off: the caller writes it as before.
+    bool DeferUnifiedFence(Common::UniqueFunction<void>&& write);
+    /// tlg: TLG_UNIFIED_MEMORY: a command processor read of guest memory (WAIT_REG_MEM).
+    void SyncUnifiedRead(VAddr address, u64 size);
     /// Before a guest-visible write: fences deferred earlier are written first.
     void WaitDeferredSignals() {
         scheduler.WaitDeferredSignals();
@@ -170,8 +181,10 @@ public:
     /// in order with the draws handed over before it. Off by default.
     void RunForeign(std::function<void()> work);
     /// A guest write hit a protected page.
-    bool OnWriteFault(VAddr addr, bool assume_locks);
-    bool ReadMemory(VAddr addr, u64 size, bool assume_locks = false);
+    /// tlg: nowait: the fault comes from a TLG_NOWAIT_WRITES instruction (page_manager.cpp).
+    bool OnWriteFault(VAddr addr, bool assume_locks, bool nowait = false);
+    /// tlg: lagged: the fault comes from a TLG_LAGGED_READS instruction (page_manager.cpp).
+    bool ReadMemory(VAddr addr, u64 size, bool assume_locks = false, bool lagged = false);
     void ProcessDownloadImages();
     bool IsMapped(VAddr addr, u64 size);
     void MapMemory(VAddr addr, u64 size);
@@ -405,6 +418,9 @@ private:
     u64 motion_geometry{};    ///< vertex-stream identity of the current direct draw
     bool gbuffer_draw = false;
     std::unique_ptr<TemporalUpscaler> upscaler; // tlg: FSR (docs/upscaler.md)
+    std::unique_ptr<OcclusionQueries> occlusion; // tlg: TLG_OCCLUSION_MODE=4 only
+    /// tlg: mode 3's zero counts for the num_pairs counter pairs at address.
+    void WriteHiddenOcclusion(VAddr address, u32 num_pairs);
     std::array<float, 2> draw_jitter{};         ///< viewport offset of the current draw, pixels
     std::array<float, 2> target_scale{1.0f, 1.0f}; ///< pass drawn into the upscaler's output-size images
     const bool host_markers_enabled;

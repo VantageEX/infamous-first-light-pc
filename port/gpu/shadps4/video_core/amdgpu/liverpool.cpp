@@ -168,6 +168,9 @@ void Liverpool::Process(std::stop_token stoken) {
                 std::scoped_lock lock{queue.m_access};
                 queue.submits.pop();
 
+                if (curr_qid != GfxQueueId) {
+                    asc_submits.fetch_sub(1, std::memory_order_relaxed);
+                }
                 --num_submits;
                 std::scoped_lock lock2{submit_mutex};
                 submit_cv.notify_all();
@@ -272,6 +275,10 @@ void RunEventWriteEop(Vulkan::Rasterizer& rasterizer, const u8* data) {
     const auto eop = *reinterpret_cast<const PM4CmdEventWriteEop*>(data);
     rasterizer.ProcessDownloadImages();
     rasterizer.EagerCopyAtFence();
+    // tlg: TLG_UNIFIED_MEMORY: written when the GPU has finished the work before it.
+    if (rasterizer.DeferUnifiedFence([eop] { SignalEop(eop); })) {
+        return;
+    }
     // Guest memory copies on the copy threads precede the fence the guest sees.
     // TLG_ASYNC_FENCES=1 writes it once they are done instead of waiting for them; measured
     // slower (79 vs 83 FPS): the guest waits on these fences, and later fences stall it more
@@ -390,19 +397,38 @@ void RunComputeReleaseMem(Vulkan::Rasterizer& rasterizer, const u8* data) {
         });
 }
 
+// tlg: TLG_OCCLUSION_MODE=4: a ZPASS_DONE dump, counted by Vulkan occlusion queries.
+struct OcclusionDumpTask {
+    VAddr address;
+    u32 num_pairs;
+};
+
+void RunOcclusionDump(Vulkan::Rasterizer& rasterizer, const u8* data) {
+    OcclusionDumpTask task;
+    std::memcpy(&task, data, sizeof(task));
+    rasterizer.OcclusionDump(task.address, task.num_pairs);
+}
+
 void RunEventWriteEos(Vulkan::Rasterizer& rasterizer, const u8* data) {
     const auto& event_eos = *reinterpret_cast<const PM4CmdEventWriteEos*>(data);
     // Copies deferred to the recording thread precede writes the guest sees.
     rasterizer.WaitHostCopies();
     rasterizer.WaitDeferredSignals();
     rasterizer.ProcessDownloadImages();
-    event_eos.SignalFence([](void* address, u64 value, u32 num_bytes) {
+    const auto write_eos = [](void* address, u64 value, u32 num_bytes) {
         auto* memory = Core::Memory::Instance();
         TlgWriteLog::Note(reinterpret_cast<u64>(address), &value, num_bytes, TlgWriteLog::Fence);
         if (!memory->TryWriteBacking(address, &value, num_bytes)) {
             memcpy(address, &value, num_bytes);
         }
-    });
+    };
+    // tlg: TLG_UNIFIED_MEMORY: written when the GPU has finished the work before it.
+    if (event_eos.command != PM4CmdEventWriteEos::Command::GdsStore &&
+        rasterizer.DeferUnifiedFence(
+            [eos = event_eos, write_eos] { eos.SignalFence(write_eos); })) {
+        return;
+    }
+    event_eos.SignalFence(write_eos);
     if (event_eos.command == PM4CmdEventWriteEos::Command::GdsStore) {
         ASSERT(event_eos.size == 1);
         rasterizer.Finish();
@@ -439,6 +465,40 @@ void Liverpool::NotePendingWrite(const PM4CmdWriteData& write_data, u32 num_byte
     std::memcpy(&data, write_data.data, num_bytes);
     pending_fences.push_back(
         {write_data.Address<VAddr>(), data, num_bytes, rasterizer->DrawPipeHead()});
+}
+
+void Liverpool::NoteOcclusionDump(VAddr address, u32 num_pairs) {
+    const VAddr results = address & ~VAddr{15};
+    const u32 size = std::clamp<u32>(num_pairs, 1, 16) * 2 * sizeof(u64);
+    // A query begun again at these results: not known until its end dump.
+    for (auto& r : occlusion_results) {
+        if (r.size && results < r.address + r.size && r.address < results + size) {
+            r = {};
+        }
+    }
+    if (address % 16 == sizeof(u64)) {
+        occlusion_results[next_occlusion_result] = {results, size};
+        next_occlusion_result = (next_occlusion_result + 1) % occlusion_results.size();
+    }
+}
+
+bool Liverpool::KnownOcclusionValue(VAddr address, u32& value) const {
+    for (const auto& r : occlusion_results) {
+        if (!r.size || address < r.address || address >= r.address + r.size) {
+            continue;
+        }
+        switch ((address - r.address) % (2 * sizeof(u64)) / sizeof(u32)) {
+        case 0: // begin counter, low half
+            value = 0;
+            return true;
+        case 2: // end counter, low half: the samples, known once the GPU is done
+            return false;
+        default: // high halves: valid bit
+            value = 0x80000000U;
+            return true;
+        }
+    }
+    return false;
 }
 
 bool Liverpool::PendingFenceValue(VAddr address, u32& value) {
@@ -794,8 +854,23 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
     }
 
     const auto base_addr = reinterpret_cast<uintptr_t>(dcb.data());
+    // tlg: TLG_COMPUTE_FAIRNESS=N (0 off): the PS4 runs its compute queues alongside graphics,
+    // and the guest reads their results (inFAMOUS' particle counts) early. Here a compute
+    // submission was recorded only when the graphics queue blocked, behind all the graphics before
+    // it in the one Vulkan queue. Every N graphics packets, with compute work queued, the graphics
+    // queue gives way to it. From the weshayoub92 shadPS4 fork (asc_yield_packets, 153a5aa7), on
+    // with 16 in the Castlesea port (ISS_COMPUTE_FAIRNESS).
+    static const u32 fairness_packets = [] {
+        const char* env = std::getenv("TLG_COMPUTE_FAIRNESS");
+        return env && *env ? static_cast<u32>(std::strtoul(env, nullptr, 10)) : 0u;
+    }();
     while (!dcb.empty()) {
         ProcessCommands();
+        if (fairness_packets != 0 && asc_submits.load(std::memory_order_relaxed) != 0 &&
+            ++gfx_packets_since_yield >= fairness_packets) {
+            gfx_packets_since_yield = 0;
+            YIELD_GFX();
+        }
 
         const auto* header = reinterpret_cast<const PM4Header*>(dcb.data());
         const u32 type = header->type;
@@ -1190,6 +1265,18 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                         static constexpr u64 OcclusionCounterValidMask = 0x8000000000000000ULL;
                         static constexpr u64 OcclusionCounterStep = 0x2FFFFFFULL;
                         u64* results = event->Address<u64*>();
+                        // tlg: mode 4 = real occlusion queries, in order with the draws.
+                        if (rasterizer && Common::Backports::OcclusionMode() == 4) {
+                            const OcclusionDumpTask task{event->Address<VAddr>(),
+                                                         static_cast<u32>(num_counter_pairs)};
+                            NoteOcclusionDump(task.address, task.num_pairs);
+                            if (rasterizer->RunInOrder(&RunOcclusionDump, &task, sizeof(task))) {
+                                rasterizer->NotePendingGpuWrite(
+                                    task.address & ~VAddr{15},
+                                    std::clamp<u32>(task.num_pairs, 1, 16) * 2 * sizeof(u64) + 16);
+                            }
+                            break;
+                        }
                         // tlg: occlusion probe (TLG_OCCLUSION_LOG=1 logs the events; TLG_OCCLUSION_MODE
                         // 0 = fake counter as before, 1 = both slots equal (nothing visible), 2 = end far
                         // above begin (everything visible), 3 = zero counts: the default).
@@ -1208,7 +1295,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                                         static_cast<unsigned long long>(results[2]),
                                         static_cast<unsigned long long>(results[3]));
                         }
-                        if (occ_mode == 0 || occ_mode == 4) {
+                        if (occ_mode == 0 || occ_mode == 5) {
                             // Each render backend owns a 16-byte {begin, end} slot; the end event
                             // writes at the begin address + 8, so one value per backend.
                             for (s32 i = 0; i < num_counter_pairs; ++i, results += 2) {
@@ -1222,9 +1309,9 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                                              OcclusionCounterValidMask;
                             }
                         }
-                        // Mode 4: a plausible count per query (every query sees the same number of
+                        // Mode 5: a plausible count per query (every query sees the same number of
                         // pixels, so "visible / unoccluded" ratios are 1 and nothing divides by 0).
-                        pixel_counter += occ_mode == 4 ? Common::Backports::OcclusionStep()
+                        pixel_counter += occ_mode == 5 ? Common::Backports::OcclusionStep()
                                                        : OcclusionCounterStep;
                     }
                 }
@@ -1335,6 +1422,18 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                     vo_port->WaitVoLabel([&] { return wait_reg_mem->Test(regs.reg_array); });
                     break;
                 }
+                // tlg: occlusion results (mode 4) whose value is known: no readback; and a wait
+                // that is always met reads nothing (mode 4 only, the other modes as before).
+                if (wait_reg_mem->mem_space.Value() == PM4CmdWaitRegMem::MemSpace::Memory &&
+                    Common::Backports::OcclusionMode() == 4) {
+                    if (wait_reg_mem->function.Value() == PM4CmdWaitRegMem::Function::Always) {
+                        break;
+                    }
+                    if (u32 value; KnownOcclusionValue(wait_reg_mem->Address<VAddr>(), value) &&
+                                   wait_reg_mem->TestValue(value)) {
+                        break;
+                    }
+                }
                 // tlg: a fence handed to the draw recording thread counts as written: that
                 // thread runs everything in stream order.
                 if (u32 value; wait_reg_mem->mem_space.Value() ==
@@ -1343,6 +1442,12 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                                PendingFenceValue(wait_reg_mem->Address<VAddr>(), value) &&
                                wait_reg_mem->TestValue(value)) {
                     break;
+                }
+                // tlg: TLG_UNIFIED_MEMORY: memory the GPU writes in place is read once the GPU
+                // writes recorded before this wait are done.
+                if (rasterizer &&
+                    wait_reg_mem->mem_space.Value() == PM4CmdWaitRegMem::MemSpace::Memory) {
+                    rasterizer->SyncUnifiedRead(wait_reg_mem->Address<VAddr>(), sizeof(u32));
                 }
                 // Else the value may come from a fence that thread has yet to write: let it
                 // catch up before yielding to other queues.
@@ -1866,6 +1971,8 @@ void Liverpool::SubmitAsc(u32 gnm_vqid, std::span<const u32> acb) {
 
     const auto vqid = gnm_vqid - 1;
     const auto& task = ProcessCompute(acb, vqid);
+    // Counted before the command processor can see (and complete) the submission.
+    asc_submits.fetch_add(1, std::memory_order_relaxed);
     {
         std::scoped_lock lock{queue.m_access};
         queue.submits.emplace(task.handle);

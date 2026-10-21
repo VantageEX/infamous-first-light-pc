@@ -63,7 +63,7 @@ if [[ -n ${TLG_PREBUILT:-} ]]; then
     probe=${TLG_PROBE:-bin/tlg-probe}
 else
     bash build.sh
-    probe=out/tlg-probe
+    probe=${TLG_PROBE:-out/tlg-probe}
 fi
 probe_args=("$out/boot-linked.bin" --content-profile "$out/content.bin" --patches "$out/patches.bin" --app0 "$game" --user "${TLG_USER_DIR:-$data/user}" --timeout "${TLG_TIMEOUT:-0}" "$@")
 if [[ -n ${mod_game:-} ]]; then

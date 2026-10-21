@@ -31,6 +31,10 @@ inline bool AlwaysOn() {
 /// CUSA00575; same engine and particle shaders): the LDS barrier fixes are aimed at the GPU
 /// particle smoke (iss_pc #7) and stay off for the other games until tested.
 inline bool InfamousDefault() {
+    // No game loaded (the GPU library tests, tools): not inFAMOUS.
+    if (!Common::ElfInfo::Instance().IsInitialized()) {
+        return false;
+    }
     const std::string_view serial = Common::ElfInfo::Instance().GameSerial();
     return serial == "CUSA00223" || serial == "CUSA00004" || serial == "CUSA00897" ||
            serial == "CUSA00575";
@@ -90,12 +94,23 @@ inline bool ReadFirstLaneAll() {
     return enabled;
 }
 
+/// Compute shaders read the stride of a buffer from the V# the dispatch binds (its dword 1 in the
+/// flattened user data) instead of compiling it in, so one module serves every stride and the
+/// stride leaves the specialization (UsesDynamicStride in info.h decides per buffer). From the
+/// Castlesea inFAMOUS port (ISS_DYNAMIC_STRIDE, 8e167dc). TLG_DYNAMIC_STRIDE=0/1; default on for
+/// inFAMOUS only (2026-10-20: the GPU smoke stopped flickering, #7/#50, in the player's test).
+inline bool DynamicBufferStride() {
+    static const bool enabled = Detail::EnvFlag("TLG_DYNAMIC_STRIDE", &Detail::InfamousDefault);
+    return enabled;
+}
+
 /// Bits for the shader binary cache version: shaders recompiled under other switches must not
 /// be reused (the cache key only hashes the recompiler sources).
 inline std::uint32_t ShaderBinarySalt() {
     return (SmallGroupLdsBarriers() ? 1u : 0u) | (MultiWaveLdsBarriers() ? 2u : 0u) |
            (LdsUniformReadLane() ? 4u : 0u) | (WholeQuadMode() ? 0u : 8u) |
-           (LaneDivergence() ? 16u : 0u) | (ReadFirstLaneAll() ? 32u : 0u);
+           (LaneDivergence() ? 16u : 0u) | (ReadFirstLaneAll() ? 32u : 0u) |
+           (DynamicBufferStride() ? 64u : 0u);
 }
 
 /// One line per switch with its state (shown once, when the GPU starts). Takes the logger as a
@@ -110,6 +125,8 @@ inline void LogStates(Log&& log) {
     log("TLG_LANE_DIVERGENCE", LaneDivergence(),
         "mbcnt masks, lane ids and atomic results make a branch divergent");
     log("TLG_RFL_ALL", ReadFirstLaneAll(), "wave64 ReadFirstLane lowered in every wide compute shader");
+    log("TLG_DYNAMIC_STRIDE", DynamicBufferStride(),
+        "compute buffer strides read from the bound V#, not compiled in");
 }
 
 } // namespace Shader::Toggles

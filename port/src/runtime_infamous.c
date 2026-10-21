@@ -1,9 +1,11 @@
 /* System functions only inFAMOUS Second Son (CUSA00223 1.07) imports. All describe an offline
  * console with the whole game installed: PSN signed out (the "A" NpManager variants take a user
  * id instead of an online id, same answers as runtime_services.c), PlayGo with nothing left to
- * download, no add-ons, networking calls that succeed without a network. */
+ * download, the player's own add-ons (ISS_ADDCONT_LABELS), networking calls that succeed without
+ * a network. */
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "runtime.h"
 
@@ -41,9 +43,33 @@ static ABI int32_t playgo_language_mask(int32_t handle, uint64_t mask) {
     (void)handle;
     return 0;
 }
-/* sceAppContentGetAddcontInfo(label, entitlement, info): no add-on is installed. */
-static ABI int32_t addcont_info(uint32_t label, const void *entitlement, void *info) {
-    (void)label; (void)entitlement; (void)info;
+/* sceAppContentGetAddcontInfo(service, entitlement label, info). The game's add-ons (costumes,
+ * Cole's Legacy) ship inside the base game and only need the entitlement: the labels listed in
+ * ISS_ADDCONT_LABELS="LABEL,LABEL,..." (16 characters each, found by the launcher in the player's
+ * own add-on packages or dumped add-on folders) are installed; any other is not. As in the
+ * Castlesea inFAMOUS port (src/services.c content_addon, 8e167dc). */
+static ABI int32_t addcont_info(uint32_t service, const char *label, uint8_t *info) {
+    (void)service;
+    if (!label || !info) return APP_CONTENT_NOT_FOUND;
+    char want[17];
+    memcpy(want, label, 16);
+    want[16] = 0;
+    const char *list = getenv("TLG_ADDCONT_LABELS");
+    for (const char *p = list; p && *p;) {
+        const char *end = strchr(p, ',');
+        const size_t n = end ? (size_t)(end - p) : strlen(p);
+        if (n == 16 && !memcmp(p, want, 16)) {
+            /* SceAppContentAddcontInfo: the label (17 bytes, padded to 20), then the status. */
+            const uint32_t installed = 4;
+            memset(info, 0, 24);
+            memcpy(info, want, 16);
+            memcpy(info + 20, &installed, 4);
+            printf("Runtime: add-on %s installed\n", want);
+            return 0;
+        }
+        p = end ? end + 1 : NULL;
+    }
+    printf("Runtime: add-on %s not installed\n", want);
     return APP_CONTENT_NOT_FOUND;
 }
 

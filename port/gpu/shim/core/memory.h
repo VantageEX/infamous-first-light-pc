@@ -21,6 +21,8 @@ public:
     bool TryWriteBacking(void* address, const void* data, u64 size);
     /// Fills memory through the backing view, for the memset the write merge applies at once.
     bool FillBacking(void* address, int fill, u64 size);
+    /// tlg: TLG_UNIFIED_MEMORY: host view of contiguous direct memory (never protected), or null.
+    void* BackingView(VAddr address, u64 size);
     /// CPU wrote guest memory outside page tracking (e.g. decoded video frames).
     void InvalidateMemory(VAddr address, u64 size);
     Vulkan::Rasterizer* GetRasterizer() const { return rasterizer; }

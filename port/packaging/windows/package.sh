@@ -49,6 +49,13 @@ cp launcher/$PORT_ICON.ico launcher/$PORT_ICON.png "$dest/launcher/"
 for exe in tlg-probe.exe tlg-gpu-capabilities.exe; do
     llvm-strip --strip-debug -o "$dest/out/$exe" "out/$exe"
 done
+# Renderer v2 (TLG_RENDERER_V2=1 build.sh): its probe and its defaults (gpu_v2/defaults.env, read by
+# the launcher when the player picks it).
+if [[ -f out/tlg-probe-v2.exe ]]; then
+    llvm-strip --strip-debug -o "$dest/out/tlg-probe-v2.exe" out/tlg-probe-v2.exe
+    mkdir -p "$dest/gpu_v2"
+    cp gpu_v2/defaults.env gpu_v2/README.md "$dest/gpu_v2/"
+fi
 # Every DLL the executables load from the CLANG64 tree (SDL3, FFmpeg, Vulkan loader, ...), found by
 # walking the import tables against /clang64/bin itself. ldd resolved them through PATH, where the
 # runner's Strawberry Perl has its own libiconv-2.dll: that one was filtered out as "not CLANG64"
@@ -56,6 +63,7 @@ done
 # Names not in /clang64/bin are Windows' own DLLs.
 declare -A shipped=()
 queue=("$dest/out/tlg-probe.exe" "$dest/out/tlg-gpu-capabilities.exe")
+[[ -f "$dest/out/tlg-probe-v2.exe" ]] && queue+=("$dest/out/tlg-probe-v2.exe")
 while ((${#queue[@]})); do
     binary=${queue[0]}
     queue=("${queue[@]:1}")

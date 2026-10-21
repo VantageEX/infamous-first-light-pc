@@ -834,6 +834,41 @@ int runtime_memory_read_backing(uintptr_t address, void *data, uint64_t size) {
     read_unlock();
     return ok;
 }
+/* tlg: TLG_UNIFIED_MEMORY: the backing view of [address,address+size) when it is direct memory
+ * with contiguous physical pages (one mapping, possibly split by protections), else NULL. The
+ * GPU imports it and reads and writes the guest's bytes in place. */
+void *runtime_memory_backing_view(uintptr_t address, uint64_t size) {
+    read_lock();
+    unsigned char *view=NULL;
+    uint64_t phys=0;
+    int ok=size!=0;
+    for (uintptr_t at=address, end=address+size; at<end && ok;) {
+        size_t i=vma_index(at);
+        if (i==vma_count || vmas[i].start>at || vmas[i].kind!=KIND_DIRECT) { ok=0; break; }
+        uint64_t here=vmas[i].phys+(at-vmas[i].start);
+        if (at==address) phys=here; else if (here!=phys+(at-address)) { ok=0; break; }
+        at=vmas[i].end<end ? vmas[i].end : end;
+    }
+    if (ok) view=backing_base+phys;
+    read_unlock();
+    return view;
+}
+/* tlg: renderer v2's host interface (gpu_v2): direct mappings with their backing
+ * view, the mapping table's generation, and a shared hold on the table while it publishes. */
+void runtime_memory_visit(void (*visit)(uint64_t address, uint64_t size, uint8_t *backing)) {
+    read_lock();
+    size_t n=vma_count;
+    Vma *copy=malloc((n ? n : 1)*sizeof(Vma));
+    if (copy) memcpy(copy,vmas,n*sizeof(Vma));
+    read_unlock();
+    if (!copy) return;
+    for (size_t i=0;i<n;++i)
+        if (copy[i].kind==KIND_DIRECT) visit(copy[i].start,copy[i].end-copy[i].start,backing_base+copy[i].phys);
+    free(copy);
+}
+uint64_t runtime_memory_epoch(void) { return __atomic_load_n(&table_generation,__ATOMIC_ACQUIRE); }
+uint64_t runtime_memory_lock_shared(void) { read_lock(); return __atomic_load_n(&table_generation,__ATOMIC_ACQUIRE); }
+void runtime_memory_unlock_shared(void) { read_unlock(); }
 /* Per-thread cache of recently found regions for the GPU's per-draw queries:
  * entries hold for as long as the table generation they were read at. */
 typedef struct { uint64_t generation; uintptr_t start, end; int kind; } CachedRegion;

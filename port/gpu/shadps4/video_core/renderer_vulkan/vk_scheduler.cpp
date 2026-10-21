@@ -164,6 +164,9 @@ void Scheduler::BeginRendering(const RenderState& new_state) {
             RecordFullBarrier(current_cmdbuf);
         }
         current_cmdbuf.beginRendering(rendering_info);
+        if (rendering_observer) {
+            rendering_observer->OnBeginRendering();
+        }
         return;
     }
     // The attachment infos live on this stack frame: the recorded closure keeps copies.
@@ -181,6 +184,9 @@ void Scheduler::BeginRendering(const RenderState& new_state) {
         }
         cmdbuf.beginRendering(info);
     });
+    if (rendering_observer) {
+        rendering_observer->OnBeginRendering();
+    }
 }
 
 void Scheduler::EndRendering() {
@@ -191,6 +197,9 @@ void Scheduler::EndRendering() {
     CheckOwner(__builtin_return_address(0));
     if (!is_rendering) {
         return;
+    }
+    if (rendering_observer) {
+        rendering_observer->OnEndRendering();
     }
     is_rendering = false;
     Record([](vk::CommandBuffer cmdbuf) {

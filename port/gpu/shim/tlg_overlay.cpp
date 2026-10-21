@@ -1,4 +1,12 @@
+#ifdef TLG_RENDERER_V2
+// Renderer v2 build has no perf trace (gpu/shim/tlg_perf_trace.cpp).
+namespace TlgPerf {
+inline bool Enabled() { return false; }
+inline bool Mark(unsigned) { return false; }
+} // namespace TlgPerf
+#else
 #include "tlg_perf_trace.h"
+#endif
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "tlg_overlay.h"
 
@@ -26,14 +34,18 @@
 extern TlgActorSlot tlg_actor_slots[2];
 extern "C" void runtime_restart(void); // src/probe.c: starts run.py again, ends this process
 #include "common/elf_info.h"
+#ifndef TLG_RENDERER_V2
 #include "common/backports.h"
 #include "shader_recompiler/recompiler_toggles.h"
+#endif
 #include "imgui.h"
 #include "imgui_internal.h" // RegisterUserTexture (save pictures)
 #include "imgui_impl_vulkan.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
+#ifndef TLG_RENDERER_V2
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
+#endif
 
 // DejaVu Sans (Cyrillic), embedded (third_party/fonts, Bitstream Vera license).
 #ifdef _WIN32
@@ -61,6 +73,24 @@ extern "C" const unsigned char tlg_font_ttf[];
 extern "C" const unsigned char tlg_font_ttf_end[];
 
 namespace TlgOverlay {
+namespace {
+// This overlay's own ImGui context: renderer v2's presenter composes the game image with ImGui
+// in its own context, so each entry point here makes this one current and restores the other.
+ImGuiContext* overlay_context = nullptr;
+#ifdef TLG_RENDERER_V2
+struct ContextScope {
+    ImGuiContext* previous = ImGui::GetCurrentContext();
+    ContextScope() {
+        if (overlay_context) ImGui::SetCurrentContext(overlay_context);
+    }
+    ~ContextScope() {
+        ImGui::SetCurrentContext(previous);
+    }
+};
+#else
+struct ContextScope {}; // this port's renderer: the overlay's context is the only one
+#endif
+} // namespace
 
 namespace {
 
@@ -522,6 +552,14 @@ void PerformanceTab() {
 // are only recorded in tlg.ini (bpNN=0/1, wqm=0/1, ...) and apply on the next start, when the
 // launcher turns the keys into TLG_BPnn / TLG_<NAME>. The table is iterated, so a reordered
 // backports.h still lists every entry.
+#ifdef TLG_RENDERER_V2
+// Renderer v2 has its own fixes and switches (ISS_* variables): none of this port's.
+void FixesSection() {
+    ImGui::SeparatorText(TL("Fixes", "Correções"));
+    ImGui::TextDisabled("%s", TL("This build uses renderer v2: its own fixes apply.",
+                                 "Esta versão usa o renderer v2: valem as correções dele."));
+}
+#else
 void FixesSection() {
     namespace B = Common::Backports;
     auto& s = TlgSettings::Get();
@@ -585,6 +623,7 @@ void FixesSection() {
         {"BLOCK1D", nullptr},
         {"BC_TINY", nullptr},
         {"NO_MSAA", nullptr},
+        {"DYNAMIC_STRIDE", Shader::Toggles::DynamicBufferStride},
     };
     static_assert(sizeof(extras) / sizeof(extras[0]) == TlgSettings::kExtraPrefs);
     if (BeginRows("##extras")) {
@@ -603,6 +642,7 @@ void FixesSection() {
         ImGui::EndTable();
     }
 }
+#endif
 
 void OpenGuide(); // the graffiti guide (below, with the save dialogs)
 
@@ -1759,7 +1799,15 @@ void Init(const Vulkan::Instance& instance, vk::Format format, u32 image_count) 
         return;
     }
     IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
+    ImGuiContext* const previous_context = ImGui::GetCurrentContext();
+    overlay_context = ImGui::CreateContext();
+    ImGui::SetCurrentContext(overlay_context);
+#ifdef TLG_RENDERER_V2
+    // The renderer's own context stays current for its presenter.
+    struct Restore { ImGuiContext* c; ~Restore() { ImGui::SetCurrentContext(c); } } restore{previous_context};
+#else
+    (void)previous_context;
+#endif
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr; // window positions are not kept
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
@@ -1897,10 +1945,11 @@ void Init(const Vulkan::Instance& instance, vk::Format format, u32 image_count) 
 }
 
 void UpdateTextInput(SDL_Window* window) {
+    if (!overlay_context) return; // before Init
     bool want = false;
     {
         std::scoped_lock lock{imgui_mutex};
-        want = initialized && menu_open && ImGui::GetIO().WantTextInput;
+        want = initialized && menu_open && overlay_context->IO.WantTextInput;
     }
     if (want != SDL_TextInputActive(window)) {
         if (want) {
@@ -1955,6 +2004,7 @@ void UpdateChoiceTextures() {
 // The guide takes the buttons, keys and mouse until it is closed (its button, cross/A, Enter,
 // Esc, circle/B); the game's input is held neutral meanwhile.
 bool HandleGuideEvent(const SDL_Event& event) {
+    if (!overlay_context) return false; // before Init
     bool close = false;
     switch (event.type) {
     case SDL_EVENT_KEY_DOWN: {
@@ -1967,11 +2017,11 @@ bool HandleGuideEvent(const SDL_Event& event) {
         break;
     case SDL_EVENT_MOUSE_MOTION: {
         const float density = PixelDensity(event.motion.windowID);
-        ImGui::GetIO().AddMousePosEvent(event.motion.x * density, event.motion.y * density);
+        overlay_context->IO.AddMousePosEvent(event.motion.x * density, event.motion.y * density);
         break;
     }
     case SDL_EVENT_MOUSE_BUTTON_DOWN: {
-        const ImVec2 at = ImGui::GetIO().MousePos;
+        const ImVec2 at = overlay_context->IO.MousePos;
         close = event.button.button == SDL_BUTTON_LEFT && guide_button_rect.GetWidth() > 0 &&
                 guide_button_rect.Contains(at);
         break;
@@ -1998,6 +2048,7 @@ void FinishSaveDialog() {
 // The save list and messages take the keys, buttons and mouse that answer them; the rest stays
 // with the game (held neutral by CapturesInput).
 bool HandleSaveEvent(const SDL_Event& event) {
+    if (!overlay_context) return false; // before Init
     int move = 0, finish = 0; // finish: 1 accept, 2 back
     bool moved = false, click = false;
     switch (event.type) {
@@ -2022,7 +2073,7 @@ bool HandleSaveEvent(const SDL_Event& event) {
     case SDL_EVENT_MOUSE_MOTION: {
         const float density = PixelDensity(event.motion.windowID);
         save_mouse = ImVec2(event.motion.x * density, event.motion.y * density);
-        ImGui::GetIO().AddMousePosEvent(save_mouse.x, save_mouse.y);
+        overlay_context->IO.AddMousePosEvent(save_mouse.x, save_mouse.y);
         moved = true;
         break;
     }
@@ -2076,6 +2127,7 @@ bool HandleSaveEvent(const SDL_Event& event) {
 }
 
 bool HandleEvent(const SDL_Event& event) {
+    if (!overlay_context) return false; // before Init
     std::scoped_lock lock{imgui_mutex};
     if (!initialized) {
         return false;
@@ -2086,7 +2138,7 @@ bool HandleEvent(const SDL_Event& event) {
     if ((choice_active || message_active) && !menu_open) {
         return HandleSaveEvent(event);
     }
-    ImGuiIO& io = ImGui::GetIO();
+    ImGuiIO& io = overlay_context->IO; // not made current: other threads draw with ImGui
     const bool is_open = menu_open;
     switch (event.type) {
     case SDL_EVENT_KEY_DOWN:
@@ -2097,7 +2149,9 @@ bool HandleEvent(const SDL_Event& event) {
             return env && *env == '1';
         }();
         if (down && !event.key.repeat && capture_key && event.key.key == SDLK_F11) {
+#ifndef TLG_RENDERER_V2
             Vulkan::FrameCapture::Request();
+#endif
             return true;
         }
         // F12 arms the frame recorder (vk_frame_record.h) by creating its trigger file, for
@@ -2293,7 +2347,7 @@ void BeginSaveList(int kind, std::vector<SaveRow> rows, std::vector<TlgPng::Imag
     message_active = false;
     progress_on = false;
     choice_active = true;
-    ImGui::GetIO().MouseDrawCursor = true;
+    overlay_context->IO.MouseDrawCursor = true;
 }
 
 int PollSaveList() {
@@ -2322,7 +2376,7 @@ void BeginSaveMessage(int kind, int code, u64 value, const std::string& text, in
     choice_active = false;
     progress_on = false;
     message_active = true;
-    ImGui::GetIO().MouseDrawCursor = true;
+    overlay_context->IO.MouseDrawCursor = true;
 }
 
 int PollSaveMessage() {
@@ -2383,6 +2437,7 @@ void SetTextEntry(bool active, const std::string& prompt, const std::string& tex
 }
 
 void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
+    const ContextScope context_scope;
     // Present interval for the FPS readout (measured also while nothing is drawn).
     const auto now = std::chrono::steady_clock::now();
     const float ms = std::chrono::duration<float, std::milli>(now - last_present).count();
