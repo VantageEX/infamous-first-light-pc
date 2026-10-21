@@ -5,10 +5,11 @@ from pathlib import Path
 from PySide6.QtCore import Property, QLocale, QObject, QUrl, Signal, Slot
 from PySide6.QtGui import QFontDatabase, QGuiApplication, QIcon, QTextCursor
 
-from . import game
+from . import game, report
 from .i18n import STRINGS, UI_LANGUAGES, Texts
 from .runner import GameRunner, open_folder, system_language_key
-from .settings import CORE_DEFAULTS, DISPLAY_MODES, FPS_LIMITS, INI_SWITCHES, Settings, parse_env
+from .settings import (CORE_DEFAULTS, DISPLAY_MODES, FPS_LIMITS, INI_SWITCHES, TEST_BUILD, VERSION_FILE,
+                       Settings, parse_env)
 
 LOG_LINES = 5000
 CORE_SWITCHES = ('vsync', 'fsr1', 'rcas', 'show_fps', 'async_shaders')
@@ -24,7 +25,7 @@ class Launcher(QObject):
     settingsChanged = Signal()
     runningChanged = Signal()
     statusChanged = Signal()
-    notice = Signal(str, str)        # title, text: a toast
+    notice = Signal(str, str, str)   # title, text, kind ('warning' or 'done'): a toast
     showLog = Signal()               # the game failed: open the log page
 
     def __init__(self, parent=None):
@@ -126,7 +127,7 @@ class Launcher(QObject):
             # A wrong pick does not throw away the game that works: its error comes as a notice.
             _, error = self._inspect(folder)
             if error:
-                self.notice.emit(self.t('game_folder'), error)
+                self.notice.emit(self.t('game_folder'), error, 'warning')
                 return
         self._load_game(folder)
 
@@ -211,6 +212,8 @@ class Launcher(QObject):
     def _extra_env(self):
         """The advanced variables (when the box is on); the ones run.py reads from tlg.ini go there."""
         extra = dict(game.FIRST_LIGHT_ENV)
+        if TEST_BUILD:
+            extra.update(game.TEST_BUILD_ENV)
         if self._advanced:
             extra.update(parse_env(self.settings.launcher['extra_env']))
         for variable, key in INI_SWITCHES.items():
@@ -266,6 +269,22 @@ class Launcher(QObject):
     @Slot()
     def openLogs(self):
         open_folder(self.settings.folder / 'logs')
+
+    @Property(bool, constant=True)
+    def testBuild(self):
+        return TEST_BUILD
+
+    @Slot()
+    def createReport(self):
+        """data/reports/report-*.zip for the developer; opens the folder and names the archive."""
+        self.settings.save()
+        try:
+            path = report.create(self.settings.folder, self.settings.launcher, self.info, VERSION_FILE)
+        except OSError as error:
+            self.notice.emit(self.t('create_report'), self.t('report_failed', error=error), 'warning')
+            return
+        open_folder(path.parent)
+        self.notice.emit(self.t('report_done'), path.name, 'done')
 
     @Slot()
     def openSaves(self):

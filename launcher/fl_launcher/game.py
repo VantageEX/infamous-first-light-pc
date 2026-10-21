@@ -26,6 +26,10 @@ FIRST_LIGHT_ENV = {
     'TLG_OCCLUSION_MODE': '4',
 }
 
+# Test builds (settings.TEST_BUILD) add the core statistics the developer reads in the reports;
+# the advanced box still overrides them.
+TEST_BUILD_ENV = {'TLG_READBACK_STATS': '1', 'TLG_BUFFER_STATS': '1'}
+
 # PS4 system language ids (sceSystemServiceParamGetInt LANG), as the core's TLG_LANGUAGE takes them.
 LANGUAGES = {
     'ja': 0, 'en': 1, 'fr': 2, 'es': 3, 'de': 4, 'it': 5, 'nl': 6, 'pt_PT': 7, 'ru': 8, 'ko': 9,
