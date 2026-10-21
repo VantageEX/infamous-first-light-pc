@@ -890,30 +890,86 @@ bool BufferCache::EagerEnabled() {
     return enabled;
 }
 
-void BufferCache::NoteReadback(VAddr addr, u64 size) {
-    if (!EagerEnabled()) {
-        return;
+// tlg: TLG_LAGGED_RANGES=<start>-<end>[,...] (hex guest addresses), precise readback mode: the
+// GPU-written pages there the CPU reads back (First Light's particle emitter counters, written
+// by the GPU and read by the game every frame) are served from the eager copy of an earlier
+// fence instead of waiting for the GPU, so the values are a frame or so late. Without this each
+// read waited for the GPU to finish the frame (about 25 FPS); relaxed mode never brings them
+// back and part of the dash effects vanish.
+bool BufferCache::LaggedPage(VAddr page) {
+    static const std::vector<std::pair<VAddr, VAddr>> ranges = [] {
+        std::vector<std::pair<VAddr, VAddr>> out;
+        if (EmulatorSettings.GetReadbacksMode() != GpuReadbacksMode::Precise) {
+            return out;
+        }
+        const char* env = std::getenv("TLG_LAGGED_RANGES");
+        for (const char* p = env; p && *p;) {
+            char* end = nullptr;
+            const VAddr start = std::strtoull(p, &end, 16);
+            if (end == p || *end != '-') {
+                break;
+            }
+            p = end + 1;
+            const VAddr stop = std::strtoull(p, &end, 16);
+            if (end == p || stop <= start) {
+                break;
+            }
+            out.emplace_back(start, stop);
+            p = *end == ',' ? end + 1 : end;
+        }
+        if (!out.empty()) {
+            std::printf("Readbacks: %zu lagged range(s) (TLG_LAGGED_RANGES)\n", out.size());
+        }
+        return out;
+    }();
+    for (const auto& [start, stop] : ranges) {
+        if (page < stop && start < page + EagerPageSize) {
+            return true;
+        }
     }
+    return false;
+}
+
+void BufferCache::NoteReadback(VAddr addr, u64 size) {
+    const bool eager = EagerEnabled();
     std::scoped_lock lock{eager_mutex};
+    const auto take_slot = [&](u64& offset) {
+        if (!eager_free_offsets.empty()) {
+            offset = eager_free_offsets.back();
+            eager_free_offsets.pop_back();
+            return true;
+        }
+        if (eager_next_offset + EagerPageSize <= EagerBufferSize) {
+            offset = eager_next_offset;
+            eager_next_offset += EagerPageSize;
+            return true;
+        }
+        return false;
+    };
     for (VAddr page = Common::AlignDown(addr, EagerPageSize); page < addr + size; page += EagerPageSize) {
+        const bool lagged = LaggedPage(page);
+        if (!eager && !lagged) {
+            continue;
+        }
         auto [it, inserted] = eager_pages.try_emplace(page);
         if (!inserted) {
             it->second.idle = 0;
             it->second.skip = 0; // a copy at the next fence would have spared this fault
             continue;
         }
-        u64 offset;
-        if (!eager_free_offsets.empty()) {
-            offset = eager_free_offsets.back();
-            eager_free_offsets.pop_back();
-        } else if (eager_next_offset + EagerPageSize <= EagerBufferSize) {
-            offset = eager_next_offset;
-            eager_next_offset += EagerPageSize;
-        } else {
+        u64 offset, alt_offset = 0;
+        if (!take_slot(offset)) {
+            eager_pages.erase(it);
+            break;
+        }
+        if (lagged && !take_slot(alt_offset)) {
+            eager_free_offsets.push_back(offset);
             eager_pages.erase(it);
             break;
         }
         it->second = EagerPage{offset, 0, true, false, 0, 0, 0};
+        it->second.lagged = lagged;
+        it->second.alt_offset = alt_offset;
     }
     eager_count.store(static_cast<u32>(eager_pages.size()), std::memory_order_release);
 }
@@ -934,6 +990,7 @@ void BufferCache::MarkEagerStale(VAddr addr, u64 size) {
          it != eager_pages.end() && it->first < addr + size; ++it) {
         it->second.dirty = true;
         it->second.valid = false;
+        it->second.prev_valid = false; // neither copy has the CPU's bytes
     }
 }
 
@@ -948,6 +1005,11 @@ void BufferCache::NoteGpuWriteForEager(VAddr addr, u64 size) {
     for (auto it = eager_pages.lower_bound(Common::AlignDown(addr, EagerPageSize));
          it != eager_pages.end() && it->first < addr + size; ++it) {
         auto& page = it->second;
+        if (page.lagged) {
+            // Its copies stay usable (a frame late is the point); the next fence copies it again.
+            page.dirty = true;
+            continue;
+        }
         if (page.valid) {
             // Copied at a fence and never read before the GPU wrote it again.
             page.backoff = std::min<u8>(static_cast<u8>(page.backoff * 2 + 1), EagerMaxBackoff);
@@ -988,7 +1050,33 @@ void BufferCache::EagerCopyAtFence() {
         auto& page = it->second;
         if (++page.idle > EagerIdleFences) {
             eager_free_offsets.push_back(page.offset);
+            if (page.lagged) {
+                eager_free_offsets.push_back(page.alt_offset);
+            }
             it = eager_pages.erase(it);
+            continue;
+        }
+        if (page.lagged) {
+            // Always copied when the GPU wrote it, into the slot the newest finished copy is not in.
+            if (page.dirty && memory_tracker->IsRegionGpuModified(it->first, EagerPageSize)) {
+                if (page.valid) {
+                    page.prev_offset = page.offset;
+                    page.prev_tick = page.tick;
+                    page.prev_valid = true;
+                    std::swap(page.offset, page.alt_offset);
+                }
+                const u64 block = it->first >> block_shift;
+                const Buffer* page_arena = GetArena(block, (it->first + EagerPageSize - 1) >> block_shift);
+                if (page_arena != arena) {
+                    flush_copies();
+                    arena = page_arena;
+                }
+                copies.push_back(vk::BufferCopy{.srcOffset = it->first - arena->cpu_addr,
+                                                .dstOffset = page.offset,
+                                                .size = EagerPageSize});
+                copied.push_back(&page);
+            }
+            ++it;
             continue;
         }
         if (page.dirty && page.skip > 0 &&
@@ -1054,12 +1142,25 @@ bool BufferCache::TryEagerRead(VAddr addr, u64 size) {
         it->second.idle = 0;
         offset = it->second.offset;
         tick = it->second.tick;
+        if (it->second.lagged && !scheduler.IsFree(tick) && it->second.prev_valid &&
+            scheduler.IsFree(it->second.prev_tick)) {
+            // The newest copy is still on its way: the one before, finished, without waiting.
+            offset = it->second.prev_offset;
+            tick = it->second.prev_tick;
+        }
     }
     WaitReadbackTick(tick);
     std::scoped_lock lock{eager_mutex};
     const auto it = eager_pages.find(page_addr);
-    if (it == eager_pages.end() || !it->second.valid || it->second.tick != tick) {
-        return false; // the GPU wrote it again meanwhile
+    if (it == eager_pages.end()) {
+        return false;
+    }
+    const bool lagged = it->second.lagged;
+    if (lagged ? !((it->second.valid && it->second.tick == tick && it->second.offset == offset) ||
+                   (it->second.prev_valid && it->second.prev_tick == tick &&
+                    it->second.prev_offset == offset))
+               : (!it->second.valid || it->second.tick != tick)) {
+        return false; // the GPU wrote it again meanwhile (or the CPU, for a lagged page)
     }
     eager_buffer->Invalidate(offset, EagerPageSize);
     // tlg: only while the page is still GPU modified, checked under the region lock: a deferred
@@ -1076,7 +1177,9 @@ bool BufferCache::TryEagerRead(VAddr addr, u64 size) {
         return false;
     }
     eager_subtracts.push_back(page_addr);
-    it->second.valid = false;
+    if (!lagged) {
+        it->second.valid = false;
+    }
     it->second.backoff = 0;
     it->second.skip = 0;
     if (ReadbackStatsEnabled()) {

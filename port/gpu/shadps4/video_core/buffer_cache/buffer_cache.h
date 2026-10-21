@@ -198,8 +198,16 @@ private:
         /// (backoff doubles each time, up to EagerMaxBackoff; a read resets it).
         u8 backoff;
         u8 skip;
+        /// tlg: TLG_LAGGED_RANGES page: copied at every fence into two slots in turn, and a
+        /// read takes the newest copy the GPU has finished, a frame or so old, without waiting.
+        bool lagged = false;
+        u64 alt_offset = 0;   ///< its second slot
+        u64 prev_offset = 0;  ///< the copy before `offset`/`tick`, kept while the newer one is in flight
+        u64 prev_tick = 0;
+        bool prev_valid = false;
     };
     static bool EagerEnabled();
+    static bool LaggedPage(VAddr page);
     void NoteGpuWriteForEager(VAddr addr, u64 size); ///< GPU-side threads, before the write
     void MarkEagerStale(VAddr addr, u64 size);       ///< any thread: CPU bytes the copy lacks
     void ApplyEagerSubtractsLocked();                ///< GPU-side threads, eager_mutex held
