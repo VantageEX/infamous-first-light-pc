@@ -20,7 +20,7 @@ An unofficial native Windows port of **inFAMOUS First Light** (PS4). The game's 
 |---|---|
 | ![Fetch's neon power in a cutscene, 45 FPS](docs/screenshots/gameplay-neon-power.jpg) | ![An arena challenge with the performance overlay, 36 FPS](docs/screenshots/gameplay-arena.jpg) |
 
-![The launcher: the game's own art, Play and the settings](docs/screenshots/launcher.jpg)
+![The launcher: the game's own art, Play, the newest save to continue and the settings](docs/screenshots/launcher.jpg)
 
 ### ▶ Gameplay video
 
