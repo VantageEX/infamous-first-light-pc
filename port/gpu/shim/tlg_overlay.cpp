@@ -141,6 +141,11 @@ std::vector<TlgPng::Image> choice_pictures;
 std::vector<ImTextureData*> choice_textures, choice_retired;
 std::atomic<bool> choice_retiring{false};
 float base_scale = 1.0f;
+// Faces beside the default Segoe UI (Init): Semibold for titles and buttons, Light for the menu's
+// labels (the launcher's Font.Light), and Windows' icon font for the menu's glyphs (none: no icons).
+ImFont* font_bold = nullptr;
+ImFont* font_light = nullptr;
+ImFont* font_icons = nullptr;
 
 // Present rate for the FPS counter.
 std::chrono::steady_clock::time_point last_present{};
@@ -249,24 +254,6 @@ void Store(std::atomic<T>& target, T value, bool changed) {
     }
 }
 
-void Checkbox(const char* label, std::atomic<bool>& value) {
-    bool v = value;
-    const bool changed = ImGui::Checkbox(label, &v);
-    Store(value, v, changed);
-}
-
-// A combo over `count` labels storing an index or a value from `values`.
-void Choice(const char* label, std::atomic<int>& target, const char* const* labels, const int* values,
-            int count) {
-    int current = 0;
-    for (int i = 0; i < count; ++i) {
-        if ((values ? values[i] : i) == target.load()) current = i;
-    }
-    if (ImGui::Combo(label, &current, labels, count)) {
-        Store(target, values ? values[current] : current, true);
-    }
-}
-
 // Controller button names in the help text follow TLG_GLYPHS=xbox|nintendo (upstream 9155cdc;
 // a port's runner can pick it from `tlg-probe --gamepad`); unset is PlayStation. Read once: the
 // environment is fixed for a run.
@@ -285,90 +272,376 @@ void Help(const char* text) {
     }
 }
 
-// Two-column rows: the name on the left, the control on the right.
-bool BeginRows(const char* id) {
-    if (!ImGui::BeginTable(id, 2, ImGuiTableFlags_SizingStretchProp)) {
-        return false;
+// ---- The menu's rows, drawn as the launcher's settings (qml/SettingRow.qml, ToggleRow.qml,
+// Picker.qml): the label (Segoe UI Light 25) and its description (19, muted) on the left, the
+// control on the right, a faint line under the row, the row lit when hovered or focused. Sizes
+// are launcher pixels on a 1080-line stage, times base_scale. A slider row is changed with the
+// arrows after Enter / A (the arrows move between rows otherwise), a list row opens its list. ----
+float L(float px) { return px * base_scale; }
+ImFont* LightFont() { return font_light ? font_light : ImGui::GetFont(); }
+
+// UTF-8 of one code point (the icon font's private-use glyphs).
+std::string Utf8(unsigned code) {
+    std::string out;
+    if (code < 0x80) {
+        out += char(code);
+    } else if (code < 0x800) {
+        out += char(0xc0 | (code >> 6));
+        out += char(0x80 | (code & 0x3f));
+    } else {
+        out += char(0xe0 | (code >> 12));
+        out += char(0x80 | ((code >> 6) & 0x3f));
+        out += char(0x80 | (code & 0x3f));
     }
-    ImGui::TableSetupColumn("name", ImGuiTableColumnFlags_WidthStretch, 0.52f);
-    ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthStretch, 0.48f);
-    return true;
+    return out;
 }
 
-void Row(const char* label) {
-    ImGui::TableNextRow();
-    ImGui::TableNextColumn();
-    ImGui::AlignTextToFramePadding();
-    ImGui::TextUnformatted(label);
-    ImGui::TableNextColumn();
-    ImGui::SetNextItemWidth(-FLT_MIN);
+// Segoe Fluent Icons / MDL2 code points (launcher/fl_launcher/qml/theme.js).
+namespace Icon {
+constexpr unsigned Chart = 0xE9D2, Display = 0xE7F4, Speed = 0xEC4A, Gamepad = 0xE7FC, Chevron = 0xE70D,
+                   Check = 0xE73E, Bolt = 0xE945;
+}
+
+// An icon of `size` launcher pixels centred at `c`; nothing without the icon font.
+void DrawIcon(ImDrawList* dl, unsigned code, ImVec2 c, float size, ImU32 color) {
+    if (!font_icons) return;
+    const std::string text = Utf8(code);
+    const ImVec2 s = font_icons->CalcTextSizeA(L(size), FLT_MAX, 0.0f, text.c_str());
+    dl->AddText(font_icons, L(size), ImVec2(c.x - s.x / 2, c.y - s.y / 2), color, text.c_str());
+}
+
+ImVec2 TextSize(ImFont* font, float px, const char* text, float wrap = 0.0f) {
+    return font->CalcTextSizeA(L(px), FLT_MAX, wrap, text);
+}
+
+// The row edited with the arrows (a slider after Enter / A) and the slider dragged with the mouse.
+ImGuiID editing_row = 0, dragging_row = 0;
+
+struct RowState {
+    bool activated, hovered, focused, editing;
+    ImGuiID id;
+    ImRect bb;
+    float control_x, mid; // the control's left edge and the row's vertical centre
+    ImDrawList* dl;
+};
+
+// One row: its frame, label and description; the control is drawn by the caller in
+// [control_x, control_x + control_w] at height mid. Info rows take no focus.
+RowState RowFrame(const char* label, const char* help, float control_w, bool interactive = true) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float width = ImGui::GetContentRegionAvail().x;
+    const float inset = L(20);
+    const float text_w = std::max(L(160), width - inset * 2 - control_w - L(28));
+    const ImVec2 label_size = TextSize(LightFont(), 25, label, text_w);
+    const ImVec2 help_size = help && *help ? TextSize(ImGui::GetFont(), 19, help, text_w) : ImVec2();
+    const float text_h = label_size.y + (help_size.y > 0 ? L(4) + help_size.y : 0.0f);
+    const float h = std::max(L(66), text_h + L(24));
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    RowState r{};
+    r.dl = dl;
     ImGui::PushID(label);
+    if (interactive) {
+        r.activated = ImGui::InvisibleButton("##row", ImVec2(width, h));
+        r.id = ImGui::GetItemID();
+        r.hovered = ImGui::IsItemHovered();
+        r.focused = ImGui::IsItemFocused();
+    } else {
+        ImGui::Dummy(ImVec2(width, h));
+    }
+    ImGui::PopID();
+    r.editing = interactive && editing_row == r.id;
+    if (r.editing && !r.focused) {
+        editing_row = 0; // the focus moved on
+        r.editing = false;
+    }
+    r.bb = ImRect(pos, ImVec2(pos.x + width, pos.y + h));
+    if (r.focused || r.hovered) {
+        dl->AddRectFilled(r.bb.Min, r.bb.Max, ImGui::GetColorU32(Theme::White(r.focused ? 0.11f : 0.06f)), L(6));
+    } else {
+        dl->AddLine(ImVec2(pos.x + inset, r.bb.Max.y - 0.5f), ImVec2(r.bb.Max.x - inset, r.bb.Max.y - 0.5f),
+                    ImGui::GetColorU32(Theme::Line));
+    }
+    r.mid = pos.y + h / 2;
+    const float y0 = r.mid - text_h / 2;
+    dl->AddText(LightFont(), L(25), ImVec2(pos.x + inset, y0), ImGui::GetColorU32(Theme::Text), label, nullptr, text_w);
+    if (help_size.y > 0) {
+        dl->AddText(ImGui::GetFont(), L(19), ImVec2(pos.x + inset, y0 + label_size.y + L(4)),
+                    ImGui::GetColorU32(Theme::Muted), help, nullptr, text_w);
+    }
+    r.control_x = r.bb.Max.x - inset - control_w;
+    return r;
+}
+
+// The launcher's switch: 64 x 34, blue when on, a white knob.
+void DrawToggle(ImDrawList* dl, float x, float mid, bool on) {
+    const ImVec2 a(x, mid - L(17)), b(x + L(64), mid + L(17));
+    dl->AddRectFilled(a, b, ImGui::GetColorU32(on ? Theme::Accent : Theme::White(0.28f)), L(17));
+    const float knob = on ? b.x - L(30) : a.x + L(4);
+    dl->AddRectFilled(ImVec2(knob, a.y + L(4)), ImVec2(knob + L(26), a.y + L(30)), ImGui::GetColorU32(Theme::Text), L(13));
 }
 
 void CheckRow(const char* label, std::atomic<bool>& value, const char* help = nullptr) {
-    Row(label);
-    Checkbox("##value", value);
-    Help(help);
-    ImGui::PopID();
+    const RowState r = RowFrame(label, help, L(64));
+    bool v = value;
+    if (r.activated) {
+        v = !v;
+        Store(value, v, true);
+    }
+    DrawToggle(r.dl, r.control_x, r.mid, v);
 }
 
+// A toggle over one bit of a mask (the overlay's items).
+void BitRow(const char* label, std::atomic<unsigned>& mask, unsigned bit) {
+    const RowState r = RowFrame(label, nullptr, L(64));
+    unsigned m = mask;
+    if (r.activated) {
+        m ^= bit;
+        mask = m;
+        dirty = true;
+    }
+    DrawToggle(r.dl, r.control_x, r.mid, (m & bit) != 0);
+}
+
+// The current value and a chevron; Enter / A / a click opens the launcher's list (Picker.qml):
+// 60-pixel items, the current one checked.
 void ChoiceRow(const char* label, std::atomic<int>& target, const char* const* labels, const int* values,
                int count, const char* help = nullptr) {
-    Row(label);
-    Choice("##value", target, labels, values, count);
-    Help(help);
-    ImGui::PopID();
+    int current = 0;
+    for (int i = 0; i < count; ++i) {
+        if ((values ? values[i] : i) == target.load()) current = i;
+    }
+    const float value_w = std::min(TextSize(LightFont(), 25, labels[current]).x, ImGui::GetContentRegionAvail().x * 0.42f);
+    const RowState r = RowFrame(label, help, value_w + L(30));
+    const ImVec2 value_size = TextSize(LightFont(), 25, labels[current]);
+    ImGui::PushClipRect(ImVec2(r.control_x, r.bb.Min.y), ImVec2(r.control_x + value_w, r.bb.Max.y), true);
+    r.dl->AddText(LightFont(), L(25), ImVec2(r.control_x, r.mid - value_size.y / 2), ImGui::GetColorU32(Theme::White(0.9f)),
+                  labels[current]);
+    ImGui::PopClipRect();
+    DrawIcon(r.dl, Icon::Chevron, ImVec2(r.control_x + value_w + L(20), r.mid + L(1)), 14, ImGui::GetColorU32(Theme::Muted));
+    char popup[64];
+    std::snprintf(popup, sizeof(popup), "##list%08x", r.id);
+    if (r.activated) {
+        ImGui::OpenPopup(popup);
+    }
+    ImGui::SetNextWindowPos(ImVec2(r.bb.Max.x, r.bb.Max.y + L(6)), ImGuiCond_Appearing, ImVec2(1.0f, 0.0f));
+    ImGui::SetNextWindowSize(ImVec2(L(480), 0.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(L(12), L(12)));
+    ImGui::PushStyleVar(ImGuiStyleVar_PopupRounding, L(6));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
+    ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_HeaderActive, ImVec4(0, 0, 0, 0));
+    if (ImGui::BeginPopup(popup)) {
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        for (int i = 0; i < count; ++i) {
+            ImGui::PushID(i);
+            const ImVec2 pos = ImGui::GetCursorScreenPos();
+            const bool picked = ImGui::Selectable("##item", false, 0, ImVec2(0.0f, L(60)));
+            if (i == current && ImGui::IsWindowAppearing()) ImGui::SetItemDefaultFocus();
+            const bool focused = ImGui::IsItemFocused(), hovered = ImGui::IsItemHovered();
+            const ImVec2 end(pos.x + ImGui::GetContentRegionAvail().x, pos.y + L(60));
+            if (focused || hovered) {
+                dl->AddRectFilled(pos, end, ImGui::GetColorU32(Theme::White(focused ? 0.12f : 0.06f)), L(4));
+            }
+            const ImVec2 size = TextSize(LightFont(), 26, labels[i]);
+            dl->AddText(LightFont(), L(26), ImVec2(pos.x + L(18), pos.y + (L(60) - size.y) / 2),
+                        ImGui::GetColorU32(Theme::Text), labels[i]);
+            if (i == current) {
+                DrawIcon(dl, Icon::Check, ImVec2(end.x - L(30), pos.y + L(30)), 18, ImGui::GetColorU32(Theme::Text));
+            }
+            if (picked) {
+                Store(target, values ? values[i] : i, true);
+            }
+            ImGui::PopID();
+        }
+        ImGui::EndPopup();
+    }
+    ImGui::PopStyleColor(3);
+    ImGui::PopStyleVar(3);
 }
 
-// A 0.1x to 100x multiplier with a 1x button.
-void MultiplierRow(const char* label, std::atomic<float>& value, const char* help) {
-    Row(label);
-    const ImGuiStyle& style = ImGui::GetStyle();
-    ImGui::SetNextItemWidth(-(ImGui::CalcTextSize("1x").x + style.FramePadding.x * 2 + style.ItemSpacing.x));
-    float v = value;
-    if (ImGui::SliderFloat("##value", &v, 0.1f, 100.0f, "%.2fx",
-                           ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp)) {
-        value = TlgOrbs::ClampMultiplier(v);
-        dirty = true;
+// A slider: a 260-pixel track (blue up to the value) with a white knob and the value's text.
+// Dragged with the mouse; Enter / A starts the arrows (left / right step by 1/100 of the range,
+// a log slider by 5%), Enter / A or moving away stops them. Returns the new value when changed.
+bool SliderControl(const RowState& r, float& v, float lo, float hi, const char* text, bool log_scale, float step) {
+    const float track_w = L(260), track_x = r.control_x, value_x = track_x + track_w + L(18);
+    const auto to_t = [&](float x) {
+        return log_scale ? std::log(x / lo) / std::log(hi / lo) : (x - lo) / (hi - lo);
+    };
+    const auto from_t = [&](float t) {
+        t = std::clamp(t, 0.0f, 1.0f);
+        return log_scale ? lo * std::pow(hi / lo, t) : lo + (hi - lo) * t;
+    };
+    bool changed = false;
+    const ImGuiIO& io = ImGui::GetIO();
+    if (r.activated && io.MouseDown[0] == false && dragging_row != r.id) {
+        editing_row = editing_row == r.id ? 0 : r.id; // Enter / A
     }
-    Help(help);
-    ImGui::SameLine();
-    if (ImGui::SmallButton("1x")) {
-        value = 1.0f;
-        dirty = true;
+    if (ImGui::IsItemActivated() && io.MouseDown[0] && io.MousePos.x >= track_x - L(14) &&
+        io.MousePos.x <= track_x + track_w + L(14)) {
+        dragging_row = r.id;
     }
-    Help(help);
-    ImGui::PopID();
+    if (dragging_row == r.id) {
+        if (io.MouseDown[0]) {
+            const float nv = from_t((io.MousePos.x - track_x) / track_w);
+            changed = nv != v;
+            v = nv;
+        } else {
+            dragging_row = 0;
+        }
+    }
+    if (editing_row == r.id) {
+        int dir = 0;
+        for (const ImGuiKey key : {ImGuiKey_LeftArrow, ImGuiKey_GamepadDpadLeft, ImGuiKey_GamepadLStickLeft}) {
+            ImGui::SetKeyOwner(key, r.id);
+            if (ImGui::IsKeyPressed(key, ImGuiInputFlags_Repeat, r.id)) dir = -1;
+        }
+        for (const ImGuiKey key : {ImGuiKey_RightArrow, ImGuiKey_GamepadDpadRight, ImGuiKey_GamepadLStickRight}) {
+            ImGui::SetKeyOwner(key, r.id);
+            if (ImGui::IsKeyPressed(key, ImGuiInputFlags_Repeat, r.id)) dir = 1;
+        }
+        if (dir) {
+            const float nv = log_scale ? std::clamp(v * (dir > 0 ? 1.05f : 1.0f / 1.05f), lo, hi)
+                                       : std::clamp(v + dir * step, lo, hi);
+            changed = nv != v;
+            v = nv;
+        }
+    }
+    const float t = std::clamp(to_t(v), 0.0f, 1.0f);
+    const float y = r.mid - L(3);
+    r.dl->AddRectFilled(ImVec2(track_x, y), ImVec2(track_x + track_w, y + L(6)), ImGui::GetColorU32(Theme::White(0.18f)), L(3));
+    r.dl->AddRectFilled(ImVec2(track_x, y), ImVec2(track_x + track_w * t, y + L(6)), ImGui::GetColorU32(Theme::Accent), L(3));
+    const ImVec2 knob(track_x + track_w * t, r.mid);
+    if (editing_row == r.id) {
+        r.dl->AddCircle(knob, L(17), ImGui::GetColorU32(Theme::Accent), 0, L(2.5f));
+    }
+    r.dl->AddCircleFilled(knob, L(11), ImGui::GetColorU32(Theme::Text));
+    const ImVec2 size = TextSize(LightFont(), 25, text);
+    r.dl->AddText(LightFont(), L(25), ImVec2(value_x + L(90) - size.x, r.mid - size.y / 2),
+                  ImGui::GetColorU32(editing_row == r.id ? Theme::Accent : Theme::Text), text);
+    return changed;
 }
+
+constexpr float SliderWidth = 260 + 18 + 90;
 
 void FloatRow(const char* label, std::atomic<float>& value, float lo, float hi, const char* format, const char* help,
               ImGuiSliderFlags flags = 0) {
-    Row(label);
+    const RowState r = RowFrame(label, help, L(SliderWidth));
     float v = value;
-    if (ImGui::SliderFloat("##value", &v, lo, hi, format, ImGuiSliderFlags_AlwaysClamp | flags)) {
+    char text[32];
+    std::snprintf(text, sizeof(text), format, v);
+    if (SliderControl(r, v, lo, hi, text, (flags & ImGuiSliderFlags_Logarithmic) != 0, (hi - lo) / 100.0f)) {
         Store(value, std::clamp(v, lo, hi), true);
     }
-    Help(help);
-    ImGui::PopID();
-}
-
-void InfoRow(const char* label, const char* text) {
-    Row(label);
-    ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextDisabled("%s", text);
-    ImGui::PopTextWrapPos();
-    ImGui::PopID();
 }
 
 void SliderRow(const char* label, std::atomic<int>& value, int lo, int hi, const char* format, const char* help) {
-    Row(label);
-    int v = value;
-    if (ImGui::SliderInt("##value", &v, lo, hi, format, ImGuiSliderFlags_AlwaysClamp)) {
-        Store(value, std::clamp(v, lo, hi), true);
+    const RowState r = RowFrame(label, help, L(SliderWidth));
+    float v = float(value.load());
+    char text[32];
+    std::snprintf(text, sizeof(text), format, value.load());
+    const float step = std::max(1.0f, std::round((hi - lo) / 50.0f));
+    if (SliderControl(r, v, float(lo), float(hi), text, false, step)) {
+        Store(value, std::clamp(int(std::lround(v)), lo, hi), true);
     }
-    Help(help);
-    ImGui::PopID();
 }
+
+// A 0.1x to 100x multiplier (log slider; 1x is the middle of the track).
+void MultiplierRow(const char* label, std::atomic<float>& value, const char* help) {
+    const RowState r = RowFrame(label, help, L(SliderWidth));
+    float v = value;
+    char text[32];
+    std::snprintf(text, sizeof(text), "%.2fx", v);
+    if (SliderControl(r, v, 0.1f, 100.0f, text, true, 0.0f)) {
+        value = TlgOrbs::ClampMultiplier(v);
+        dirty = true;
+    }
+}
+
+// Text on the right, wrapped within 45% of the row.
+void InfoRow(const char* label, const char* text) {
+    const float max_w = ImGui::GetContentRegionAvail().x * 0.45f;
+    const float w = std::min(TextSize(ImGui::GetFont(), 21, text).x, max_w);
+    const RowState r = RowFrame(label, nullptr, w, false);
+    const ImVec2 size = TextSize(ImGui::GetFont(), 21, text, w);
+    r.dl->AddText(ImGui::GetFont(), L(21), ImVec2(r.bb.Max.x - L(20) - size.x, r.mid - size.y / 2),
+                  ImGui::GetColorU32(Theme::Muted), text, nullptr, w);
+}
+
+// The launcher's pill (PillButton.qml): white with black text when focused or pressed, frosted
+// otherwise. `size` is its height; returns true when pressed.
+bool Pill(const char* label, float size = 56, float font = 22, float min_w = 150) {
+    const ImVec2 text = TextSize(ImGui::GetFont(), font, label);
+    const ImVec2 bb_size(std::max(L(min_w), text.x + L(size)), L(size));
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    const bool pressed = ImGui::InvisibleButton(label, bb_size);
+    const bool lit = ImGui::IsItemFocused() || ImGui::IsItemActive();
+    const ImVec4 fill = lit ? Theme::Text : ImGui::IsItemHovered() ? Theme::White(0.24f) : Theme::White(0.14f);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(pos, ImVec2(pos.x + bb_size.x, pos.y + bb_size.y), ImGui::GetColorU32(fill), bb_size.y / 2);
+    ImFont* face = font_bold ? font_bold : ImGui::GetFont();
+    const ImVec2 t = face->CalcTextSizeA(L(font), FLT_MAX, 0.0f, label);
+    dl->AddText(face, L(font), ImVec2(pos.x + (bb_size.x - t.x) / 2, pos.y + (bb_size.y - t.y) / 2),
+                ImGui::GetColorU32(lit ? Theme::Ink : Theme::Text), label);
+    return pressed;
+}
+
+// A row whose control is a pill button (Restore).
+bool ButtonRow(const char* label, const char* help, const char* button) {
+    const float w = std::max(L(150), TextSize(ImGui::GetFont(), 22, button).x + L(56));
+    const RowState r = RowFrame(label, help, w);
+    const ImVec2 a(r.control_x, r.mid - L(28)), b(r.control_x + w, r.mid + L(28));
+    r.dl->AddRectFilled(a, b, ImGui::GetColorU32(r.focused ? Theme::Text : Theme::White(r.hovered ? 0.24f : 0.14f)), L(28));
+    ImFont* face = font_bold ? font_bold : ImGui::GetFont();
+    const ImVec2 t = face->CalcTextSizeA(L(22), FLT_MAX, 0.0f, button);
+    r.dl->AddText(face, L(22), ImVec2(a.x + (w - t.x) / 2, r.mid - t.y / 2),
+                  ImGui::GetColorU32(r.focused ? Theme::Ink : Theme::Text), button);
+    return r.activated;
+}
+
+// Upper case of a UTF-8 string: ASCII and Russian letters (the section titles).
+std::string Upper(const char* text) {
+    std::string out;
+    for (const unsigned char* p = reinterpret_cast<const unsigned char*>(text); *p;) {
+        if (*p < 0x80) {
+            out += char(std::toupper(*p++));
+            continue;
+        }
+        if ((p[0] & 0xe0) == 0xc0 && p[1]) {
+            unsigned code = ((p[0] & 0x1f) << 6) | (p[1] & 0x3f);
+            if (code >= 0x430 && code <= 0x44f) code -= 0x20;
+            else if (code == 0x451) code = 0x401;
+            out += Utf8(code);
+            p += 2;
+            continue;
+        }
+        out += char(*p++);
+    }
+    return out;
+}
+
+// A section's title: small faint capitals with the launcher's letter spacing.
+void SectionTitle(const char* text) {
+    const std::string caps = Upper(text);
+    ImGui::Dummy(ImVec2(0.0f, L(ImGui::GetCursorPosY() > L(10) ? 22 : 6)));
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    ImVec2 pos = ImGui::GetCursorScreenPos();
+    pos.x += L(20);
+    ImFont* font = ImGui::GetFont();
+    for (const char* p = caps.c_str(); *p;) {
+        const char* next = p + 1;
+        while (*next && (u8(*next) & 0xc0) == 0x80) ++next;
+        const std::string glyph(p, next);
+        dl->AddText(font, L(17), pos, ImGui::GetColorU32(Theme::Faint), glyph.c_str());
+        pos.x += font->CalcTextSizeA(L(17), FLT_MAX, 0.0f, glyph.c_str()).x + L(1.5f);
+        p = next;
+    }
+    ImGui::Dummy(ImVec2(0.0f, L(17) + L(10)));
+}
+
+// The rows of a section (no table any more: each row draws itself).
+bool BeginRows(const char*) { return true; }
+void EndRows() {}
 
 const char* UpscalerLabel(int upscaler) {
     switch (upscaler) {
@@ -425,13 +698,13 @@ constexpr const char* Unsupported = "Unavailable: game version or code signature
 void ImageTab() {
     namespace G = TlgGraphics;
     auto& s = TlgSettings::Get();
-    ImGui::SeparatorText(TL("Display", "Экран"));
+    SectionTitle(TL("Display", "Экран"));
     if (BeginRows("##display")) {
         static const char* const modes[] = {TL("Windowed", "Оконный"), TL("Borderless window", "Окно без рамки"), TL("Fullscreen", "Полный экран")};
         ChoiceRow(TL("Display mode", "Режим экрана"), s.display_mode, G::DisplayModeCount == 3 ? modes : G::DisplayModeNames.data(),
                   nullptr, G::DisplayModeCount, TL("Windowed, borderless window or exclusive fullscreen.", "Окно, окно без рамки или эксклюзивный полный экран."));
         CheckRow("VSync", s.vsync, TL("Waits for the monitor: no tearing, a little more input delay.", "Ждёт монитор: без разрывов кадра, но задержка ввода чуть больше."));
-        ImGui::EndTable();
+        EndRows();
     }
     const int iw = s.image_width, ih = s.image_height, ww = s.window_width, wh = s.window_height;
     const bool upscaling = iw < ww && ih < wh;
@@ -439,7 +712,7 @@ void ImageTab() {
     const bool rcas_blocked = s.rcas && !s.rcas_applied;
     // tlg: only spatial filters on the final image. The temporal upscalers (FSR 3/4, TAA, DLSS) were
     // built for GoW3's pipeline and make TLG's image shake, so they are not offered here.
-    ImGui::SeparatorText(TL("Scaling and sharpening", "Масштабирование и резкость"));
+    SectionTitle(TL("Scaling and sharpening", "Масштабирование и резкость"));
     if (BeginRows("##scaling")) {
         CheckRow(TL("Upscale with FSR 1", "Увеличение через FSR 1"), s.fsr1,
                  TL("Enlarges the game image when it is smaller than the window (spatial filter, no shimmer).", "Увеличивает картинку игры, когда она меньше окна (пространственный фильтр, без дрожания)."));
@@ -452,9 +725,9 @@ void ImageTab() {
         ImGui::BeginDisabled(!s.rcas || rcas_blocked);
         SliderRow(TL("Sharpening strength", "Сила резкости"), s.rcas_strength, 0, 100, "%d%%", TL("How strong the sharpening is.", "Насколько сильно повышается резкость."));
         ImGui::EndDisabled();
-        ImGui::EndTable();
+        EndRows();
     }
-    ImGui::SeparatorText(TL("Draw distance and detail", "Дальность прорисовки и детализация"));
+    SectionTitle(TL("Draw distance and detail", "Дальность прорисовки и детализация"));
     if (BeginRows("##view")) {
         ImGui::BeginDisabled(!s.view_supported);
         FloatRow(TL("LOD distance", "Дальность LOD"), s.lod_scale, 0.25f, 4.0f, "%.2fx",
@@ -485,8 +758,9 @@ void ImageTab() {
                  "%+.2f",
                  TL("Negative: sharper textures at a distance (more shimmer, a little more GPU). Positive: blurrier.",
                     "Отрицательное: текстуры вдали чётче (больше мерцания, чуть больше нагрузка на GPU). Положительное: размытее."));
-        Row(TL("Restore the game's values", "Вернуть значения игры"));
-        if (ImGui::SmallButton(TL("Restore", "Сбросить"))) {
+        if (ButtonRow(TL("Restore the game's values", "Вернуть значения игры"),
+                      TL("Every setting above back to the game's own.", "Все настройки выше — как в игре."),
+                      TL("Restore", "Сбросить"))) {
             s.lod_scale = 1.0f;
             s.region_lod = 1.0f;
             s.region_fade = 1.0f;
@@ -497,10 +771,9 @@ void ImageTab() {
             for (int b = 0; b < 6; ++b) s.lod_bands[b] = bands[b];
             dirty = true;
         }
-        ImGui::PopID();
-        ImGui::EndTable();
+        EndRows();
     }
-    ImGui::SeparatorText(TL("Information", "Сведения"));
+    SectionTitle(TL("Information", "Сведения"));
     if (BeginRows("##image_info")) {
         char text[96];
         std::snprintf(text, sizeof(text), "%d x %d", iw, ih);
@@ -509,7 +782,7 @@ void ImageTab() {
         InfoRow(TL("Windowed", "Окно"), text);
         InfoRow("FSR 1", !s.fsr1 ? TL("off", "выкл.") : upscaling ? TL("active", "работает") : TL("no effect (image not smaller than window)", "не действует (картинка не меньше окна)"));
         InfoRow(TL("Sharpening", "Резкость"), s.rcas_applied ? TL("applied", "применяется") : TL("not applied", "не применяется"));
-        ImGui::EndTable();
+        EndRows();
     }
 }
 
@@ -517,7 +790,7 @@ void FixesSection();
 
 void PerformanceTab() {
     if (TlgPerf::Enabled()) {
-        ImGui::SeparatorText(TL("Performance capture", "Запись производительности"));
+        SectionTitle(TL("Performance capture", "Запись производительности"));
         static int category = 0;
         const char* labels[] = {TL("Absorb smoke", "Поглощение дыма"), TL("Use power", "Применение силы"),
                                 TL("Movement", "Передвижение"), TL("Other", "Другое")};
@@ -532,7 +805,7 @@ void PerformanceTab() {
     auto& s = TlgSettings::Get();
     // tlg: GoW3's render-resolution and engine-frame-rate patches and the readback shortcuts are not
     // offered: they do not apply to TLG, and the readback ones crash it (it needs precise readbacks).
-    ImGui::SeparatorText(TL("Live", "Действуют сразу"));
+    SectionTitle(TL("Live", "Действуют сразу"));
     if (BeginRows("##live")) {
         static const char* const fps_labels[] = {"30", "120", "240", TL("Unlimited", "Без ограничения")};
         ChoiceRow(TL("Frame rate limit", "Ограничение FPS"), s.fps_limit, fps_labels, G::FpsLimits.data(), int(G::FpsLimits.size()),
@@ -542,7 +815,7 @@ void PerformanceTab() {
                   int(G::FramesQueued.size()), TL("More frames queued: steadier FPS, slower response to input.", "Больше кадров в очереди: ровнее FPS, но медленнее отклик."));
         CheckRow(TL("Compile new shaders in the background", "Компилировать новые шейдеры в фоне"), s.async_shaders,
                  TL("Fewer stutters in new areas; an object or effect may appear a moment later.", "Меньше подтормаживаний в новых местах; объект или эффект может появиться на мгновение позже."));
-        ImGui::EndTable();
+        EndRows();
     }
     FixesSection();
 }
@@ -555,15 +828,14 @@ void PerformanceTab() {
 #ifdef TLG_RENDERER_V2
 // Renderer v2 has its own fixes and switches (ISS_* variables): none of this port's.
 void FixesSection() {
-    ImGui::SeparatorText(TL("Fixes", "Correções"));
-    ImGui::TextDisabled("%s", TL("This build uses renderer v2: its own fixes apply.",
-                                 "Esta versão usa o renderer v2: valem as correções dele."));
+    SectionTitle(TL("Fixes", "Исправления"));
+    InfoRow(TL("Renderer v2", "Рендер v2"), TL("its own fixes apply", "действуют его собственные исправления"));
 }
 #else
 void FixesSection() {
     namespace B = Common::Backports;
     auto& s = TlgSettings::Get();
-    ImGui::SeparatorText(TL("Fixes", "Исправления"));
+    SectionTitle(TL("Fixes", "Исправления"));
     ImGui::TextDisabled("%s", TL("Marked (next start) are saved now and apply the next time the game starts.",
                                  "Пункты с пометкой «(след. запуск)» сохраняются сразу, а действуют со следующего запуска игры."));
     if (ImGui::BeginTable("##fixes", 4, ImGuiTableFlags_SizingStretchProp)) {
@@ -611,7 +883,7 @@ void FixesSection() {
     }
 
     // A/B switches read once at start (recompiler or device creation): next start only.
-    ImGui::SeparatorText(TL("A/B switches (next start)", "Переключатели A/B (след. запуск)"));
+    SectionTitle(TL("A/B switches (next start)", "Переключатели A/B (след. запуск)"));
     struct Extra { const char* name; bool (*current)(); };
     static const Extra extras[] = {
         {"WQM", Shader::Toggles::WholeQuadMode},
@@ -639,7 +911,7 @@ void FixesSection() {
                       TL("Read once at start; saved in tlg.ini and applied on the next start.",
                          "Читается один раз при запуске; сохраняется в tlg.ini и применяется при следующем запуске."));
         }
-        ImGui::EndTable();
+        EndRows();
     }
 }
 #endif
@@ -650,7 +922,7 @@ void ControlsTab() {
     auto& s = TlgSettings::Get();
     // Mouse (src/runtime_pad.c): the camera settings apply at once. The buttons and the touchpad
     // mode are fixed unless TLG_KEY_MAP / TLG_MOUSE_PAD_* (or tlg.ini key_map) change them.
-    ImGui::SeparatorText(TL("Mouse", "Мышь"));
+    SectionTitle(TL("Mouse", "Мышь"));
     if (BeginRows("##mouse")) {
         CheckRow(TL("Mouse turns the camera", "Мышь управляет камерой"), s.mouse_enabled,
                  TL("The game window takes the mouse while it has focus. Esc releases it; a click in the window takes it back.",
@@ -679,21 +951,22 @@ void ControlsTab() {
         if (!remap.empty()) {
             InfoRow(TL("Remapped", "Переназначено"), remap.c_str());
         }
-        ImGui::EndTable();
+        EndRows();
     }
-    ImGui::SeparatorText(TL("Sensor mode (graffiti)", "Режим сенсора (граффити)"));
+    SectionTitle(TL("Sensor mode (graffiti)", "Режим сенсора (граффити)"));
     if (BeginRows("##sensor")) {
         SliderRow(TL("Graffiti aiming speed", "Скорость прицела граффити"), s.sensor_aim, 25, 200, "%d%%",
                   TL("How fast the stick moves the graffiti cursor in sensor mode (100% = default).",
                      "Как быстро стик двигает курсор граффити в режиме сенсора (100% — по умолчанию)."));
-        ImGui::EndTable();
+        EndRows();
     }
-    if (ImGui::Button(TL("How to do the graffiti without a gyro", "Как рисовать граффити без гироскопа"))) {
+    if (ButtonRow(TL("Graffiti without a gyro", "Граффити без гироскопа"),
+                  TL("Shows the steps again (the same screen as the first time).",
+                     "Снова показывает шаги (тот же экран, что и в первый раз)."),
+                  TL("Show", "Показать"))) {
         SetOpen(false);
         OpenGuide();
     }
-    Help(TL("Shows the steps again (the same screen as the first time).",
-            "Снова показывает шаги (тот же экран, что и в первый раз)."));
 }
 
 void OverlayTab() {
@@ -701,34 +974,36 @@ void OverlayTab() {
     auto& s = TlgSettings::Get();
     if (BeginRows("##overlay_on")) {
         CheckRow(TL("Show overlay (F10)", "Показывать оверлей (F10)"), s.show_fps, TL("The performance overlay in a corner of the screen.", "Оверлей производительности в углу экрана."));
-        ImGui::EndTable();
+        EndRows();
     }
     ImGui::BeginDisabled(!s.show_fps);
-    ImGui::SeparatorText(TL("What to show", "Что показывать"));
-    if (ImGui::BeginTable("##overlay_items", 2, ImGuiTableFlags_SizingStretchProp)) {
-        ImGui::TableNextColumn();
-        static const char* const names[] = {"FPS", TL("Frametime", "Время кадра"), "Upscaler", TL("GPU (name and use)", "GPU (название и загрузка)"), TL("CPU (game)", "CPU (игра)"),
-                                            TL("RAM (game / total)", "RAM (игра / всего)"), TL("VRAM (used / available)", "VRAM (занято / доступно)"),
-                                            TL("Frametime graph", "График времени кадра")};
-        for (unsigned item = 0; item < P::NumItems; ++item) {
-            const unsigned bit = 1u << item;
-            bool on = (s.overlay_items & bit) != 0;
-            if (ImGui::Checkbox(names[item], &on)) {
-                s.overlay_items = on ? (s.overlay_items | bit) : (s.overlay_items & ~bit);
-                dirty = true;
-            }
-        }
-        ImGui::TableNextColumn();
-        ImGui::TextDisabled("%s", TL("Preview", "Предпросмотр"));
-        ImGui::BeginChild("##preview", ImVec2(0, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
-        ImGui::SetWindowFontScale(s.overlay_scale / 100.0f);
-        const std::string text = OverlayText();
-        ImGui::TextUnformatted(text.empty() ? TL("(nothing selected)", "(ничего не выбрано)") : text.c_str());
-        ImGui::SetWindowFontScale(1.0f);
-        ImGui::EndChild();
-        ImGui::EndTable();
+    SectionTitle(TL("What to show", "Что показывать"));
+    static const char* const names[] = {"FPS", TL("Frametime", "Время кадра"), TL("Upscaler", "Апскейлер"),
+                                        TL("GPU (name and use)", "GPU (название и загрузка)"), TL("CPU (game)", "CPU (игра)"),
+                                        TL("RAM (game / total)", "RAM (игра / всего)"),
+                                        TL("VRAM (used / available)", "VRAM (занято / доступно)"),
+                                        TL("Frametime graph", "График времени кадра")};
+    for (unsigned item = 0; item < P::NumItems; ++item) {
+        BitRow(names[item], s.overlay_items, 1u << item);
     }
-    ImGui::SeparatorText(TL("Appearance", "Внешний вид"));
+    // The overlay's text as it will look, in a card under the list.
+    {
+        const std::string text = OverlayText();
+        const char* shown = text.empty() ? TL("(nothing selected)", "(ничего не выбрано)") : text.c_str();
+        const float size = 19.0f * s.overlay_scale / 100.0f;
+        const float w = ImGui::GetContentRegionAvail().x - L(40);
+        const ImVec2 t = TextSize(ImGui::GetFont(), size, shown, w - L(32));
+        ImGui::Dummy(ImVec2(0.0f, L(12)));
+        const ImVec2 pos(ImGui::GetCursorScreenPos().x + L(20), ImGui::GetCursorScreenPos().y);
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        dl->AddRectFilled(pos, ImVec2(pos.x + w, pos.y + t.y + L(56)), ImGui::GetColorU32(Theme::White(0.04f)), L(10));
+        dl->AddText(ImGui::GetFont(), L(16), ImVec2(pos.x + L(16), pos.y + L(10)), ImGui::GetColorU32(Theme::Faint),
+                    TL("Preview", "Предпросмотр"));
+        dl->AddText(ImGui::GetFont(), L(size), ImVec2(pos.x + L(16), pos.y + L(38)), ImGui::GetColorU32(Theme::Text), shown,
+                    nullptr, w - L(32));
+        ImGui::Dummy(ImVec2(0.0f, t.y + L(56)));
+    }
+    SectionTitle(TL("Appearance", "Внешний вид"));
     if (BeginRows("##appearance")) {
         SliderRow(TL("Font size", "Размер шрифта"), s.overlay_scale, 50, 300, "%d%%", TL("Size of the overlay text.", "Размер текста оверлея."));
         static const char* const corners[] = {TL("Top left", "Слева сверху"), TL("Top right", "Справа сверху"), TL("Bottom left", "Слева снизу"), TL("Bottom right", "Справа снизу")};
@@ -736,10 +1011,10 @@ void OverlayTab() {
         SliderRow(TL("Background opacity", "Непрозрачность фона"), s.overlay_opacity, 0, 100, "%d%%", TL("0% is no background.", "0% — без фона."));
         static const char* const layouts[] = {TL("One line", "В одну строку"), TL("One item per line", "Каждый пункт с новой строки")};
         ChoiceRow(TL("Layout", "Расположение"), s.overlay_layout, layouts, nullptr, 2, TL("Items side by side or stacked.", "Пункты в ряд или столбиком."));
-        ImGui::EndTable();
+        EndRows();
     }
     ImGui::EndDisabled();
-    ImGui::SeparatorText(TL("About", "О программе"));
+    SectionTitle(TL("About", "О программе"));
     if (BeginRows("##about")) {
         const auto& elf = Common::ElfInfo::Instance();
         char text[160];
@@ -753,7 +1028,7 @@ void OverlayTab() {
             std::snprintf(text, sizeof(text), "%s", TL("ready", "готов"));
         }
         InfoRow(TL("Shader cache", "Кэш шейдеров"), text);
-        ImGui::EndTable();
+        EndRows();
     }
 }
 
@@ -764,31 +1039,59 @@ int RestartChanges() {
            (s.deferred_readback != s.startup_deferred_readback) + (s.stale_readback != s.startup_stale_readback);
 }
 
+// The Insert menu as the launcher's settings panel (qml/GameView.qml): a dimmed game behind a
+// rounded glass panel, the sections with their icons on the left, a thin line, the section's rows
+// on the right, the restart notice and the buttons under them.
+bool SectionButton(const char* label, unsigned icon, bool current) {
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    const ImVec2 size(ImGui::GetContentRegionAvail().x, L(64));
+    const bool pressed = ImGui::InvisibleButton(label, size);
+    const bool focused = ImGui::IsItemFocused(), hovered = ImGui::IsItemHovered();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    if (current || focused || hovered) {
+        dl->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y),
+                          ImGui::GetColorU32(Theme::White(current || focused ? 0.11f : 0.06f)), L(6));
+    }
+    const ImU32 color = ImGui::GetColorU32(current ? Theme::Text : Theme::White(0.7f));
+    DrawIcon(dl, icon, ImVec2(pos.x + L(30), pos.y + size.y / 2), 24, color);
+    const ImVec2 t = TextSize(LightFont(), 25, label);
+    dl->AddText(LightFont(), L(25), ImVec2(pos.x + (font_icons ? L(60) : L(16)), pos.y + (size.y - t.y) / 2), color, label);
+    ImGui::Dummy(ImVec2(0.0f, L(6) - ImGui::GetStyle().ItemSpacing.y));
+    return pressed;
+}
+
 void Menu() {
     auto& s = TlgSettings::Get();
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f,
-                                   viewport->WorkPos.y + viewport->WorkSize.y * 0.5f),
-                            ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(std::min(760.0f * base_scale, viewport->WorkSize.x * 0.95f),
-                                    std::min(680.0f * base_scale, viewport->WorkSize.y * 0.9f)),
-                             ImGuiCond_Appearing);
-    bool keep_open = true;
-    // tlg: the game's own title (param.sfo), not a fixed one.
-    static const std::string heading = [] {
-        const std::string_view title = Common::ElfInfo::Instance().Title();
-        const char* app_name = std::getenv("TLG_APP_NAME");
-        return std::string(!title.empty() ? title : app_name && *app_name ? app_name : "The Last Guardian") +
-               PadText("  (Insert / R3+L2)", "  (Insert / RS+LT)", "  (Insert / RS+ZL)");
-    }();
-    // The launcher's popover fill, so the game's own menus do not show through the text.
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, Theme::Fade(Theme::Popover, Theme::PopoverAlpha));
-    const bool shown = ImGui::Begin(heading.c_str(), &keep_open, ImGuiWindowFlags_NoCollapse);
-    ImGui::PopStyleColor();
+    const ImVec2 size(std::min(L(1240), viewport->WorkSize.x * 0.94f), std::min(L(740), viewport->WorkSize.y * 0.92f));
+    const ImVec2 at(viewport->WorkPos.x + (viewport->WorkSize.x - size.x) / 2,
+                    viewport->WorkPos.y + (viewport->WorkSize.y - size.y) / 2);
+    // The game dimmed behind the panel, and the panel's soft shadow.
+    ImDrawList* back = ImGui::GetBackgroundDrawList();
+    back->AddRectFilled(viewport->WorkPos, ImVec2(viewport->WorkPos.x + viewport->WorkSize.x, viewport->WorkPos.y + viewport->WorkSize.y),
+                        Theme::U32(Theme::Ink, 0.42f));
+    for (int i = 4; i >= 1; --i) {
+        const float spread = L(10.0f * i);
+        back->AddRectFilled(ImVec2(at.x - spread, at.y + L(20) - spread), ImVec2(at.x + size.x + spread, at.y + size.y + L(20) + spread),
+                            Theme::U32(Theme::Ink, 0.09f), L(18) + spread);
+    }
+    ImGui::SetNextWindowPos(at, ImGuiCond_Always);
+    ImGui::SetNextWindowSize(size, ImGuiCond_Always);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, L(18));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(18 / 255.0f, 18 / 255.0f, 22 / 255.0f, 0.9f));
+    ImGui::PushStyleColor(ImGuiCol_Border, Theme::White(0.07f));
+    const bool shown = ImGui::Begin("##menu", nullptr,
+                                    ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings |
+                                        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollWithMouse);
+    ImGui::PopStyleColor(2);
+    ImGui::PopStyleVar(3);
     if (!shown) {
         ImGui::End();
         return;
     }
+    bool keep_open = true;
     footer_help = nullptr;
     constexpr int TabCount = 4;
     const ImGuiIO& io = ImGui::GetIO();
@@ -801,58 +1104,100 @@ void Menu() {
             requested_tab = (s.menu_tab + step + TabCount) % TabCount;
         }
     }
-    const float footer = ImGui::GetFrameHeightWithSpacing() * 2.0f + ImGui::GetTextLineHeightWithSpacing() * 2.0f;
-    if (ImGui::BeginTabBar("##tabs")) {
-        static const char* const tabs[TabCount] = {TL("Overlay", "Оверлей"), TL("Image", "Изображение"), TL("Performance", "Производительность"),
-                                                   TL("Controls", "Управление")};
-        for (int tab = 0; tab < TabCount; ++tab) {
-            const ImGuiTabItemFlags flags = requested_tab == tab ? ImGuiTabItemFlags_SetSelected : 0;
-            if (!ImGui::BeginTabItem(tabs[tab], nullptr, flags)) {
-                continue;
-            }
-            if (s.menu_tab != tab && requested_tab < 0) {
-                s.menu_tab = tab;
-                dirty = true;
-            }
-            if (ImGui::BeginChild("##body", ImVec2(0, -footer))) {
-                switch (tab) {
-                case 1: ImageTab(); break;
-                case 2: PerformanceTab(); break;
-                case 3: ControlsTab(); break;
-                default: OverlayTab(); break;
-                }
-            }
-            ImGui::EndChild();
-            ImGui::EndTabItem();
-        }
-        if (requested_tab >= 0) {
-            s.menu_tab = requested_tab;
-            dirty = true;
-            requested_tab = -1;
-        }
-        ImGui::EndTabBar();
+    bool reset_scroll = false; // a new section starts at its top
+    if (requested_tab >= 0) {
+        s.menu_tab = requested_tab;
+        dirty = true;
+        requested_tab = -1;
+        editing_row = 0;
+        reset_scroll = true;
     }
+    ImDrawList* dl = ImGui::GetWindowDrawList();
 
-    ImGui::Separator();
-    ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextDisabled("%s", footer_help ? footer_help
-                              : TL(PadText("L1 / R1 or Q / E: switch tabs. Settings are saved in tlg.ini.",
-                                           "LB / RB or Q / E: switch tabs. Settings are saved in tlg.ini.",
-                                           "L / R or Q / E: switch tabs. Settings are saved in tlg.ini."),
-                                   PadText("L1 / R1 или Q / E: смена вкладки. Настройки сохраняются в tlg.ini.",
-                                           "LB / RB или Q / E: смена вкладки. Настройки сохраняются в tlg.ini.",
-                                           "L / R или Q / E: смена вкладки. Настройки сохраняются в tlg.ini.")));
-    ImGui::PopTextWrapPos();
+    // ---- the sections: the game, its four sections, the keys --------------------------------
+    const float side_w = L(236), side_x = L(24), top = L(28);
+    ImGui::SetCursorPos(ImVec2(side_x, top));
+    ImGui::BeginChild("##sections", ImVec2(side_w, size.y - top * 2), ImGuiChildFlags_None,
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoBackground);
+    {
+        static const std::string game = [] {
+            const std::string_view title = Common::ElfInfo::Instance().Title();
+            const char* app_name = std::getenv("TLG_APP_NAME");
+            return std::string(!title.empty() ? title : app_name && *app_name ? app_name : "inFAMOUS First Light");
+        }();
+        ImDrawList* sdl = ImGui::GetWindowDrawList();
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        sdl->AddRectFilled(ImVec2(p.x + L(8), p.y + L(4)), ImVec2(p.x + L(52), p.y + L(48)), ImGui::GetColorU32(Theme::White(0.08f)), L(8));
+        DrawIcon(sdl, Icon::Bolt, ImVec2(p.x + L(30), p.y + L(26)), 22, ImGui::GetColorU32(Theme::Text));
+        ImFont* bold = font_bold ? font_bold : ImGui::GetFont();
+        const float text_x = p.x + L(66), text_w = side_w - L(70);
+        ImGui::PushClipRect(ImVec2(text_x, p.y), ImVec2(text_x + text_w, p.y + L(56)), true);
+        sdl->AddText(bold, L(20), ImVec2(text_x, p.y + L(2)), ImGui::GetColorU32(Theme::Text), game.c_str());
+        sdl->AddText(ImGui::GetFont(), L(16), ImVec2(text_x, p.y + L(28)), ImGui::GetColorU32(Theme::Muted),
+                     TL("PC port · menu", "ПК-порт · меню"));
+        ImGui::PopClipRect();
+        ImGui::Dummy(ImVec2(0.0f, L(74)));
+        static const char* const tabs[TabCount] = {TL("Overlay", "Оверлей"), TL("Image", "Изображение"),
+                                                   TL("Performance", "Производительность"), TL("Controls", "Управление")};
+        static const unsigned icons[TabCount] = {Icon::Chart, Icon::Display, Icon::Speed, Icon::Gamepad};
+        for (int tab = 0; tab < TabCount; ++tab) {
+            if (SectionButton(tabs[tab], icons[tab], s.menu_tab == tab) && s.menu_tab != tab) {
+                requested_tab = tab;
+            }
+        }
+        const char* keys = TL(PadText("L1 / R1 or Q / E: sections\nInsert or R3+L2: close",
+                                      "LB / RB or Q / E: sections\nInsert or RS+LT: close",
+                                      "L / R or Q / E: sections\nInsert or RS+ZL: close"),
+                              PadText("L1 / R1 или Q / E — разделы\nInsert или R3+L2 — закрыть",
+                                      "LB / RB или Q / E — разделы\nInsert или RS+LT — закрыть",
+                                      "L / R или Q / E — разделы\nInsert или RS+ZL — закрыть"));
+        const ImVec2 k = TextSize(ImGui::GetFont(), 16, keys, side_w - L(16));
+        const ImVec2 kp(ImGui::GetWindowPos().x + L(8), ImGui::GetWindowPos().y + ImGui::GetWindowHeight() - k.y - L(4));
+        sdl->AddText(ImGui::GetFont(), L(16), kp, ImGui::GetColorU32(Theme::Faint), keys, nullptr, side_w - L(16));
+    }
+    ImGui::EndChild();
+    const float line_x = at.x + side_x + side_w + L(22);
+    dl->AddLine(ImVec2(line_x, at.y + top), ImVec2(line_x, at.y + size.y - top), ImGui::GetColorU32(Theme::Line));
+
+    // ---- the section's rows, then the restart notice and the buttons -------------------------
+    const float content_x = side_x + side_w + L(52) - L(20), content_y = L(22);
+    const float footer_h = L(56) + L(28);
+    const float content_w = size.x - content_x - L(40) + L(20);
+    ImGui::SetCursorPos(ImVec2(content_x, content_y));
+    ImGui::PushStyleVar(ImGuiStyleVar_ScrollbarSize, L(6));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(L(10), 0.0f));
+    ImGui::PushStyleColor(ImGuiCol_ScrollbarBg, ImVec4(0, 0, 0, 0));
+    if (reset_scroll) ImGui::SetNextWindowScroll(ImVec2(0.0f, 0.0f));
+    ImGui::BeginChild("##rows", ImVec2(content_w, size.y - content_y - footer_h - L(10)), ImGuiChildFlags_NavFlattened,
+                      ImGuiWindowFlags_NoBackground);
+    switch (s.menu_tab) {
+    case 1: ImageTab(); break;
+    case 2: PerformanceTab(); break;
+    case 3: ControlsTab(); break;
+    default: OverlayTab(); break;
+    }
+    ImGui::Dummy(ImVec2(0.0f, L(12)));
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(2);
+
+    const float footer_y = size.y - footer_h;
+    ImGui::SetCursorPos(ImVec2(content_x + L(20), footer_y));
     if (const int changes = RestartChanges()) {
-        ImGui::TextColored(Theme::Warn, "%d %s", changes,
-                           Plural(changes, "change needs a restart (unsaved progress is lost).",
-                                  "changes need a restart (unsaved progress is lost).",
-                                  "изменение требует перезапуска (несохранённый прогресс пропадёт).",
-                                  "изменения требуют перезапуска (несохранённый прогресс пропадёт).",
-                                  "изменений требуют перезапуска (несохранённый прогресс пропадёт)."));
-        ImGui::SameLine();
+        char text[200];
+        std::snprintf(text, sizeof(text), "%d %s", changes,
+                      Plural(changes, "change needs a restart (unsaved progress is lost).",
+                             "changes need a restart (unsaved progress is lost).",
+                             "изменение требует перезапуска (несохранённый прогресс пропадёт).",
+                             "изменения требуют перезапуска (несохранённый прогресс пропадёт).",
+                             "изменений требуют перезапуска (несохранённый прогресс пропадёт)."));
+        const float note_w = content_w - L(520);
+        const ImVec2 t = TextSize(ImGui::GetFont(), 18, text, note_w);
+        dl->AddText(ImGui::GetFont(), L(18), ImVec2(at.x + content_x + L(20), at.y + footer_y + (L(56) - t.y) / 2),
+                    ImGui::GetColorU32(Theme::Warn), text, nullptr, note_w);
+        ImGui::SetCursorPos(ImVec2(content_x + L(20) + note_w + L(16), footer_y));
         ImGui::BeginDisabled(!std::getenv("TLG_RESTART_COMMAND"));
-        if (ImGui::Button(TL("Apply and restart", "Применить и перезапустить"))) {
+        if (Pill(TL("Apply and restart", "Применить и перезапустить"), 56, 22, 200)) {
             // The new launch confirms the options once the game shows; run.py restores the
             // previous ones if it never does (restart_unconfirmed).
             s.restart_unconfirmed = true;
@@ -860,12 +1205,11 @@ void Menu() {
             runtime_restart();
         }
         ImGui::EndDisabled();
-    } else {
-        ImGui::NewLine();
     }
-    const float close_width = ImGui::CalcTextSize(TL("Close", "Закрыть")).x + ImGui::GetStyle().FramePadding.x * 2;
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x - close_width);
-    if (ImGui::Button(TL("Close", "Закрыть"))) {
+    const char* close = TL("Close", "Закрыть");
+    const float close_w = std::max(L(200), TextSize(ImGui::GetFont(), 22, close).x + L(56));
+    ImGui::SetCursorPos(ImVec2(size.x - L(40) - close_w, footer_y));
+    if (Pill(close, 56, 22, 200)) {
         keep_open = false;
     }
     ImGui::End();
@@ -958,10 +1302,8 @@ void TextEntryBox() {
 // The colours and radii are the launcher's (Theme); its sizes are on a 1080-line stage, so a
 // launcher pixel is kStage design pixels here.
 constexpr float kStage = 720.0f / 1080.0f;
-constexpr float kPanelRadius = Theme::PanelRadius * kStage, kItemRadius = Theme::ItemRadius * kStage;
-
-// Semibold Segoe UI for titles and buttons (Init), else bold is drawn twice a hair apart.
-ImFont* font_bold = nullptr;
+// The launcher's panel (18), card (10) and picture (6) radii.
+constexpr float kPanelRadius = 18.0f * kStage, kItemRadius = 10.0f * kStage, kPictureRadius = 6.0f * kStage;
 
 struct SavePainter {
     ImDrawList* dl;
@@ -991,6 +1333,10 @@ struct SavePainter {
         const ImU32 col = Theme::U32(color, alpha);
         dl->AddText(Face(bold), size * k, P(x, y), col, text.c_str(), nullptr, wrap * k);
         if (bold && !font_bold) dl->AddText(font, size * k, P(x + 0.55f, y), col, text.c_str(), nullptr, wrap * k);
+    }
+    // Text in Segoe UI Light (the launcher's titles and labels).
+    void TextLight(float x, float y, float size, const ImVec4& color, const std::string& text, float alpha = 1.0f) const {
+        dl->AddText(font_light ? font_light : font, size * k, P(x, y), Theme::U32(color, alpha), text.c_str());
     }
     void TextRight(float right, float y, float size, const ImVec4& color, const std::string& text,
                    bool bold = false) const {
@@ -1038,8 +1384,8 @@ struct SavePainter {
             const float spread = 4.0f * i;
             Box(-spread, 12 - spread, w + spread, h + 12 + spread, Theme::Ink, kPanelRadius + spread, 0.14f);
         }
-        Box(0, 0, w, h, Theme::Popover, kPanelRadius, Theme::PopoverAlpha);
-        Frame(0, 0, w, h, Theme::Line, kPanelRadius, 1.0f);
+        Box(0, 0, w, h, ImVec4(18 / 255.0f, 18 / 255.0f, 22 / 255.0f, 1.0f), kPanelRadius, 0.93f);
+        Frame(0, 0, w, h, Theme::White(0.07f), kPanelRadius, 1.0f);
         const std::string credit = "@hayatog-dev";
         Text(w - 6.0f - Width(11.0f, credit), h + 10.0f, 11.0f, Theme::Faint, credit, false, 0.7f);
     }
@@ -1047,8 +1393,7 @@ struct SavePainter {
     void Picture(float x, float y, float w, float h, ImTextureData* tex, bool is_new) const {
         if (tex) {
             dl->AddImageRounded(tex->GetTexRef(), P(x, y), P(x + w, y + h), ImVec2(0, 0), ImVec2(1, 1),
-                                IM_COL32_WHITE, kItemRadius * k);
-            Frame(x, y, x + w, y + h, Theme::Line, kItemRadius, 1.0f);
+                                IM_COL32_WHITE, kPictureRadius * k);
             return;
         }
         if (is_new) {
@@ -1064,14 +1409,12 @@ struct SavePainter {
             Line(x + w / 2 - 11, y + h / 2, x + w / 2 + 11, y + h / 2, Theme::Muted, 2.0f);
             return;
         }
-        Box(x, y, x + w, y + h, Theme::White(0.06f), kItemRadius);
-        Frame(x, y, x + w, y + h, Theme::Line, kItemRadius, 1.0f);
+        Box(x, y, x + w, y + h, Theme::White(0.06f), kPictureRadius);
     }
     // A dialog button: the focused one white with black text (the launcher's Play button), the
     // others faint.
     void ActionButton(float x0, float y0, float x1, float y1, const char* label, int glyph, bool focused) const {
-        Box(x0, y0, x1, y1, focused ? Theme::Text : Theme::White(0.08f), kItemRadius);
-        if (!focused) Frame(x0, y0, x1, y1, Theme::Line, kItemRadius, 1.0f);
+        Box(x0, y0, x1, y1, focused ? Theme::Text : Theme::White(0.14f), (y1 - y0) / 2);
         const float mid = (y0 + y1) / 2;
         Button(x0 + 32, mid, glyph, focused);
         Text(x0 + 52, mid - 10, 15.0f, focused ? Theme::Ink : Theme::Text, label, true);
@@ -1198,25 +1541,26 @@ void SaveCard(const SavePainter& p, float x0, float y0, float x1, const SaveRow&
 void SaveListBox() {
     const int count = int(save_rows.size());
     const int shown = std::min(count, 4);
-    const float w = 880, row_h = 96, gap = 10, header_h = 78, footer_h = 54, pad = 18;
+    const float w = 880, row_h = 96, gap = 10, header_h = 78, footer_h = 64, pad = 18;
     const float list_h = shown * row_h + std::max(shown - 1, 0) * gap + pad * 2;
     const float h = header_h + list_h + footer_h;
     SaveBackdrop(0.6f);
     SavePainter p = SavePainterFor(w, h);
     p.Panel(w, h);
 
-    // Header: a floppy, the title, the game and the number of saves.
-    const float ix = 28, iy = 25;
-    p.Frame(ix, iy, ix + 26, iy + 26, Theme::Text, 4.0f, 1.8f);
-    p.Frame(ix + 6, iy, ix + 20, iy + 9, Theme::Text, 1.0f, 1.8f);
-    p.Frame(ix + 6, iy + 15, ix + 20, iy + 26, Theme::Text, 1.0f, 1.8f);
-    p.Text(70, 17, 24.0f, Theme::Text, SaveTitle(save_kind), true);
+    // Header: a floppy in the launcher's tile, the title, the game and the number of saves.
+    p.Box(26, 17, 70, 61, Theme::White(0.08f), 7.0f);
+    const float ix = 35, iy = 26;
+    p.Frame(ix, iy, ix + 26, iy + 26, Theme::Text, 4.0f, 1.6f);
+    p.Frame(ix + 6, iy, ix + 20, iy + 9, Theme::Text, 1.0f, 1.6f);
+    p.Frame(ix + 6, iy + 15, ix + 20, iy + 26, Theme::Text, 1.0f, 1.6f);
+    p.TextLight(86, 14, 25.0f, Theme::Text, SaveTitle(save_kind));
     const int saves = count - int(std::count_if(save_rows.begin(), save_rows.end(), [](const SaveRow& r) { return r.is_new; }));
     char sub[200];
     const char* game = std::getenv("TLG_APP_NAME");
     std::snprintf(sub, sizeof(sub), "%s%s%d %s", game && *game ? game : "", game && *game ? " · " : "", saves,
                   Plural(saves, "save", "saves", "сохранение", "сохранения", "сохранений"));
-    p.Text(70, 48, 13.0f, Theme::Faint, sub);
+    p.Text(86, 46, 13.0f, Theme::Muted, sub);
     p.Line(0, header_h, w, header_h, Theme::Line, 1.0f);
 
     // Rows, scrolled so the selected one is shown.
@@ -1242,13 +1586,15 @@ void SaveListBox() {
     const char* confirm = save_kind == 2 ? TL("Load", "Загрузить") : save_kind == 3 ? TL("Delete", "Удалить")
                                                                                   : TL("Save here", "Сохранить сюда");
     const char* back = TL("Back", "Назад");
-    float x = 40;
-    p.Button(x, fy + footer_h / 2, 0);
-    p.Text(x + 18, fy + footer_h / 2 - 9, 13.5f, Theme::Muted, confirm);
-    x += 18 + p.Width(13.5f, confirm) + 34;
-    p.Button(x, fy + footer_h / 2, 1);
-    p.Text(x + 18, fy + footer_h / 2 - 9, 13.5f, Theme::Muted, back);
-    x += 18 + p.Width(13.5f, back) + 30;
+    // The launcher's pills: the action white, Back frosted, each with its controller button.
+    float x = 26;
+    const float by0 = fy + 9, by1 = fy + footer_h - 9;
+    const float cw = 22 + 20 + 10 + p.Width(15.0f, confirm, true) + 22;
+    p.ActionButton(x, by0, x + cw, by1, confirm, 0, true);
+    x += cw + 12;
+    const float bw = 22 + 20 + 10 + p.Width(15.0f, back, true) + 22;
+    p.ActionButton(x, by0, x + bw, by1, back, 1, false);
+    x += bw + 24;
     const std::string hint = TL("Enter / click: choose · Esc / right click: back",
                                 "Enter / щелчок: выбрать · Esc / правая кнопка: назад");
     p.TextRight(w - 28, fy + footer_h / 2 - 8, 12.5f, Theme::Faint, p.Fit(12.5f, hint, w - 28 - x));
@@ -1334,7 +1680,7 @@ void SaveMessageBox() {
         p.dl->AddCircle(p.P(pad + 13, y + 14), 12.0f * p.k, Theme::U32(Theme::Accent), 0, 2.0f * p.k);
         p.Text(pad + 13 - p.Width(16.0f, "?", true) / 2, y + 3.5f, 16.0f, Theme::Accent, "?", true);
     }
-    p.Text(pad + 40, y + 1, 22.0f, Theme::Text, p.Fit(22.0f, words.title, inner - 40, true), true);
+    p.TextLight(pad + 40, y - 1, 24.0f, Theme::Text, p.Fit(24.0f, words.title, inner - 40));
     y += 30 + 20;
     if (message_has_entry) {
         p.Box(pad, y, w - pad, y + card_h, Theme::White(0.04f), kItemRadius);
@@ -1421,14 +1767,18 @@ void SaveToastBox(SaveClock::time_point now) {
     const float alpha = std::clamp(std::min(in / 0.15f, out / 0.4f), 0.0f, 1.0f);
     const float k = viewport->WorkSize.y / 720.0f;
     SavePainter p{ImGui::GetForegroundDrawList(), ImGui::GetFont(), k, {}};
-    const float w = 18 + 22 + 12 + p.Width(14.0f, text, true) + 20, h = 46;
-    p.at = ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - (32 + w) * k,
+    const float w = 14 + 44 + 14 + p.Width(15.5f, text, true) + 24, h = 72;
+    p.at = ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - (28 + w) * k,
                   viewport->WorkPos.y + viewport->WorkSize.y - (28 + h) * k);
-    p.Box(0, 0, w, h, Theme::Popover, kPanelRadius, Theme::PopoverAlpha * alpha);
-    p.Frame(0, 0, w, h, Theme::Line, kPanelRadius, 1.0f, alpha);
-    p.Line(18, 24, 24, 30, Theme::Good, 2.4f, alpha); // a check mark
-    p.Line(24, 30, 36, 17, Theme::Good, 2.4f, alpha);
-    p.Text(52, 13, 14.0f, Theme::Text, text, true, alpha);
+    for (int i = 2; i >= 1; --i) { // a soft shadow
+        const float spread = 5.0f * i;
+        p.Box(-spread, 8 - spread, w + spread, h + 8 + spread, Theme::Ink, 11.0f + spread, 0.12f * alpha);
+    }
+    p.Box(0, 0, w, h, ImVec4(32 / 255.0f, 32 / 255.0f, 35 / 255.0f, 1.0f), 11.0f, 0.95f * alpha);
+    p.Box(14, 14, 58, 58, Theme::White(0.08f), 7.0f, alpha);
+    p.Line(26, 37, 33, 44, Theme::Good, 2.6f, alpha); // a check mark
+    p.Line(33, 44, 47, 29, Theme::Good, 2.6f, alpha);
+    p.Text(72, 25, 15.5f, Theme::Text, text, true, alpha);
 }
 
 // ---- The graffiti guide: how to paint without a gyro (sensor mode). Shown in the middle of the
@@ -1685,9 +2035,10 @@ void FpsCounter() {
                                    bottom ? viewport->WorkPos.y + viewport->WorkSize.y - pad : viewport->WorkPos.y + pad),
                             ImGuiCond_Always, ImVec2(right ? 1.0f : 0.0f, bottom ? 1.0f : 0.0f));
     ImGui::SetNextWindowBgAlpha(s.overlay_opacity / 100.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, Theme::PanelRadius * base_scale);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f * base_scale, 10.0f * base_scale));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, L(14));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(L(18), L(14)));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
+    ImGui::PushStyleColor(ImGuiCol_Border, Theme::White(0.07f));
     ImGui::Begin("##fps", nullptr,
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
                      ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
@@ -1697,9 +2048,11 @@ void FpsCounter() {
     if (big_fps) {
         const float fps = frame_ms_avg > 0.0f ? 1000.0f / frame_ms_avg : 0.0f;
         ImGui::SetWindowFontScale(font_scale * 2.1f);
+        if (font_light) ImGui::PushFont(font_light, 0.0f);
         ImGui::PushStyleColor(ImGuiCol_Text, FpsColor(fps));
         ImGui::Text("%.0f", fps);
         ImGui::PopStyleColor();
+        if (font_light) ImGui::PopFont();
         ImGui::SameLine(0.0f, 6.0f * base_scale);
         ImGui::SetWindowFontScale(font_scale * 0.85f);
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() + ImGui::GetFontSize() * 1.35f);
@@ -1719,6 +2072,7 @@ void FpsCounter() {
     }
     ImGui::SetWindowFontScale(1.0f);
     ImGui::End();
+    ImGui::PopStyleColor();
     ImGui::PopStyleVar(3);
 }
 
@@ -1900,6 +2254,12 @@ void Init(const Vulkan::Instance& instance, vk::Format format, u32 image_count) 
     if (font) {
         font_bold = add_file(fonts + "segoeuisb.ttf", 19.0f);
         if (font_bold) add_dejavu(true);
+        font_light = add_file(fonts + "segoeuil.ttf", 25.0f);
+        if (font_light) add_dejavu(true);
+    }
+    // Segoe Fluent Icons (Windows 11), else Segoe MDL2 Assets (Windows 10): the launcher's glyphs.
+    for (const char* name : {"SegoeIcons.ttf", "segmdl2.ttf"}) {
+        if ((font_icons = add_file(fonts + name, 24.0f))) break;
     }
 #endif
     if (!font) {
