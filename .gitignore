@@ -45,3 +45,4 @@ __pycache__/
 /captures/
 /dev/shader_tests/ps_*
 /dev/shader_tests/*.spv
+/dist/
