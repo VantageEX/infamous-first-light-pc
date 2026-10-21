@@ -129,3 +129,34 @@ def inspect(folder):
         if art.is_file() and getattr(info, attr) is None:
             setattr(info, attr, art)
     return info
+
+
+def renderer_v2_probe(port):
+    """tlg-probe-v2.exe (renderer v2, port/gpu_v2) when this build has it: bin/ (packaged
+    layouts that use it) or out/ (dev builds and this port's packages), else None."""
+    for folder in ('bin', 'out'):
+        probe = Path(port) / folder / 'tlg-probe-v2.exe'
+        if probe.is_file():
+            return probe
+    return None
+
+
+def renderer_env(renderer, game_dir, port):
+    """The environment renderer v2 starts with, as iss_pc's launcher passes it
+    (infamous_run.renderer_v2_env): its defaults file, the game folder its shader index reads,
+    native passes on and unified memory off on Windows (measured: 11-20 FPS with it on, ~40-45 off,
+    RTX 3060); TLG_PROBE picks the v2 probe. Nothing for the core's own renderer."""
+    probe = renderer_v2_probe(port) if renderer == '2' else None
+    if probe is None:
+        return {}
+    env = {}
+    try:
+        for line in (Path(port) / 'gpu_v2' / 'defaults.env').read_text(encoding='utf-8').splitlines():
+            key, sep, value = line.strip().partition('=')
+            if sep and key and not key.startswith('#'):
+                env[key] = value
+    except OSError:
+        pass
+    env.update({'TLG_PROBE': str(probe), 'ISS_GAME_DIR': str(game_dir),
+                'ISS_NATIVE_PASSES': '1', 'ISS_UNIFIED_MEMORY': '0'})
+    return env

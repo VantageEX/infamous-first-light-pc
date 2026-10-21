@@ -1888,9 +1888,9 @@ void Init(const Vulkan::Instance& instance, vk::Format format, u32 image_count) 
     };
     ImFont* font = nullptr;
 #ifdef _WIN32
-    char windir[260] = {};
-    const DWORD n = GetEnvironmentVariableA("WINDIR", windir, sizeof(windir));
-    const std::string fonts = std::string(n ? windir : "C:\\Windows") + "\\Fonts\\";
+    // getenv, not GetEnvironmentVariableA: renderer v2 builds this file without <windows.h>.
+    const char* windir = std::getenv("WINDIR");
+    const std::string fonts = std::string(windir && *windir ? windir : "C:\\Windows") + "\\Fonts\\";
     for (const char* name : {"segoeui.ttf", "segoeuisl.ttf"}) {
         if ((font = add_file(fonts + name, 19.0f))) {
             add_dejavu(true);

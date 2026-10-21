@@ -373,7 +373,7 @@ Item {
             width: parent.width - x - 40
             height: parent.height - y - 28
 
-            function enter() { [displayFirst, languageFirst, advancedRow, logArea][view.page].forceActiveFocus() }
+            function enter() { [launcher.renderers.length > 1 ? displayFirst : displayModeRow, languageFirst, advancedRow, logArea][view.page].forceActiveFocus() }
             Keys.onEscapePressed: sectionRows.itemAt(view.page).forceActiveFocus()
 
             // display
@@ -388,6 +388,14 @@ Item {
                     width: parent.width
                     ChoiceRow {
                         id: displayFirst
+                        label: launcher.tr.renderer
+                        options: launcher.renderers
+                        value: launcher.renderer
+                        visible: launcher.renderers.length > 1
+                        onPicked: v => launcher.setRenderer(v)
+                    }
+                    ChoiceRow {
+                        id: displayModeRow
                         label: launcher.tr.display_mode
                         options: launcher.displayModes
                         value: launcher.core.display_mode.toLowerCase()

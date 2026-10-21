@@ -8,7 +8,7 @@ from PySide6.QtGui import QFontDatabase, QTextCursor
 from . import game, report
 from .i18n import STRINGS, UI_LANGUAGES, Texts
 from .runner import GameRunner, open_folder, system_language_key
-from .settings import (CORE_DEFAULTS, DISPLAY_MODES, FPS_LIMITS, INI_SWITCHES, TEST_BUILD, VERSION_FILE,
+from .settings import (CORE_DEFAULTS, DISPLAY_MODES, FPS_LIMITS, INI_SWITCHES, PORT, TEST_BUILD, VERSION_FILE,
                        Settings, parse_env)
 
 LOG_LINES = 5000
@@ -163,6 +163,26 @@ class Launcher(QObject):
         self.settingsChanged.emit()
 
     @Property('QVariantList', notify=textsChanged)
+    def renderers(self):
+        """The renderers this build can start: renderer v2 only when tlg-probe-v2.exe is there."""
+        options = [{'value': '1', 'text': self.t('renderer_classic')}]
+        if game.renderer_v2_probe(PORT):
+            options.append({'value': '2', 'text': self.t('renderer_v2')})
+        return options
+
+    @Property(str, notify=settingsChanged)
+    def renderer(self):
+        value = self.settings.launcher.get('renderer', '1')
+        return value if value == '1' or game.renderer_v2_probe(PORT) else '1'
+
+    @Slot(str)
+    def setRenderer(self, value):
+        if value in ('1', '2') and value != self.settings.launcher.get('renderer'):
+            self.settings.launcher['renderer'] = value
+            self.settings.save()
+            self.settingsChanged.emit()
+
+    @Property('QVariantList', notify=textsChanged)
     def displayModes(self):
         return [{'value': mode, 'text': self.t(mode)} for mode in DISPLAY_MODES]
 
@@ -210,6 +230,8 @@ class Launcher(QObject):
     def _extra_env(self):
         """The advanced variables (when the box is on); the ones run.py reads from tlg.ini go there."""
         extra = dict(game.FIRST_LIGHT_ENV)
+        if self.info:
+            extra.update(game.renderer_env(self.renderer, self.info.folder, PORT))
         if TEST_BUILD:
             extra.update(game.TEST_BUILD_ENV)
         if self._advanced:
