@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from PySide6.QtCore import Property, QLocale, QObject, QUrl, Signal, Slot
-from PySide6.QtGui import QFontDatabase, QGuiApplication, QIcon, QTextCursor
+from PySide6.QtGui import QFontDatabase, QTextCursor
 
 from . import game, report
 from .i18n import STRINGS, UI_LANGUAGES, Texts
@@ -146,8 +146,6 @@ class Launcher(QObject):
         if self.info and not quiet:
             self.settings.launcher['game_dir'] = str(self.info.folder)
             self.settings.save()
-        if self.info and self.info.icon:
-            QGuiApplication.setWindowIcon(QIcon(str(self.info.icon)))
         self.gameChanged.emit()
         self.settingsChanged.emit()
 

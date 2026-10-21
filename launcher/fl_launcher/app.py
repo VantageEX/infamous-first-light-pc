@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuickControls2 import QQuickStyle
 
@@ -18,6 +18,8 @@ def create(argv):
     QQuickStyle.setStyle('Basic')
     app = QGuiApplication.instance() or QGuiApplication(argv)
     app.setApplicationName('inFAMOUS First Light')
+    # The port's own icon (dev/make_icon.py), on the window and the taskbar.
+    app.setWindowIcon(QIcon(str(Path(__file__).resolve().parent / 'assets' / 'icon.png')))
     app.styleHints().setColorScheme(Qt.ColorScheme.Dark)   # dark title bar
     launcher = Launcher()
     engine = QQmlApplicationEngine()

@@ -48,6 +48,7 @@ printf '%s\n' '# PyInstaller entry: the launcher package run as a program.' \
     --name "$exe_name" --icon "$(cygpath -w "$root/port/packaging/windows/app.ico")" \
     --paths "$(cygpath -w "$root/launcher")" --collect-submodules fl_launcher \
     --add-data "$(cygpath -w "$root/launcher/fl_launcher/qml");fl_launcher/qml" \
+    --add-data "$(cygpath -w "$root/launcher/fl_launcher/assets");fl_launcher/assets" \
     "${hidden[@]}" --distpath port/out/pyi-dist --workpath port/out/pyi-work --specpath port/out \
     "$(cygpath -w "$root/$entry")"
 
