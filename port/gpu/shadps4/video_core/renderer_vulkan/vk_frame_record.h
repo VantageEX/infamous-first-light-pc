@@ -68,6 +68,15 @@ public:
     static void GpuWords(std::string_view key, vk::Buffer buffer, u64 offset, u64 size);
     /// Whether copies queued by GpuHash/GpuWords would be recorded (budget left).
     static bool GpuCopiesAvailable();
+
+    /// TLG_FRAME_RECORD_DUMP=<hash>[,<hash>...] (program hashes, as the lines print them, leading
+    /// zeros optional): the inputs of draws and dispatches with one of these shaders are also
+    /// written whole (up to 4 MiB each) as frame_record[_<n>]_f<frame>_c<command>_<key>.bin.
+    static bool DumpShader(u64 pgm_hash);
+    /// The buffer as the GPU sees it at this point of the stream (memory the GPU wrote).
+    static void GpuDump(std::string_view key, vk::Buffer buffer, u64 offset, u64 size);
+    /// Guest memory, read now.
+    static void GuestDump(std::string_view key, VAddr address, u64 size);
     /// Records the copies queued since the last call. Ends the render pass: call only where
     /// the next draw begins its own (it must not repeat a clear) or outside of one.
     static void FlushGpuCopies();

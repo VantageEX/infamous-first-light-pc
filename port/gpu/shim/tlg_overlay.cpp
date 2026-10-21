@@ -1821,6 +1821,17 @@ bool HandleEvent(const SDL_Event& event) {
             Vulkan::FrameCapture::Request();
             return true;
         }
+        // F12 arms the frame recorder (vk_frame_record.h) by creating its trigger file, for
+        // effects that only show while the player holds a button.
+        static const char* record_trigger = std::getenv("TLG_FRAME_RECORD_TRIGGER");
+        if (down && !event.key.repeat && record_trigger && *record_trigger &&
+            event.key.key == SDLK_F12) {
+            if (std::FILE* f = std::fopen(record_trigger, "wb")) {
+                std::fclose(f);
+                std::printf("Frame record: F12 created the trigger\n");
+            }
+            return true;
+        }
         // tlg: F10 shows or hides the performance overlay (FPS counter) at any time.
         if (down && !event.key.repeat && event.key.key == SDLK_F10) {
             auto& settings = TlgSettings::Get();

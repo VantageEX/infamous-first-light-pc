@@ -54,7 +54,7 @@ public:
     bool IsDumpShaders() { static const auto value = Flag("TLG_DUMP_SHADERS", false); return value; }
     bool IsHdrAllowed() { static const auto value = Flag("TLG_HDR", false); return value; }
     bool IsNullGPU() { static const auto value = Flag("TLG_NULL_GPU", false); return value; }
-    bool IsPatchShaders() { return false; }
+    bool IsPatchShaders() { static const auto value = Flag("TLG_PATCH_SHADERS", false); return value; }
     bool IsPipelineCacheArchived() { return false; }
     bool IsPipelineCacheEnabled() { static const auto value = Flag("TLG_PIPELINE_CACHE", true); return value; }
     bool IsReadbackLinearImagesEnabled() { static const auto value = Flag("TLG_READBACK_LINEAR", false); return value; }

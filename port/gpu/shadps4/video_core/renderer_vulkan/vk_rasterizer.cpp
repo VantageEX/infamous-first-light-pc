@@ -1748,6 +1748,11 @@ void Rasterizer::RecordFrameInputs(const Pipeline* pipeline, const PreparedDraw*
             add(" gpu=skipped_clear");
         }
     }
+    // TLG_FRAME_RECORD_DUMP: a selected shader's inputs are also written whole.
+    bool dump_inputs = false;
+    for (const Shader::Info* info : pipeline->GetStages()) {
+        dump_inputs |= info && FrameRecord::DumpShader(info->pgm_hash);
+    }
     // Memory the GPU wrote is read from the GPU's copy (the guest copy may be stale or
     // read-protected); anything else from guest memory, which the cache mirrors.
     const auto memory_input = [&](const std::string& key, VAddr address, u64 size) {
@@ -1761,8 +1766,14 @@ void Rasterizer::RecordFrameInputs(const Pipeline* pipeline, const PreparedDraw*
             buffer_cache.IsRegionGpuModified(address, size)) {
             const auto [buffer, offset] = buffer_cache.ObtainBuffer(address, u32(size), false);
             FrameRecord::GpuHash("", buffer->Handle(), offset, size);
+            if (dump_inputs) {
+                FrameRecord::GpuDump(key, buffer->Handle(), offset, size);
+            }
         } else {
             add(FrameRecord::GuestHash(address, size));
+            if (dump_inputs) {
+                FrameRecord::GuestDump(key, address, size);
+            }
         }
     };
 

@@ -29,6 +29,7 @@ using AmdGpu::PM4ItOpcode;
 
 constexpr u64 MaxHashBytes = 64_KB;
 constexpr u64 MaxWordBytes = 1_KB;
+constexpr u64 MaxDumpBytes = 4_MB;
 constexpr u32 NumFrames = 2;
 
 const Instance* instance{};
@@ -44,7 +45,14 @@ struct Snapshot {
     u64 offset;
     u64 size;
     bool words;
+    std::string dump; ///< TLG_FRAME_RECORD_DUMP file name; the snapshot is only written out
 };
+/// TLG_FRAME_RECORD_DUMP inputs read from guest memory at the draw.
+struct GuestDumpData {
+    std::string name;
+    std::vector<u8> bytes;
+};
+std::vector<GuestDumpData> guest_dumps;
 struct Copy {
     vk::Buffer source;
     u64 source_offset;
@@ -152,6 +160,7 @@ void Begin() {
     open = false;
     snapshots.clear();
     copies.clear();
+    guest_dumps.clear();
     staging_used = 0;
     snapshots_dropped = 0;
     // TLG_FRAME_RECORD_GPU_MB (default 256): room for the buffers copied from the GPU.
@@ -214,8 +223,14 @@ void Write() {
     const auto dir = DumpDir();
     std::error_code ec;
     std::filesystem::create_directories(dir, ec);
+    // Every recording of a session keeps its files (frame_record_<n>_<frame>.txt from the second
+    // on), so two moments can be compared: the same street with and without an effect.
+    static u32 recording = 0;
+    const u32 number = recording++;
     for (u32 f = 0; f < NumFrames; ++f) {
-        const auto path = (dir / std::format("frame_record_{}.txt", f)).string();
+        const auto path = (dir / (number ? std::format("frame_record_{}_{}.txt", number, f)
+                                         : std::format("frame_record_{}.txt", f)))
+                              .string();
         FILE* out = std::fopen(path.c_str(), "w");
         if (!out) {
             std::printf("Frame record: cannot write %s\n", path.c_str());
@@ -234,6 +249,30 @@ void Write() {
         std::fclose(out);
         std::printf("Frame record: %zu commands written to %s\n", frames[f].size(), path.c_str());
     }
+    // TLG_FRAME_RECORD_DUMP: whole inputs of the selected shaders.
+    const std::string base = number ? std::format("frame_record_{}_", number) : "frame_record_";
+    u32 dumped = 0;
+    const auto dump = [&](const std::string& name, const void* data, u64 size) {
+        const auto path = (dir / (base + name + ".bin")).string();
+        if (FILE* out = std::fopen(path.c_str(), "wb")) {
+            std::fwrite(data, 1, size, out);
+            std::fclose(out);
+            ++dumped;
+        }
+    };
+    for (const auto& snap : snapshots) {
+        if (!snap.dump.empty()) {
+            dump(snap.dump, static_cast<const u8*>(staging_info.pMappedData) + snap.offset, snap.size);
+        }
+    }
+    for (const auto& d : guest_dumps) {
+        dump(d.name, d.bytes.data(), d.bytes.size());
+    }
+    if (dumped) {
+        std::printf("Frame record: %u input buffers dumped (TLG_FRAME_RECORD_DUMP)\n", dumped);
+    }
+    guest_dumps.clear();
+    guest_dumps.shrink_to_fit();
     if (staging) {
         vmaDestroyBuffer(instance->GetAllocator(), staging, staging_allocation);
         staging = VK_NULL_HANDLE;
@@ -459,6 +498,54 @@ void FrameRecord::GpuHash(std::string_view key, vk::Buffer buffer, u64 offset, u
 
 void FrameRecord::GpuWords(std::string_view key, vk::Buffer buffer, u64 offset, u64 size) {
     QueueCopy(key, buffer, offset, size, true);
+}
+
+bool FrameRecord::DumpShader(u64 pgm_hash) {
+    static const std::vector<u64> hashes = [] {
+        std::vector<u64> out;
+        const char* env = std::getenv("TLG_FRAME_RECORD_DUMP");
+        for (const char* p = env; p && *p;) {
+            char* end = nullptr;
+            const u64 value = std::strtoull(p, &end, 16);
+            if (end == p) {
+                break;
+            }
+            out.push_back(value);
+            p = *end ? end + 1 : end;
+        }
+        return out;
+    }();
+    return std::find(hashes.begin(), hashes.end(), pgm_hash) != hashes.end();
+}
+
+static std::string DumpName(std::string_view key) {
+    const size_t command = frames[frame].empty() ? 0 : frames[frame].size() - 1;
+    std::string name = std::format("f{}_c{}_{}", frame, command, key);
+    for (char& c : name) {
+        if (!std::isalnum(static_cast<unsigned char>(c)) && c != '_') {
+            c = '_';
+        }
+    }
+    return name;
+}
+
+void FrameRecord::GpuDump(std::string_view key, vk::Buffer buffer, u64 offset, u64 size) {
+    size = std::min(size, MaxDumpBytes) & ~u64(3);
+    if (!buffer || !size || !staging || staging_used + size > staging_size) {
+        ++snapshots_dropped;
+        return;
+    }
+    copies.push_back({buffer, offset, staging_used, size});
+    snapshots.push_back({staging_used, size, false, DumpName(key)});
+    staging_used += (size + 15) & ~u64(15);
+}
+
+void FrameRecord::GuestDump(std::string_view key, VAddr address, u64 size) {
+    size = std::min(size, MaxDumpBytes);
+    GuestDumpData d{DumpName(key), std::vector<u8>(size)};
+    if (address && size && SafeCopy(address, size, d.bytes.data())) {
+        guest_dumps.push_back(std::move(d));
+    }
 }
 
 void FrameRecord::FlushGpuCopies() {

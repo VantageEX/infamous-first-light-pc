@@ -42,3 +42,6 @@ __pycache__/
 /CUSA*/
 /game/
 /shots/
+/captures/
+/dev/shader_tests/ps_*
+/dev/shader_tests/*.spv
