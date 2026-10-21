@@ -254,6 +254,7 @@ Presenter::~Presenter() {
     const vk::Device device = instance.GetDevice();
     for (auto& frame : present_frames) {
         vmaDestroyImage(instance.GetAllocator(), frame.image, frame.allocation);
+        TlgOverlay::ForgetBackdrop(frame.image_view);
         device.destroyImageView(frame.image_view);
         device.destroyFence(frame.present_done);
     }
@@ -266,6 +267,7 @@ bool Presenter::IsVideoOutSurface(const AmdGpu::ColorBuffer& color_buffer) const
 void Presenter::RecreateFrame(Frame* frame, u32 width, u32 height) {
     const vk::Device device = instance.GetDevice();
     if (frame->image_view) {
+        TlgOverlay::ForgetBackdrop(frame->image_view);
         device.destroyImageView(frame->image_view);
     }
     if (frame->image) {
@@ -882,6 +884,8 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
                                vk::PipelineStageFlagBits::eAllCommands,
                                vk::DependencyFlagBits::eByRegion, {}, {}, post_barriers);
         if (overlay) {
+            // tlg: the frame (now General) under the overlay's frosted panels.
+            TlgOverlay::SetBackdrop(frame->image_view, vk::ImageLayout::eGeneral, fit);
             TlgOverlay::Render(cmdbuf, swapchain.ImageView(), extent);
             const vk::ImageMemoryBarrier to_present{
                 .srcAccessMask = vk::AccessFlagBits::eColorAttachmentWrite,

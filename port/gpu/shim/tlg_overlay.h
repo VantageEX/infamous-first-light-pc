@@ -41,6 +41,13 @@ bool Visible();
 /// Present thread: draws into `view` (layout ColorAttachmentOptimal).
 void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent);
 
+/// Present thread, before Render: the game's frame of this present, sampled as `view` in
+/// `layout`, drawn at `where` on the swapchain image. The menus blur it behind their glass (the
+/// launcher's frosted panels); a present without it draws them on a plain dark glass.
+void SetBackdrop(vk::ImageView view, vk::ImageLayout layout, vk::Rect2D where);
+/// Before the presenter destroys a frame's view: drops the overlay's descriptor for it.
+void ForgetBackdrop(vk::ImageView view);
+
 /// A short message at the top of the screen for `seconds` (any thread), e.g. an input mode change.
 void Notice(const std::string& text, float seconds);
 

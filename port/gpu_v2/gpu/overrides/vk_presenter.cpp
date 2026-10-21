@@ -523,6 +523,7 @@ Presenter::~Presenter() {
     const vk::Device device = instance.GetDevice();
     for (auto& frame : present_frames) {
         vmaDestroyImage(instance.GetAllocator(), frame.image, frame.allocation);
+        TlgOverlay::ForgetBackdrop(frame.image_view);
         device.destroyImageView(frame.image_view);
         device.destroyFence(frame.present_done);
     }
@@ -538,6 +539,7 @@ void Presenter::RecreateFrame(Frame* frame, u32 width, u32 height) {
         ImGui::Vulkan::RemoveTexture(frame->imgui_texture);
     }
     if (frame->image_view) {
+        TlgOverlay::ForgetBackdrop(frame->image_view);
         device.destroyImageView(frame->image_view);
     }
     if (frame->image) {
@@ -1015,6 +1017,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
                                vk::PipelineStageFlagBits::eColorAttachmentOutput,
                                vk::DependencyFlagBits::eByRegion, {}, {}, pre_barriers);
 
+        vk::Rect2D backdrop_rect{}; // tlg: where the frame lands, for the overlay's frosted panels
         { // Draw the game
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2{0.0f});
             ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
@@ -1058,6 +1061,11 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
 
                 const auto imgRect =
                     FitImage(game_width, game_height, (s32)contentArea.x, (s32)contentArea.y);
+                {
+                    const ImVec2 origin = ImGui::GetCursorScreenPos();
+                    backdrop_rect = vk::Rect2D{{s32(origin.x) + imgRect.offset.x, s32(origin.y) + imgRect.offset.y},
+                                               imgRect.extent};
+                }
                 ImVec2 offset{
                     static_cast<float>(imgRect.offset.x),
                     static_cast<float>(imgRect.offset.y),
@@ -1079,6 +1087,9 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
             ImGui::PopStyleColor();
         }
         ImGui::Core::Render(cmdbuf, swapchain_image_view, swapchain.GetExtent());
+        if (backdrop_rect.extent.width) {
+            TlgOverlay::SetBackdrop(frame->image_view, vk::ImageLayout::eShaderReadOnlyOptimal, backdrop_rect);
+        }
         TlgOverlay::Render(cmdbuf, swapchain_image_view, swapchain.GetExtent());
 
         if (capture_with_overlays_count > 0) {

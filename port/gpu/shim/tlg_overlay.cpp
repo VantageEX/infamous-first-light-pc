@@ -147,6 +147,43 @@ ImFont* font_bold = nullptr;
 ImFont* font_light = nullptr;
 ImFont* font_icons = nullptr;
 
+// The game's frame behind the panels (SetBackdrop): the view the presenter gave for this present,
+// and a descriptor per view the overlay has sampled (ForgetBackdrop drops one). imgui_mutex.
+struct BackdropSet {
+    VkImageView view;
+    VkImageLayout layout;
+    VkDescriptorSet set;
+};
+std::vector<BackdropSet> backdrop_sets;
+VkImageView backdrop_view = VK_NULL_HANDLE; // this present's frame (null: none)
+VkImageLayout backdrop_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+ImRect backdrop_where;                       // where the frame is on the swapchain image
+ImTextureRef backdrop_texture;
+bool backdrop_ready = false;                 // backdrop_texture holds this present's frame
+
+// The game behind a panel, frosted as the launcher's glass: the frame drawn 25 times along a
+// spiral (radius 44 launcher pixels), layer i at 1/(i+1) so that the layers average to a blur.
+// False when this present has no frame: the caller then draws a more opaque glass.
+bool Frost(ImDrawList* dl, ImVec2 a, ImVec2 b, float rounding) {
+    const float rw = backdrop_where.GetWidth(), rh = backdrop_where.GetHeight();
+    if (!backdrop_ready || rw < 1.0f || rh < 1.0f) return false;
+    constexpr int Taps = 25;
+    const float radius = 44.0f * base_scale;
+    for (int i = 0; i < Taps; ++i) {
+        float dx = 0.0f, dy = 0.0f;
+        if (i) {
+            const float r = radius * std::sqrt(float(i) / float(Taps - 1)), angle = float(i) * 2.39996f;
+            dx = std::cos(angle) * r;
+            dy = std::sin(angle) * r;
+        }
+        const ImVec2 uv0((a.x + dx - backdrop_where.Min.x) / rw, (a.y + dy - backdrop_where.Min.y) / rh);
+        const ImVec2 uv1((b.x + dx - backdrop_where.Min.x) / rw, (b.y + dy - backdrop_where.Min.y) / rh);
+        dl->AddImageRounded(backdrop_texture, a, b, uv0, uv1, IM_COL32(255, 255, 255, int(255.0f / float(i + 1) + 0.5f)),
+                            rounding);
+    }
+    return true;
+}
+
 // Present rate for the FPS counter.
 std::chrono::steady_clock::time_point last_present{};
 float frame_ms_avg = 0.0f;
@@ -1066,21 +1103,18 @@ void Menu() {
     const ImVec2 size(std::min(L(1240), viewport->WorkSize.x * 0.94f), std::min(L(740), viewport->WorkSize.y * 0.92f));
     const ImVec2 at(viewport->WorkPos.x + (viewport->WorkSize.x - size.x) / 2,
                     viewport->WorkPos.y + (viewport->WorkSize.y - size.y) / 2);
-    // The game dimmed behind the panel, and the panel's soft shadow.
+    // The game dimmed behind the panel (no drawn shadow: stepped layers read as a halo).
     ImDrawList* back = ImGui::GetBackgroundDrawList();
     back->AddRectFilled(viewport->WorkPos, ImVec2(viewport->WorkPos.x + viewport->WorkSize.x, viewport->WorkPos.y + viewport->WorkSize.y),
                         Theme::U32(Theme::Ink, 0.42f));
-    for (int i = 4; i >= 1; --i) {
-        const float spread = L(10.0f * i);
-        back->AddRectFilled(ImVec2(at.x - spread, at.y + L(20) - spread), ImVec2(at.x + size.x + spread, at.y + size.y + L(20) + spread),
-                            Theme::U32(Theme::Ink, 0.09f), L(18) + spread);
-    }
+    // The game frosted behind the panel, then the launcher's tint over it (more opaque without).
+    const bool frosted = Frost(back, at, ImVec2(at.x + size.x, at.y + size.y), L(18));
     ImGui::SetNextWindowPos(at, ImGuiCond_Always);
     ImGui::SetNextWindowSize(size, ImGuiCond_Always);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, L(18));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(18 / 255.0f, 18 / 255.0f, 22 / 255.0f, 0.9f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(18 / 255.0f, 18 / 255.0f, 22 / 255.0f, frosted ? 0.66f : 0.9f));
     ImGui::PushStyleColor(ImGuiCol_Border, Theme::White(0.07f));
     const bool shown = ImGui::Begin("##menu", nullptr,
                                     ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings |
@@ -1360,13 +1394,10 @@ struct SavePainter {
             dl->AddCircle(c, 7.0f * k, Theme::U32(mark), 0, 2.6f * k);
         }
     }
-    // The panel: a soft shadow, the launcher's glass, a faint border; the credit under its corner.
+    // The panel: the launcher's glass and a faint border; the credit under its corner.
     void Panel(float w, float h) const {
-        for (int i = 4; i >= 1; --i) {
-            const float spread = 10.0f * i;
-            Box(-spread, 20 - spread, w + spread, h + 20 + spread, Theme::Ink, kPanelRadius + spread, 0.09f);
-        }
-        Box(0, 0, w, h, ImVec4(18 / 255.0f, 18 / 255.0f, 22 / 255.0f, 1.0f), kPanelRadius, 0.93f);
+        const bool frosted = Frost(dl, P(0, 0), P(w, h), kPanelRadius * k);
+        Box(0, 0, w, h, ImVec4(18 / 255.0f, 18 / 255.0f, 22 / 255.0f, 1.0f), kPanelRadius, frosted ? 0.66f : 0.93f);
         Frame(0, 0, w, h, Theme::White(0.07f), kPanelRadius, 1.0f);
         const std::string credit = "@hayatog-dev";
         Text(w - 8.0f - Width(15.0f, credit), h + 14.0f, 15.0f, Theme::Faint, credit, false, 0.7f);
@@ -1403,21 +1434,15 @@ struct SavePainter {
         Box(x, y, x + w, y + h, Theme::White(0.06f), kPictureRadius);
     }
     // The width of a pill for `label` (with its controller button when `glyph` >= 0).
-    float PillWidth(const char* label, int glyph, float min_w = 160) const {
-        return std::max(min_w, Width(22.0f, label, true) + (glyph >= 0 ? 44.0f : 0.0f) + 60.0f);
+    float PillWidth(const char* label, int, float min_w = 160) const {
+        return std::max(min_w, Width(22.0f, label, true) + 60.0f);
     }
     // The launcher's pill (PillButton.qml): white with black text when focused, frosted
-    // otherwise, 60 pixels high; the controller button on its left.
-    void Pill(float x0, float y0, float x1, const char* label, int glyph, bool focused) const {
-        const float y1 = y0 + 60;
-        Box(x0, y0, x1, y1, focused ? Theme::Text : Theme::White(0.14f), 30.0f);
-        const float text_w = Width(22.0f, label, true), inner = text_w + (glyph >= 0 ? 44.0f : 0.0f);
-        float x = x0 + (x1 - x0 - inner) / 2;
-        if (glyph >= 0) {
-            Button(x + 15, y0 + 30, glyph, focused);
-            x += 44;
-        }
-        Text(x, y0 + 30 - 15, 22.0f, focused ? Theme::Ink : Theme::Text, label, true);
+    // otherwise, 60 pixels high. (`glyph`, the controller button, is told by the key hints.)
+    void Pill(float x0, float y0, float x1, const char* label, int, bool focused) const {
+        Box(x0, y0, x1, y0 + 60, focused ? Theme::Text : Theme::White(0.14f), 30.0f);
+        const float text_w = Width(22.0f, label, true);
+        Text(x0 + (x1 - x0 - text_w) / 2, y0 + 30 - 15, 22.0f, focused ? Theme::Ink : Theme::Text, label, true);
     }
     // Kept for the callers that size their buttons by corners (46 high in the old layout).
     void ActionButton(float x0, float y0, float x1, float, const char* label, int glyph, bool focused) const {
@@ -1555,8 +1580,12 @@ void SaveListBox() {
     // Header: the launcher's tile with a floppy, the title, the game and the number of saves.
     const int saves = count - int(std::count_if(save_rows.begin(), save_rows.end(), [](const SaveRow& r) { return r.is_new; }));
     char sub[200];
-    const char* game = std::getenv("TLG_APP_NAME");
-    std::snprintf(sub, sizeof(sub), "%s%s%d %s", game && *game ? game : "", game && *game ? " · " : "", saves,
+    static const std::string game = [] {
+        const std::string_view title = Common::ElfInfo::Instance().Title();
+        const char* app_name = std::getenv("TLG_APP_NAME");
+        return std::string(!title.empty() ? title : app_name && *app_name ? app_name : "");
+    }();
+    std::snprintf(sub, sizeof(sub), "%s%s%d %s", game.c_str(), game.empty() ? "" : " · ", saves,
                   Plural(saves, "save", "saves", "сохранение", "сохранения", "сохранений"));
     p.Header(40, 30, 0xE74E, SaveTitle(save_kind), sub);
     p.Line(40, header_h, w - 40, header_h, Theme::Line, 1.0f);
@@ -1590,8 +1619,10 @@ void SaveListBox() {
     const float bw = p.PillWidth(back, 1, 160);
     p.Pill(x, by, x + bw, back, 1, false);
     x += bw + 28;
-    const std::string hint = TL("Enter / click: choose · Esc / right click: back",
-                                "Enter / щелчок — выбрать · Esc / правая кнопка — назад");
+    const std::string hint = TL(PadText("Cross / Enter: choose · Circle / Esc: back", "A / Enter: choose · B / Esc: back",
+                                        "B / Enter: choose · A / Esc: back"),
+                                PadText("Крестик / Enter — выбрать · Кружок / Esc — назад",
+                                        "A / Enter — выбрать · B / Esc — назад", "B / Enter — выбрать · A / Esc — назад"));
     p.TextRight(w - 40, by + 19, 17.0f, Theme::Faint, p.Fit(17.0f, hint, w - 40 - x));
 }
 
@@ -1756,11 +1787,8 @@ void SaveToastBox(SaveClock::time_point now) {
     const float w = std::max(560.0f, 22 + 68 + 20 + std::max(p.Width(23.0f, text, true), p.Width(20.0f, clock)) + 28), h = 104;
     p.at = ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - (40 + w - slide) * k,
                   viewport->WorkPos.y + viewport->WorkSize.y - (40 + h) * k);
-    for (int i = 3; i >= 1; --i) { // a soft shadow
-        const float spread = 8.0f * i;
-        p.Box(-spread, 18 - spread, w + spread, h + 18 + spread, Theme::Ink, 16.0f + spread, 0.1f * alpha);
-    }
-    p.Box(0, 0, w, h, ImVec4(32 / 255.0f, 32 / 255.0f, 35 / 255.0f, 1.0f), 16.0f, 0.95f * alpha);
+    const bool frosted = alpha > 0.98f && Frost(p.dl, p.P(0, 0), p.P(w, h), 16.0f * k);
+    p.Box(0, 0, w, h, ImVec4(32 / 255.0f, 32 / 255.0f, 35 / 255.0f, 1.0f), 16.0f, (frosted ? 0.72f : 0.95f) * alpha);
     p.Box(22, 18, 90, 86, Theme::White(0.08f), kItemRadius, alpha);
     if (font_icons) {
         p.Glyph(0xE73E, 56, 52, 32, Theme::Good, alpha);
@@ -1981,120 +2009,100 @@ ImVec4 FpsColor(float fps) {
     return fps >= 55.0f ? Theme::Good : fps >= 28.0f ? Theme::Warn : Theme::Bad;
 }
 
-// The frame time curve (a "net graph"): the last present intervals, guides at 60 and 30 FPS,
-// stutters marked in red.
-void FrameGraph(float width, float height, float text_scale) {
-    ImDrawList* draw = ImGui::GetWindowDrawList();
-    const ImVec2 origin = ImGui::GetCursorScreenPos();
-    const ImVec2 end{origin.x + width, origin.y + height};
-    const float rounding = Theme::ItemRadius * base_scale;
-    draw->AddRectFilled(origin, end, ImGui::GetColorU32(ImVec4(1, 1, 1, 0.05f)), rounding);
-    // Scale: at least 40 ms, else the slowest frame plus a margin (at most 100 ms).
-    float top_ms = 40.0f;
-    for (size_t i = 0; i < frame_history_count; ++i) {
-        top_ms = std::max(top_ms, frame_history[i] * 1.15f);
-    }
-    top_ms = std::min(top_ms, 100.0f);
-    const auto y_of = [&](float ms) { return end.y - std::min(ms, top_ms) / top_ms * height; };
-    const ImU32 guide = ImGui::GetColorU32(ImVec4(1, 1, 1, 0.16f));
-    const ImU32 label = ImGui::GetColorU32(Theme::Muted);
-    ImFont* font = ImGui::GetFont();
-    const float label_size = ImGui::GetFontSize() * 0.62f;
-    for (const auto& [ms, text] : {std::pair{1000.0f / 60.0f, "60"}, std::pair{1000.0f / 30.0f, "30"}}) {
-        const float y = y_of(ms);
-        draw->AddLine(ImVec2(origin.x + 4.0f, y), ImVec2(end.x - 4.0f, y), guide, 1.0f);
-        draw->AddText(font, label_size, ImVec2(end.x - label_size * 1.4f, y - label_size - 1.0f), label, text);
-    }
-    if (frame_history_count >= 2) {
-        const size_t n = frame_history_count;
-        const size_t first = (frame_history_next + frame_history.size() - n) % frame_history.size();
-        float avg = 0.0f;
-        for (size_t i = 0; i < n; ++i) {
-            avg += frame_history[i];
-        }
-        avg /= float(n);
-        std::vector<ImVec2> points(n);
-        for (size_t i = 0; i < n; ++i) {
-            const float ms = frame_history[(first + i) % frame_history.size()];
-            points[i] = ImVec2(origin.x + 4.0f + (width - 8.0f) * float(i) / float(frame_history.size() - 1),
-                               y_of(ms));
-        }
-        // a soft fill under the curve, then the curve
-        const ImU32 fill = ImGui::GetColorU32(ImVec4(Theme::Accent.x, Theme::Accent.y, Theme::Accent.z, 0.14f));
-        for (size_t i = 1; i < n; ++i) {
-            draw->AddQuadFilled(points[i - 1], points[i], ImVec2(points[i].x, end.y - 1.0f),
-                                ImVec2(points[i - 1].x, end.y - 1.0f), fill);
-        }
-        draw->AddPolyline(points.data(), int(n), ImGui::GetColorU32(Theme::Accent), ImDrawFlags_None,
-                          1.6f * base_scale);
-        const ImU32 stutter = ImGui::GetColorU32(Theme::Bad);
-        for (size_t i = 0; i < n; ++i) {
-            const float ms = frame_history[(first + i) % frame_history.size()];
-            if (ms > 2.0f * avg && ms > 25.0f) {
-                draw->AddCircleFilled(points[i], 2.6f * base_scale, stutter);
-            }
-        }
-    }
-    ImGui::Dummy(ImVec2(width, height));
-    (void)text_scale;
-}
-
+// The performance overlay as the mock-up's card: the FPS large (Light, coloured by the rate) with
+// the frame time on its right, the other items in one muted line, the frame time curve (guides
+// at 60 and 30 FPS, stutters in red) and its statistics; the launcher's glass behind. The
+// settings' scale, corner, opacity and items apply.
 void FpsCounter() {
     namespace P = TlgPerfStats;
     const auto& s = TlgSettings::Get();
     const unsigned items = s.overlay_items;
-    const bool big_fps = items & P::Fps, graph = items & P::Graph;
-    const std::string text = OverlayText(P::Fps);
-    if (text.empty() && !big_fps && !graph) {
+    const bool big_fps = items & P::Fps, frame_time = items & P::FrameTime, graph = items & P::Graph;
+    const std::string text = OverlayText(P::Fps | P::FrameTime);
+    if (text.empty() && !big_fps && !frame_time && !graph) {
         return;
     }
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    const float pad = 14.0f * base_scale;
+    const float k = base_scale * s.overlay_scale / 100.0f;
+    SavePainter p{ImGui::GetForegroundDrawList(), ImGui::GetFont(), k, {}};
+    const float fps = frame_ms_avg > 0.0f ? 1000.0f / frame_ms_avg : 0.0f;
+    char fps_text[16], ms_text[32];
+    std::snprintf(fps_text, sizeof(fps_text), "%.0f", fps);
+    std::snprintf(ms_text, sizeof(ms_text), "%.1f %s", frame_ms_avg, TL("ms", "мс"));
+    if (UiRussian()) {
+        for (char* c = ms_text; *c; ++c) if (*c == '.') *c = ',';
+    }
+    const float pad_x = 22, pad_y = 18, graph_w = 396, graph_h = 64;
+    float w = graph ? graph_w : 0.0f;
+    if (big_fps || frame_time) w = std::max(w, p.LightWidth(44.0f, fps_text) + 60 + p.Width(17.0f, ms_text) + 24);
+    if (!text.empty()) w = std::max(w, std::min(p.Width(16.0f, text), 560.0f));
+    const float text_h = text.empty() ? 0.0f : p.Height(16.0f, text, w);
+    float h = pad_y * 2;
+    if (big_fps || frame_time) h += 44 + 8;
+    if (!text.empty()) h += text_h + 8;
+    if (graph) h += graph_h + 8 + 22;
+    h -= 8;
+    w += pad_x * 2;
     const int corner = s.overlay_corner;
     const bool right = corner == 1 || corner == 3, bottom = corner >= 2;
-    ImGui::SetNextWindowPos(ImVec2(right ? viewport->WorkPos.x + viewport->WorkSize.x - pad : viewport->WorkPos.x + pad,
-                                   bottom ? viewport->WorkPos.y + viewport->WorkSize.y - pad : viewport->WorkPos.y + pad),
-                            ImGuiCond_Always, ImVec2(right ? 1.0f : 0.0f, bottom ? 1.0f : 0.0f));
-    ImGui::SetNextWindowBgAlpha(s.overlay_opacity / 100.0f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, L(14));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(L(18), L(14)));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
-    ImGui::PushStyleColor(ImGuiCol_Border, Theme::White(0.07f));
-    ImGui::Begin("##fps", nullptr,
-                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
-                     ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
-                     ImGuiWindowFlags_NoFocusOnAppearing);
-    const float font_scale = s.overlay_scale / 100.0f;
-    const FrameStats stats = graph ? ComputeFrameStats() : FrameStats{};
-    if (big_fps) {
-        const float fps = frame_ms_avg > 0.0f ? 1000.0f / frame_ms_avg : 0.0f;
-        ImGui::SetWindowFontScale(font_scale * 2.1f);
-        if (font_light) ImGui::PushFont(font_light, 0.0f);
-        ImGui::PushStyleColor(ImGuiCol_Text, FpsColor(fps));
-        ImGui::Text("%.0f", fps);
-        ImGui::PopStyleColor();
-        if (font_light) ImGui::PopFont();
-        ImGui::SameLine(0.0f, 6.0f * base_scale);
-        ImGui::SetWindowFontScale(font_scale * 0.85f);
-        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + ImGui::GetFontSize() * 1.35f);
-        ImGui::TextColored(Theme::Muted, "FPS");
+    const float mx = 40 * base_scale, my = 36 * base_scale;
+    p.at = ImVec2(right ? viewport->WorkPos.x + viewport->WorkSize.x - mx - w * k : viewport->WorkPos.x + mx,
+                  bottom ? viewport->WorkPos.y + viewport->WorkSize.y - my - h * k : viewport->WorkPos.y + my);
+    const float opacity = s.overlay_opacity / 100.0f;
+    if (opacity > 0.0f) {
+        p.Box(0, 0, w, h, ImVec4(28 / 255.0f, 28 / 255.0f, 30 / 255.0f, 1.0f), 14.0f, 0.78f * opacity);
+        p.Frame(0, 0, w, h, Theme::White(0.07f), 14.0f, 1.0f, opacity);
     }
-    ImGui::SetWindowFontScale(font_scale);
+    float y = pad_y;
+    if (big_fps || frame_time) {
+        float x = pad_x;
+        if (big_fps) {
+            p.TextLight(x, y - 6, 44.0f, FpsColor(fps), fps_text);
+            x += p.LightWidth(44.0f, fps_text) + 10;
+            p.Text(x, y + 20, 17.0f, Theme::Muted, "FPS");
+        }
+        if (frame_time) p.TextRight(w - pad_x, y + 20, 17.0f, Theme::Muted, ms_text);
+        y += 44 + 8;
+    }
     if (!text.empty()) {
-        ImGui::TextUnformatted(text.c_str());
+        p.Text(pad_x, y, 16.0f, Theme::Muted, text, false, 1.0f, w - pad_x * 2);
+        y += text_h + 8;
     }
-    if (graph) {
-        ImGui::Dummy(ImVec2(0.0f, 2.0f * base_scale));
-        FrameGraph(250.0f * base_scale * font_scale, 64.0f * base_scale * font_scale, font_scale);
-        ImGui::SetWindowFontScale(font_scale * 0.8f);
-        ImGui::TextColored(Theme::Muted, "%s %.0f   %s %.0f   1%% %.0f   %s %d", TL("min", "мин"), stats.min_fps,
-                           TL("avg", "сред"), stats.avg_fps, stats.low1_fps, TL("stutters", "фризы"),
-                           stats.stutters);
+    if (!graph) return;
+    // The curve: the last present intervals over at least 40 ms (at most 100).
+    const float gx = pad_x, gy = y;
+    p.Box(gx, gy, gx + graph_w, gy + graph_h, Theme::White(0.05f), 4.0f);
+    float top_ms = 40.0f;
+    for (size_t i = 0; i < frame_history_count; ++i) top_ms = std::max(top_ms, frame_history[i] * 1.15f);
+    top_ms = std::min(top_ms, 100.0f);
+    const auto y_of = [&](float ms) { return gy + graph_h - std::min(ms, top_ms) / top_ms * graph_h; };
+    for (const float ms : {1000.0f / 60.0f, 1000.0f / 30.0f}) { // dashed guides
+        const float ly = y_of(ms);
+        for (float x = gx; x < gx + graph_w; x += 7) p.Line(x, ly, std::min(x + 3, gx + graph_w), ly, Theme::White(0.12f), 1.0f);
     }
-    ImGui::SetWindowFontScale(1.0f);
-    ImGui::End();
-    ImGui::PopStyleColor();
-    ImGui::PopStyleVar(3);
+    const FrameStats stats = ComputeFrameStats();
+    if (frame_history_count >= 2) {
+        const size_t n = frame_history_count;
+        const size_t first = (frame_history_next + frame_history.size() - n) % frame_history.size();
+        float avg = 0.0f;
+        for (size_t i = 0; i < n; ++i) avg += frame_history[i];
+        avg /= float(n);
+        std::vector<ImVec2> points(n);
+        for (size_t i = 0; i < n; ++i) {
+            const float ms = frame_history[(first + i) % frame_history.size()];
+            points[i] = p.P(gx + graph_w * float(i) / float(frame_history.size() - 1), y_of(ms));
+        }
+        p.dl->AddPolyline(points.data(), int(n), Theme::U32(Theme::Accent), ImDrawFlags_None, 2.0f * k);
+        for (size_t i = 0; i < n; ++i) {
+            const float ms = frame_history[(first + i) % frame_history.size()];
+            if (ms > 2.0f * avg && ms > 25.0f) p.dl->AddCircleFilled(points[i], 3.5f * k, Theme::U32(Theme::Bad));
+        }
+    }
+    y += graph_h + 8;
+    char line[160];
+    std::snprintf(line, sizeof(line), "%s %.0f     %s %.0f     1%% %.0f     %s %d", TL("min", "мин"), stats.min_fps,
+                  TL("avg", "сред"), stats.avg_fps, stats.low1_fps, TL("stutters", "фризы"), stats.stutters);
+    p.Text(pad_x, y, 15.0f, Theme::Faint, line);
 }
 
 std::string notice_text;
@@ -2106,11 +2114,8 @@ void NoticeBox() {
     SavePainter p{ImGui::GetForegroundDrawList(), ImGui::GetFont(), k, {}};
     const float w = std::min(p.Width(23.0f, notice_text) + 56, viewport->WorkSize.x / k - 80), h = 72;
     p.at = ImVec2(viewport->WorkPos.x + (viewport->WorkSize.x - w * k) / 2, viewport->WorkPos.y + 40 * k);
-    for (int i = 2; i >= 1; --i) {
-        const float spread = 8.0f * i;
-        p.Box(-spread, 14 - spread, w + spread, h + 14 + spread, Theme::Ink, 16.0f + spread, 0.1f);
-    }
-    p.Box(0, 0, w, h, ImVec4(32 / 255.0f, 32 / 255.0f, 35 / 255.0f, 1.0f), 16.0f, 0.95f);
+    const bool frosted = Frost(p.dl, p.P(0, 0), p.P(w, h), 16.0f * k);
+    p.Box(0, 0, w, h, ImVec4(32 / 255.0f, 32 / 255.0f, 35 / 255.0f, 1.0f), 16.0f, frosted ? 0.72f : 0.95f);
     p.Text(28, 21, 23.0f, Theme::Text, p.Fit(23.0f, notice_text, w - 56));
 }
 
@@ -2813,6 +2818,28 @@ void SetTextEntry(bool active, const std::string& prompt, const std::string& tex
     text_entry_text = text;
 }
 
+void SetBackdrop(vk::ImageView view, vk::ImageLayout layout, vk::Rect2D where) {
+    std::scoped_lock lock{imgui_mutex};
+    backdrop_view = static_cast<VkImageView>(view);
+    backdrop_layout = static_cast<VkImageLayout>(layout);
+    backdrop_where = ImRect(float(where.offset.x), float(where.offset.y), float(where.offset.x + s32(where.extent.width)),
+                            float(where.offset.y + s32(where.extent.height)));
+}
+
+void ForgetBackdrop(vk::ImageView view) {
+    const ContextScope context_scope;
+    std::scoped_lock lock{imgui_mutex};
+    for (auto it = backdrop_sets.begin(); it != backdrop_sets.end();) {
+        if (it->view == static_cast<VkImageView>(view)) {
+            ImGui_ImplVulkan_RemoveTexture(it->set);
+            it = backdrop_sets.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    if (backdrop_view == static_cast<VkImageView>(view)) backdrop_view = VK_NULL_HANDLE;
+}
+
 void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
     const ContextScope context_scope;
     // Present interval for the FPS readout (measured also while nothing is drawn).
@@ -2826,15 +2853,31 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
         frame_history_count = std::min(frame_history_count + 1, frame_history.size());
     }
     ConfirmRestart();
+    std::unique_lock lock{imgui_mutex};
+    // This present's frame for the frosted panels: its descriptor, made once per view.
+    backdrop_ready = false;
+    if (backdrop_view != VK_NULL_HANDLE && initialized) {
+        auto it = std::find_if(backdrop_sets.begin(), backdrop_sets.end(), [](const BackdropSet& b) {
+            return b.view == backdrop_view && b.layout == backdrop_layout;
+        });
+        if (it == backdrop_sets.end()) {
+            const VkDescriptorSet set = ImGui_ImplVulkan_AddTexture(backdrop_view, backdrop_layout);
+            if (set != VK_NULL_HANDLE) it = backdrop_sets.insert(backdrop_sets.end(), {backdrop_view, backdrop_layout, set});
+        }
+        if (it != backdrop_sets.end()) {
+            backdrop_texture = ImTextureRef(ImTextureID(it->set));
+            backdrop_ready = true;
+        }
+    }
+    backdrop_view = VK_NULL_HANDLE; // each present gives its own
     if (!Visible()) {
         return;
     }
-    std::scoped_lock lock{imgui_mutex};
     ImGuiIO& io = ImGui::GetIO();
     io.DisplaySize = ImVec2(float(extent.width), float(extent.height));
     io.DeltaTime = ms > 0.0f && ms < 1000.0f ? ms / 1000.0f : 1.0f / 60.0f;
     // UI scale follows the display height (1080p = 1).
-    const float scale = std::max(float(extent.height) / 1080.0f, 0.75f);
+    const float scale = std::max(float(extent.height) / 1080.0f, 0.6f);
     if (std::abs(scale - base_scale) > 0.01f) {
         ImGuiStyle& style = ImGui::GetStyle();
         style.ScaleAllSizes(scale / base_scale);
