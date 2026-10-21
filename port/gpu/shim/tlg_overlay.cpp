@@ -1268,42 +1268,12 @@ void HealthDisplay() {
 }
 
 // The game's text dialog: what is typed, and how to finish (keyboard or controller).
-void TextEntryBox() {
-    const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f,
-                                   viewport->WorkPos.y + viewport->WorkSize.y * 0.42f),
-                            ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSizeConstraints(ImVec2(viewport->WorkSize.x * 0.32f, 0.0f),
-                                        ImVec2(viewport->WorkSize.x * 0.8f, FLT_MAX));
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, Theme::Fade(Theme::Popover, Theme::PopoverAlpha));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.0f * base_scale, 16.0f * base_scale));
-    ImGui::Begin("##text_entry", nullptr,
-                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
-                     ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
-                     ImGuiWindowFlags_NoFocusOnAppearing);
-    ImGui::TextColored(Theme::Muted, "%s", text_entry_prompt.c_str());
-    ImGui::Separator();
-    ImGui::SetWindowFontScale(1.4f);
-    ImGui::Text("%s", text_entry_text.c_str());
-    ImGui::SameLine(0.0f, 0.0f);
-    ImGui::TextColored(Theme::Accent, "_");
-    ImGui::SetWindowFontScale(1.0f);
-    ImGui::Separator();
-    ImGui::TextColored(Theme::Muted, "%s", TL("Keyboard: type, Backspace to erase, Enter = OK, Esc = cancel",
-                                              "Клавиатура: ввод текста, Backspace — стереть, Enter — OK, Esc — отмена"));
-    ImGui::TextColored(Theme::Muted, "%s", TL(PadText("Controller: Cross (A) = OK, Circle (B) = cancel", "Controller: A = OK, B = cancel", "Controller: B = OK, A = cancel"),
-                                 PadText("Геймпад: крестик (A) — OK, кружок (B) — отмена", "Геймпад: A — OK, B — отмена", "Геймпад: B — OK, A — отмена")));
-    ImGui::End();
-    ImGui::PopStyleVar();
-    ImGui::PopStyleColor();
-}
 
-// ---- Save dialogs: drawing. The layout is in design pixels of a 1280x720 screen, times k. ----
-// The colours and radii are the launcher's (Theme); its sizes are on a 1080-line stage, so a
-// launcher pixel is kStage design pixels here.
-constexpr float kStage = 720.0f / 1080.0f;
-// The launcher's panel (18), card (10) and picture (6) radii.
-constexpr float kPanelRadius = 18.0f * kStage, kItemRadius = 10.0f * kStage, kPictureRadius = 6.0f * kStage;
+// ---- The dialogs over the game (saves, messages, the graffiti guide, text entry, notices):
+// drawn as the launcher's panels (the menus' Canvas mock-up). The layout is in launcher pixels
+// of a 1920x1080 stage, times k: the launcher's radii (panel 18, card 10, picture 6), its glass,
+// Segoe UI Light titles, white and frosted pills. ----
+constexpr float kPanelRadius = 18.0f, kItemRadius = 10.0f, kPictureRadius = 6.0f;
 
 struct SavePainter {
     ImDrawList* dl;
@@ -1316,7 +1286,14 @@ struct SavePainter {
     float Width(float size, const std::string& text, bool bold = false) const {
         return Face(bold)->CalcTextSizeA(size * k, FLT_MAX, 0.0f, text.c_str()).x / k;
     }
-    // The text cut with "..." to fit `width` design pixels.
+    float LightWidth(float size, const std::string& text) const {
+        return (font_light ? font_light : font)->CalcTextSizeA(size * k, FLT_MAX, 0.0f, text.c_str()).x / k;
+    }
+    // The height of `text` wrapped at `width` stage pixels.
+    float Height(float size, const std::string& text, float width) const {
+        return font->CalcTextSizeA(size * k, FLT_MAX, width * k, text.c_str()).y / k;
+    }
+    // The text cut with "..." to fit `width` stage pixels.
     std::string Fit(float size, const std::string& text, float width, bool bold = false) const {
         if (Width(size, text, bold) <= width) return text;
         std::string cut = text;
@@ -1327,14 +1304,13 @@ struct SavePainter {
         }
         return "...";
     }
-    // Text at (x, y) design pixels.
     void Text(float x, float y, float size, const ImVec4& color, const std::string& text, bool bold = false,
               float alpha = 1.0f, float wrap = 0.0f) const {
         const ImU32 col = Theme::U32(color, alpha);
         dl->AddText(Face(bold), size * k, P(x, y), col, text.c_str(), nullptr, wrap * k);
         if (bold && !font_bold) dl->AddText(font, size * k, P(x + 0.55f, y), col, text.c_str(), nullptr, wrap * k);
     }
-    // Text in Segoe UI Light (the launcher's titles and labels).
+    // Segoe UI Light: the launcher's titles and labels.
     void TextLight(float x, float y, float size, const ImVec4& color, const std::string& text, float alpha = 1.0f) const {
         dl->AddText(font_light ? font_light : font, size * k, P(x, y), Theme::U32(color, alpha), text.c_str());
     }
@@ -1352,42 +1328,57 @@ struct SavePainter {
     void Line(float x0, float y0, float x1, float y1, const ImVec4& color, float thickness, float alpha = 1.0f) const {
         dl->AddLine(P(x0, y0), P(x1, y1), Theme::U32(color, alpha), thickness * k);
     }
-    // The launcher's focus ring: a white outline a little outside the item.
+    // An icon of the icon font centred at (x, y); `fallback` draws it without the font.
+    void Glyph(unsigned code, float x, float y, float size, const ImVec4& color, float alpha = 1.0f) const {
+        if (!font_icons) return;
+        const std::string text = Utf8(code);
+        const ImVec2 s = font_icons->CalcTextSizeA(size * k, FLT_MAX, 0.0f, text.c_str());
+        const ImVec2 c = P(x, y);
+        dl->AddText(font_icons, size * k, ImVec2(c.x - s.x / 2, c.y - s.y / 2), Theme::U32(color, alpha), text.c_str());
+    }
+    // The launcher's focus ring: white, 2 pixels, a 2-pixel gap outside the item.
     void Ring(float x0, float y0, float x1, float y1, float rounding) const {
-        const float gap = 3.0f * kStage;
-        Frame(x0 - gap, y0 - gap, x1 + gap, y1 + gap, Theme::White(0.95f), rounding + gap, 3.0f * kStage);
+        Frame(x0 - 3, y0 - 3, x1 + 3, y1 + 3, Theme::White(0.95f), rounding + 3, 2.0f);
     }
     // A controller button: 0 confirm (bottom face button), 1 back (right one), centred at (x, y):
     // Cross / Circle, or the letters of TLG_GLYPHS=xbox (A / B) and nintendo (B / A). `light`: on a
-    // white button.
+    // white pill.
     void Button(float x, float y, int which, bool light = false) const {
         const ImVec2 c = P(x, y);
         const ImVec4 ground = light ? Theme::Ink : Theme::Text;
-        dl->AddCircleFilled(c, 11.0f * k, Theme::U32(ground, 0.08f));
-        dl->AddCircle(c, 11.0f * k, Theme::U32(ground, 0.28f), 0, 1.0f * k);
+        dl->AddCircleFilled(c, 15.0f * k, Theme::U32(ground, 0.08f));
+        dl->AddCircle(c, 15.0f * k, Theme::U32(ground, 0.3f), 0, 1.5f * k);
         const ImVec4& mark = which == 0 ? Theme::Accent : Theme::Bad;
         if (const char* letter = PadText(nullptr, which == 0 ? "A" : "B", which == 0 ? "B" : "A")) {
-            Text(x - Width(13.0f, letter, true) / 2, y - 8.5f, 13.0f, which == 0 ? Theme::Good : Theme::Bad, letter, true);
+            Text(x - Width(18.0f, letter, true) / 2, y - 12.5f, 18.0f, which == 0 ? Theme::Good : Theme::Bad, letter, true);
             return;
         }
         if (which == 0) {
-            Line(x - 4, y - 4, x + 4, y + 4, mark, 2.0f);
-            Line(x + 4, y - 4, x - 4, y + 4, mark, 2.0f);
+            Line(x - 6, y - 6, x + 6, y + 6, mark, 2.6f);
+            Line(x + 6, y - 6, x - 6, y + 6, mark, 2.6f);
         } else {
-            dl->AddCircle(c, 5.0f * k, Theme::U32(mark), 0, 2.0f * k);
+            dl->AddCircle(c, 7.0f * k, Theme::U32(mark), 0, 2.6f * k);
         }
     }
-    // The panel itself (the launcher's popover): a soft shadow, fill, faint border; then the
-    // discreet credit under its right corner.
+    // The panel: a soft shadow, the launcher's glass, a faint border; the credit under its corner.
     void Panel(float w, float h) const {
-        for (int i = 3; i >= 1; --i) {
-            const float spread = 4.0f * i;
-            Box(-spread, 12 - spread, w + spread, h + 12 + spread, Theme::Ink, kPanelRadius + spread, 0.14f);
+        for (int i = 4; i >= 1; --i) {
+            const float spread = 10.0f * i;
+            Box(-spread, 20 - spread, w + spread, h + 20 + spread, Theme::Ink, kPanelRadius + spread, 0.09f);
         }
         Box(0, 0, w, h, ImVec4(18 / 255.0f, 18 / 255.0f, 22 / 255.0f, 1.0f), kPanelRadius, 0.93f);
         Frame(0, 0, w, h, Theme::White(0.07f), kPanelRadius, 1.0f);
         const std::string credit = "@hayatog-dev";
-        Text(w - 6.0f - Width(11.0f, credit), h + 10.0f, 11.0f, Theme::Faint, credit, false, 0.7f);
+        Text(w - 8.0f - Width(15.0f, credit), h + 14.0f, 15.0f, Theme::Faint, credit, false, 0.7f);
+    }
+    // A dialog's header: the launcher's 64-pixel tile with an icon, the title (36 Light) and a
+    // line under it (19, muted). `icon` 0: the tile is drawn by the caller (`draw_tile`).
+    void Header(float x, float y, unsigned icon, const std::string& title, const std::string& sub,
+                const ImVec4& icon_color = Theme::Text) const {
+        Box(x, y, x + 64, y + 64, Theme::White(0.08f), kItemRadius);
+        if (icon) Glyph(icon, x + 32, y + 32, 30, icon_color);
+        TextLight(x + 84, y + (sub.empty() ? 10 : -2), 36.0f, Theme::Text, title);
+        if (!sub.empty()) Text(x + 84, y + 44, 19.0f, Theme::Muted, sub);
     }
     // A save's picture (16:9) or a placeholder; `is_new` draws the dashed "+" slot.
     void Picture(float x, float y, float w, float h, ImTextureData* tex, bool is_new) const {
@@ -1397,34 +1388,48 @@ struct SavePainter {
             return;
         }
         if (is_new) {
-            for (float t = 0; t < 1.0f; t += 0.1f) { // dashes around the slot
-                Line(x + w * t, y, x + w * (t + 0.05f), y, Theme::Faint, 1.5f);
-                Line(x + w * t, y + h, x + w * (t + 0.05f), y + h, Theme::Faint, 1.5f);
+            for (float t = 0; t < 1.0f; t += 0.08f) { // dashes around the slot
+                Line(x + w * t, y, x + w * (t + 0.04f), y, Theme::White(0.28f), 2.0f);
+                Line(x + w * t, y + h, x + w * (t + 0.04f), y + h, Theme::White(0.28f), 2.0f);
             }
-            for (float t = 0; t < 1.0f; t += 0.18f) {
-                Line(x, y + h * t, x, y + h * (t + 0.09f), Theme::Faint, 1.5f);
-                Line(x + w, y + h * t, x + w, y + h * (t + 0.09f), Theme::Faint, 1.5f);
+            for (float t = 0; t < 1.0f; t += 0.14f) {
+                Line(x, y + h * t, x, y + h * (t + 0.07f), Theme::White(0.28f), 2.0f);
+                Line(x + w, y + h * t, x + w, y + h * (t + 0.07f), Theme::White(0.28f), 2.0f);
             }
-            Line(x + w / 2, y + h / 2 - 11, x + w / 2, y + h / 2 + 11, Theme::Muted, 2.0f);
-            Line(x + w / 2 - 11, y + h / 2, x + w / 2 + 11, y + h / 2, Theme::Muted, 2.0f);
+            Line(x + w / 2, y + h / 2 - 15, x + w / 2, y + h / 2 + 15, Theme::Muted, 2.4f);
+            Line(x + w / 2 - 15, y + h / 2, x + w / 2 + 15, y + h / 2, Theme::Muted, 2.4f);
             return;
         }
         Box(x, y, x + w, y + h, Theme::White(0.06f), kPictureRadius);
     }
-    // A dialog button: the focused one white with black text (the launcher's Play button), the
-    // others faint.
-    void ActionButton(float x0, float y0, float x1, float y1, const char* label, int glyph, bool focused) const {
-        Box(x0, y0, x1, y1, focused ? Theme::Text : Theme::White(0.14f), (y1 - y0) / 2);
-        const float mid = (y0 + y1) / 2;
-        Button(x0 + 32, mid, glyph, focused);
-        Text(x0 + 52, mid - 10, 15.0f, focused ? Theme::Ink : Theme::Text, label, true);
+    // The width of a pill for `label` (with its controller button when `glyph` >= 0).
+    float PillWidth(const char* label, int glyph, float min_w = 160) const {
+        return std::max(min_w, Width(22.0f, label, true) + (glyph >= 0 ? 44.0f : 0.0f) + 60.0f);
+    }
+    // The launcher's pill (PillButton.qml): white with black text when focused, frosted
+    // otherwise, 60 pixels high; the controller button on its left.
+    void Pill(float x0, float y0, float x1, const char* label, int glyph, bool focused) const {
+        const float y1 = y0 + 60;
+        Box(x0, y0, x1, y1, focused ? Theme::Text : Theme::White(0.14f), 30.0f);
+        const float text_w = Width(22.0f, label, true), inner = text_w + (glyph >= 0 ? 44.0f : 0.0f);
+        float x = x0 + (x1 - x0 - inner) / 2;
+        if (glyph >= 0) {
+            Button(x + 15, y0 + 30, glyph, focused);
+            x += 44;
+        }
+        Text(x, y0 + 30 - 15, 22.0f, focused ? Theme::Ink : Theme::Text, label, true);
+    }
+    // Kept for the callers that size their buttons by corners (46 high in the old layout).
+    void ActionButton(float x0, float y0, float x1, float, const char* label, int glyph, bool focused) const {
+        Pill(x0, y0, x1, label, glyph, focused);
     }
 };
 
+// A painter for a w x h panel centred on the display (kept inside it on narrow windows).
 SavePainter SavePainterFor(float w, float h) {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    // 720p design scaled to the display, kept inside the screen on narrow windows.
-    const float k = std::min(viewport->WorkSize.y / 720.0f, viewport->WorkSize.x * 0.94f / w);
+    const float k = std::min({viewport->WorkSize.y / 1080.0f, viewport->WorkSize.x * 0.94f / w,
+                              viewport->WorkSize.y * 0.94f / (h + 40.0f)});
     SavePainter p{ImGui::GetForegroundDrawList(), ImGui::GetFont(), k, {}};
     p.at = ImVec2(viewport->WorkPos.x + (viewport->WorkSize.x - w * k) * 0.5f,
                   viewport->WorkPos.y + (viewport->WorkSize.y - h * k) * 0.5f);
@@ -1506,98 +1511,88 @@ ImTextureData* SaveTexture(size_t i) {
     return i < choice_textures.size() ? choice_textures[i] : nullptr;
 }
 
-// One save as a card: picture, the game's title and text, when it was saved.
+// One save as the launcher's card: picture 192 x 108, the save's main line (26) and the line
+// under it (19, muted), when it was saved on the right. The game titles every save with its own
+// name, so the subtitle (the mission and its percent) is the main line when there is one.
+constexpr float kCardH = 136.0f;
 void SaveCard(const SavePainter& p, float x0, float y0, float x1, const SaveRow& row, ImTextureData* tex,
-              bool selected, float picture_w) {
-    const float picture_h = picture_w * 9.0f / 16.0f, h = picture_h + 24.0f;
-    p.Box(x0, y0, x1, y0 + h, Theme::White(selected ? 0.12f : 0.04f), kItemRadius);
-    if (selected) {
-        p.Ring(x0, y0, x1, y0 + h, kItemRadius);
-    }
-    p.Picture(x0 + 16, y0 + 12, picture_w, picture_h, tex, row.is_new);
-    const float text_x = x0 + 16 + picture_w + 18;
-    std::string when, ago;
+              bool selected) {
+    const float y1 = y0 + kCardH, mid = (y0 + y1) / 2;
+    p.Box(x0, y0, x1, y1, Theme::White(selected ? 0.13f : 0.04f), kItemRadius);
+    if (selected) p.Ring(x0, y0, x1, y1, kItemRadius);
+    p.Picture(x0 + 18, y0 + 14, 192, 108, tex, row.is_new);
+    const float text_x = x0 + 18 + 192 + 24;
     if (row.is_new) {
-        p.Text(text_x, y0 + h / 2 - 20, 17.0f, Theme::Text, TL("New save", "Новое сохранение"), true);
-        p.Text(text_x, y0 + h / 2 + 4, 13.5f, Theme::Muted, TL("Create a new save", "Создать новое сохранение"));
+        p.Text(text_x, mid - 32, 26.0f, Theme::Text, TL("New save", "Новое сохранение"));
+        p.Text(text_x, mid + 6, 19.0f, Theme::Muted, TL("Create a new save", "Создать новое сохранение"));
         return;
     }
-    when = SaveWhen(row.mtime);
-    ago = SaveAgo(row.mtime);
-    const std::string size = SaveSize(row.bytes);
+    std::string ago = SaveAgo(row.mtime);
+    const std::string when = SaveWhen(row.mtime), size = SaveSize(row.bytes);
     if (!size.empty()) ago = ago.empty() ? size : ago + " · " + size;
-    const float right = x1 - 16;
-    const float right_w = std::max(p.Width(14.0f, when, true), p.Width(12.5f, ago));
-    const float text_w = right - text_x - (right_w > 0 ? right_w + 20 : 0);
-    std::string line = row.subtitle;
-    if (!row.detail.empty()) line = line.empty() ? row.detail : line + " · " + row.detail;
+    const float right = x1 - 22;
+    const float right_w = std::max(p.Width(21.0f, when), p.Width(17.0f, ago));
+    const float text_w = right - text_x - (right_w > 0 ? right_w + 24 : 0);
+    const std::string main = !row.subtitle.empty() ? row.subtitle : row.title;
+    std::string line = !row.subtitle.empty() ? row.title : std::string();
+    if (!row.detail.empty()) line = line.empty() ? row.detail : row.detail + " · " + line;
     for (char& c : line) if (c == '\n' || c == '\r') c = ' ';
-    p.Text(text_x, y0 + h / 2 - 20, 17.0f, Theme::Text, p.Fit(17.0f, row.title, text_w, true), true);
-    p.Text(text_x, y0 + h / 2 + 4, 13.5f, Theme::Muted, p.Fit(13.5f, line, text_w));
-    p.TextRight(right, y0 + h / 2 - 18, 14.0f, Theme::Text, when, true);
-    p.TextRight(right, y0 + h / 2 + 5, 12.5f, Theme::Faint, ago);
+    p.Text(text_x, mid - 32, 26.0f, Theme::Text, p.Fit(26.0f, main, text_w));
+    p.Text(text_x, mid + 6, 19.0f, Theme::Muted, p.Fit(19.0f, line, text_w));
+    p.TextRight(right, mid - 30, 21.0f, Theme::Text, when);
+    p.TextRight(right, mid + 6, 17.0f, Theme::Faint, ago);
 }
 
 void SaveListBox() {
     const int count = int(save_rows.size());
     const int shown = std::min(count, 4);
-    const float w = 880, row_h = 96, gap = 10, header_h = 78, footer_h = 64, pad = 18;
-    const float list_h = shown * row_h + std::max(shown - 1, 0) * gap + pad * 2;
+    const float w = 1000, gap = 12, header_h = 124, footer_h = 108, pad = 24;
+    const float list_h = shown * kCardH + std::max(shown - 1, 0) * gap + pad * 2;
     const float h = header_h + list_h + footer_h;
-    SaveBackdrop(0.6f);
+    SaveBackdrop(0.55f);
     SavePainter p = SavePainterFor(w, h);
     p.Panel(w, h);
-
-    // Header: a floppy in the launcher's tile, the title, the game and the number of saves.
-    p.Box(26, 17, 70, 61, Theme::White(0.08f), 7.0f);
-    const float ix = 35, iy = 26;
-    p.Frame(ix, iy, ix + 26, iy + 26, Theme::Text, 4.0f, 1.6f);
-    p.Frame(ix + 6, iy, ix + 20, iy + 9, Theme::Text, 1.0f, 1.6f);
-    p.Frame(ix + 6, iy + 15, ix + 20, iy + 26, Theme::Text, 1.0f, 1.6f);
-    p.TextLight(86, 14, 25.0f, Theme::Text, SaveTitle(save_kind));
+    // Header: the launcher's tile with a floppy, the title, the game and the number of saves.
     const int saves = count - int(std::count_if(save_rows.begin(), save_rows.end(), [](const SaveRow& r) { return r.is_new; }));
     char sub[200];
     const char* game = std::getenv("TLG_APP_NAME");
     std::snprintf(sub, sizeof(sub), "%s%s%d %s", game && *game ? game : "", game && *game ? " · " : "", saves,
                   Plural(saves, "save", "saves", "сохранение", "сохранения", "сохранений"));
-    p.Text(86, 46, 13.0f, Theme::Muted, sub);
-    p.Line(0, header_h, w, header_h, Theme::Line, 1.0f);
-
-    // Rows, scrolled so the selected one is shown.
+    p.Header(40, 30, 0xE74E, SaveTitle(save_kind), sub);
+    p.Line(40, header_h, w - 40, header_h, Theme::Line, 1.0f);
+    // The cards, scrolled so the selected one is shown.
     if (choice_index < choice_first) choice_first = choice_index;
     if (choice_index >= choice_first + shown) choice_first = choice_index - shown + 1;
     choice_first = std::clamp(choice_first, 0, std::max(count - shown, 0));
     save_row_rects.assign(count, ImRect());
     for (int i = choice_first; i < choice_first + shown; ++i) {
-        const float y = header_h + pad + (i - choice_first) * (row_h + gap);
-        SaveCard(p, 20, y, w - 20, save_rows[i], SaveTexture(size_t(i)), i == choice_index, 128.0f);
-        save_row_rects[i] = ImRect(p.P(20, y), p.P(w - 20, y + row_h));
+        const float y = header_h + pad + (i - choice_first) * (kCardH + gap);
+        SaveCard(p, 28, y, w - 28, save_rows[i], SaveTexture(size_t(i)), i == choice_index);
+        save_row_rects[i] = ImRect(p.P(28, y), p.P(w - 28, y + kCardH));
     }
     if (count > shown) { // scroll bar
         const float track = list_h - pad * 2, y0 = header_h + pad;
         const float knob = track * shown / count, top = y0 + track * choice_first / count;
-        p.Box(w - 11, y0, w - 8, y0 + track, Theme::Line, 2.0f);
-        p.Box(w - 11, top, w - 8, top + knob, Theme::Faint, 2.0f);
+        p.Box(w - 16, y0, w - 12, y0 + track, Theme::Line, 2.0f);
+        p.Box(w - 16, top, w - 12, top + knob, Theme::Faint, 2.0f);
     }
-
-    // Footer: what the buttons do.
+    // Footer: the pills (the action white, Back frosted) and what the keys do.
     const float fy = header_h + list_h;
-    p.Line(0, fy, w, fy, Theme::Line, 1.0f);
+    p.Line(40, fy, w - 40, fy, Theme::Line, 1.0f);
     const char* confirm = save_kind == 2 ? TL("Load", "Загрузить") : save_kind == 3 ? TL("Delete", "Удалить")
                                                                                   : TL("Save here", "Сохранить сюда");
     const char* back = TL("Back", "Назад");
-    // The launcher's pills: the action white, Back frosted, each with its controller button.
-    float x = 26;
-    const float by0 = fy + 9, by1 = fy + footer_h - 9;
-    const float cw = 22 + 20 + 10 + p.Width(15.0f, confirm, true) + 22;
-    p.ActionButton(x, by0, x + cw, by1, confirm, 0, true);
-    x += cw + 12;
-    const float bw = 22 + 20 + 10 + p.Width(15.0f, back, true) + 22;
-    p.ActionButton(x, by0, x + bw, by1, back, 1, false);
-    x += bw + 24;
+    float x = 40;
+    const float by = fy + 22;
+    const float cw = p.PillWidth(confirm, 0, 260);
+    p.Pill(x, by, x + cw, confirm, 0, true);
+    x += cw + 14;
+    const float bw = p.PillWidth(back, 1, 160);
+    p.Pill(x, by, x + bw, back, 1, false);
+    x += bw + 28;
     const std::string hint = TL("Enter / click: choose · Esc / right click: back",
-                                "Enter / щелчок: выбрать · Esc / правая кнопка: назад");
-    p.TextRight(w - 28, fy + footer_h / 2 - 8, 12.5f, Theme::Faint, p.Fit(12.5f, hint, w - 28 - x));
+                                "Enter / щелчок — выбрать · Esc / правая кнопка — назад");
+    p.TextRight(w - 40, by + 19, 17.0f, Theme::Faint, p.Fit(17.0f, hint, w - 40 - x));
 }
 
 // The message's words for a system message type (sceSaveDataDialog), the game's own text or an
@@ -1657,106 +1652,93 @@ SaveMessageWords SaveMessageFor(int kind, int code, u64 value, const std::string
 void SaveMessageBox() {
     const SaveMessageWords words = SaveMessageFor(save_kind, message_code, message_value, message_text);
     const int buttons = message_buttons >= 0 ? message_buttons : words.buttons;
-    const float w = 560, pad = 28, inner = w - pad * 2;
-    // Height: title, the save's card, the wrapped text, the buttons.
-    ImFont* font = ImGui::GetFont();
-    const float k0 = std::min(ImGui::GetMainViewport()->WorkSize.y / 720.0f,
-                              ImGui::GetMainViewport()->WorkSize.x * 0.94f / w);
-    const float body_h = words.body.empty() ? 0.0f
-        : font->CalcTextSizeA(14.5f * k0, FLT_MAX, inner * k0, words.body.c_str()).y / k0;
-    const float card_h = message_has_entry ? 87.0f : 0.0f;
-    float h = pad + 30 + 20 + (card_h ? card_h + 20 : 0) + (body_h ? body_h + 20 : 0) + 46 + pad;
-    SaveBackdrop(0.6f);
-    SavePainter p = SavePainterFor(w, h);
+    const float w = 640, pad_x = 36, pad_y = 34, inner = w - pad_x * 2;
+    SavePainter p = SavePainterFor(w, 400); // k first: the text heights depend on it
+    const float title_x = words.warn ? 44.0f : 0.0f;
+    const float body_h = words.body.empty() ? 0.0f : p.Height(20.0f, words.body, inner);
+    const float card_h = message_has_entry ? 116.0f : 0.0f;
+    const float h = pad_y + 40 + (card_h ? 18 + card_h : 0) + (body_h ? 14 + body_h : 0) + 28 + 60 + 30;
+    SaveBackdrop(0.55f);
+    p = SavePainterFor(w, h);
     p.Panel(w, h);
 
-    float y = pad;
-    if (words.warn) { // triangle
-        const ImVec2 a = p.P(pad + 13, y + 2), b = p.P(pad + 26, y + 26), c = p.P(pad, y + 26);
-        p.dl->AddTriangle(a, b, c, Theme::U32(Theme::Warn), 2.0f * p.k);
-        p.Line(pad + 13, y + 11, pad + 13, y + 18, Theme::Warn, 2.0f);
-        p.dl->AddCircleFilled(p.P(pad + 13, y + 22), 1.4f * p.k, Theme::U32(Theme::Warn));
-    } else {
-        p.dl->AddCircle(p.P(pad + 13, y + 14), 12.0f * p.k, Theme::U32(Theme::Accent), 0, 2.0f * p.k);
-        p.Text(pad + 13 - p.Width(16.0f, "?", true) / 2, y + 3.5f, 16.0f, Theme::Accent, "?", true);
-    }
-    p.TextLight(pad + 40, y - 1, 24.0f, Theme::Text, p.Fit(24.0f, words.title, inner - 40));
-    y += 30 + 20;
+    float y = pad_y;
+    if (words.warn) p.Glyph(0xE7BA, pad_x + 16, y + 20, 28, Theme::Warn); // a warning sign
+    p.Text(pad_x + title_x, y, 30.0f, Theme::Text, p.Fit(30.0f, words.title, inner - title_x));
+    y += 40;
     if (message_has_entry) {
-        p.Box(pad, y, w - pad, y + card_h, Theme::White(0.04f), kItemRadius);
-        p.Frame(pad, y, w - pad, y + card_h, Theme::Line, kItemRadius, 1.0f);
-        p.Picture(pad + 14, y + 12, 112, 63, SaveTexture(0), message_entry.is_new);
-        const float tx = pad + 14 + 112 + 16, tw = w - pad - 14 - tx;
-        std::string line = message_entry.subtitle;
-        if (!message_entry.detail.empty()) line = line.empty() ? message_entry.detail : line + " · " + message_entry.detail;
-        for (char& c : line) if (c == '\n' || c == '\r') c = ' ';
+        y += 18;
+        p.Box(pad_x, y, w - pad_x, y + card_h, Theme::White(0.05f), kItemRadius);
+        p.Picture(pad_x + 14, y + 14, 156, 88, SaveTexture(0), message_entry.is_new);
+        const float tx = pad_x + 14 + 156 + 18, tw = w - pad_x - 16 - tx;
+        const std::string main = message_entry.is_new ? std::string(TL("New save", "Новое сохранение"))
+                                 : !message_entry.subtitle.empty() ? message_entry.subtitle : message_entry.title;
         std::string when = SaveWhen(message_entry.mtime);
         const std::string ago = SaveAgo(message_entry.mtime);
-        if (!when.empty() && !ago.empty()) when += " (" + ago + ")";
-        p.Text(tx, y + 16, 16.0f, Theme::Text,
-               p.Fit(16.0f, message_entry.is_new ? std::string(TL("New save", "Новое сохранение")) : message_entry.title, tw, true),
-               true);
-        p.Text(tx, y + 39, 13.0f, Theme::Muted, p.Fit(13.0f, line, tw));
-        p.Text(tx, y + 59, 12.5f, Theme::Faint, p.Fit(12.5f, when, tw));
-        y += card_h + 20;
+        if (!when.empty() && !ago.empty()) when += " · " + ago;
+        p.Text(tx, y + 20, 23.0f, Theme::Text, p.Fit(23.0f, main, tw));
+        p.Text(tx, y + 58, 18.0f, Theme::Muted, p.Fit(18.0f, when, tw));
+        y += card_h;
     }
     if (body_h) {
-        p.Text(pad, y, 14.5f, Theme::Muted, words.body, false, 1.0f, inner);
-        y += body_h + 20;
+        y += 14;
+        p.Text(pad_x, y, 20.0f, Theme::Muted, words.body, false, 1.0f, inner);
+        y += body_h;
     }
-
-    // Buttons, right-aligned: [no/cancel] [yes/OK]; the focused one is white.
+    y += 28;
+    // The pills, left to right: [yes/OK] [no/cancel]; the focused one is white.
     const char* yes = buttons == 1 ? TL("Yes", "Да") : "OK";
     const char* no = buttons == 1 ? TL("No", "Нет") : TL("Cancel", "Отмена");
     const bool two = buttons == 1 || buttons == 3;
     if (!two) message_focus = 1;
-    float right = w - pad;
     save_button_rects[0] = save_button_rects[1] = ImRect();
+    float x = pad_x;
     for (int b = 1; b >= (two ? 0 : 1); --b) {
         const char* label = b == 1 ? yes : no;
-        const float bw = 22 + 20 + 10 + p.Width(15.0f, label, true) + 22, x0 = right - bw;
-        p.ActionButton(x0, y, right, y + 46, label, b == 1 ? 0 : 1, b == message_focus);
-        save_button_rects[b] = ImRect(p.P(x0, y), p.P(right, y + 46));
-        right = x0 - 12;
+        const float bw = p.PillWidth(label, b == 1 ? 0 : 1, 160);
+        p.Pill(x, y, x + bw, label, b == 1 ? 0 : 1, b == message_focus);
+        save_button_rects[b] = ImRect(p.P(x, y), p.P(x + bw, y + 60));
+        x += bw + 14;
     }
 }
 
 void SaveProgressBox(SaveClock::time_point now) {
-    const float w = 520, h = 140;
-    SaveBackdrop(0.45f);
+    const float w = 760, h = 226;
+    SaveBackdrop(0.4f);
     SavePainter p = SavePainterFor(w, h);
     p.Panel(w, h);
-    // A spinning arc.
-    const float t = std::chrono::duration<float>(now - progress_since).count();
-    const ImVec2 c = p.P(28 + 13, 26 + 13);
-    p.dl->AddCircle(c, 11.0f * p.k, Theme::U32(Theme::Line), 0, 2.4f * p.k);
-    p.dl->PathArcTo(c, 11.0f * p.k, t * 6.0f, t * 6.0f + 4.4f, 24);
-    p.dl->PathStroke(Theme::U32(Theme::Accent), 0, 2.4f * p.k);
     const char* title = progress_kind == 2 ? TL("Loading...", "Загрузка...")
                         : progress_kind == 3 ? TL("Deleting...", "Удаление...")
                                              : TL("Saving...", "Сохранение...");
-    p.Text(66, 19, 21.0f, Theme::Text, title, true);
-    p.Text(66, 47, 13.0f, Theme::Faint, TL("Do not close the game.", "Не закрывайте игру."));
-    const float bx0 = 28, bx1 = w - 28, by = 84;
-    p.Box(bx0, by, bx1, by + 6, Theme::White(0.1f), 3.0f);
+    p.Header(40, 34, 0, title, TL("Do not close the game.", "Не закрывайте игру."));
+    // A spinning arc in the tile.
+    const float t = std::chrono::duration<float>(now - progress_since).count();
+    const ImVec2 c = p.P(40 + 32, 34 + 32);
+    p.dl->AddCircle(c, 15.0f * p.k, Theme::U32(Theme::Line), 0, 3.0f * p.k);
+    p.dl->PathArcTo(c, 15.0f * p.k, t * 6.0f, t * 6.0f + 4.4f, 24);
+    p.dl->PathStroke(Theme::U32(Theme::Accent), 0, 3.0f * p.k);
+    const float bx0 = 40, bx1 = w - 40, by = 140;
+    p.Box(bx0, by, bx1, by + 8, Theme::White(0.1f), 4.0f);
     if (progress_percent >= 0) {
         const float f = std::clamp(progress_percent, 0, 100) / 100.0f;
-        if (f > 0) p.Box(bx0, by, bx0 + (bx1 - bx0) * f, by + 6, Theme::Accent, 3.0f);
+        if (f > 0) p.Box(bx0, by, bx0 + (bx1 - bx0) * f, by + 8, Theme::Accent, 4.0f);
         char pct[16];
         std::snprintf(pct, sizeof(pct), "%d%%", std::clamp(progress_percent, 0, 100));
-        p.TextRight(bx1, by + 16, 13.0f, Theme::Text, pct, true);
+        p.TextRight(bx1, by + 24, 19.0f, Theme::Text, pct, true);
     } else { // no figure: a segment sweeps the bar
         const float span = (bx1 - bx0) * 0.3f, phase = std::fmod(t * 0.8f, 1.0f);
         const float s0 = bx0 + (bx1 - bx0 + span) * phase - span;
-        p.Box(std::max(s0, bx0), by, std::min(s0 + span, bx1), by + 6, Theme::Accent, 3.0f);
+        p.Box(std::max(s0, bx0), by, std::min(s0 + span, bx1), by + 8, Theme::Accent, 4.0f);
     }
     if (!progress_text.empty()) {
         std::string text = progress_text;
         for (char& ch : text) if (ch == '\n' || ch == '\r') ch = ' ';
-        p.Text(bx0, by + 16, 13.0f, Theme::Muted, p.Fit(13.0f, text, bx1 - bx0 - 60));
+        p.Text(bx0, by + 24, 19.0f, Theme::Muted, p.Fit(19.0f, text, bx1 - bx0 - 90));
     }
 }
 
+// "Game saved" as the launcher's toast (qml/Toast.qml): a card at the bottom right, a tile with
+// the green check, the words and the time.
 void SaveToastBox(SaveClock::time_point now) {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     const char* text = toast_kind == 2 ? TL("Save loaded", "Сохранение загружено")
@@ -1765,20 +1747,29 @@ void SaveToastBox(SaveClock::time_point now) {
     const float in = std::chrono::duration<float>(now - toast_since).count();
     const float out = std::chrono::duration<float>(toast_until - now).count();
     const float alpha = std::clamp(std::min(in / 0.15f, out / 0.4f), 0.0f, 1.0f);
-    const float k = viewport->WorkSize.y / 720.0f;
+    const float slide = (1.0f - std::clamp(in / 0.35f, 0.0f, 1.0f)) * 60.0f; // slides in from the right
+    const float k = viewport->WorkSize.y / 1080.0f;
     SavePainter p{ImGui::GetForegroundDrawList(), ImGui::GetFont(), k, {}};
-    const float w = 14 + 44 + 14 + p.Width(15.5f, text, true) + 24, h = 72;
-    p.at = ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - (28 + w) * k,
-                  viewport->WorkPos.y + viewport->WorkSize.y - (28 + h) * k);
-    for (int i = 2; i >= 1; --i) { // a soft shadow
-        const float spread = 5.0f * i;
-        p.Box(-spread, 8 - spread, w + spread, h + 8 + spread, Theme::Ink, 11.0f + spread, 0.12f * alpha);
+    char clock[16] = "";
+    const std::time_t t = std::time(nullptr);
+    if (const std::tm* local = std::localtime(&t)) std::strftime(clock, sizeof(clock), "%H:%M", local);
+    const float w = std::max(560.0f, 22 + 68 + 20 + std::max(p.Width(23.0f, text, true), p.Width(20.0f, clock)) + 28), h = 104;
+    p.at = ImVec2(viewport->WorkPos.x + viewport->WorkSize.x - (40 + w - slide) * k,
+                  viewport->WorkPos.y + viewport->WorkSize.y - (40 + h) * k);
+    for (int i = 3; i >= 1; --i) { // a soft shadow
+        const float spread = 8.0f * i;
+        p.Box(-spread, 18 - spread, w + spread, h + 18 + spread, Theme::Ink, 16.0f + spread, 0.1f * alpha);
     }
-    p.Box(0, 0, w, h, ImVec4(32 / 255.0f, 32 / 255.0f, 35 / 255.0f, 1.0f), 11.0f, 0.95f * alpha);
-    p.Box(14, 14, 58, 58, Theme::White(0.08f), 7.0f, alpha);
-    p.Line(26, 37, 33, 44, Theme::Good, 2.6f, alpha); // a check mark
-    p.Line(33, 44, 47, 29, Theme::Good, 2.6f, alpha);
-    p.Text(72, 25, 15.5f, Theme::Text, text, true, alpha);
+    p.Box(0, 0, w, h, ImVec4(32 / 255.0f, 32 / 255.0f, 35 / 255.0f, 1.0f), 16.0f, 0.95f * alpha);
+    p.Box(22, 18, 90, 86, Theme::White(0.08f), kItemRadius, alpha);
+    if (font_icons) {
+        p.Glyph(0xE73E, 56, 52, 32, Theme::Good, alpha);
+    } else {
+        p.Line(42, 52, 52, 62, Theme::Good, 3.0f, alpha);
+        p.Line(52, 62, 71, 41, Theme::Good, 3.0f, alpha);
+    }
+    p.Text(110, 22, 23.0f, Theme::Text, text, true, alpha);
+    p.Text(110, 56, 20.0f, Theme::Muted, clock, false, alpha);
 }
 
 // ---- The graffiti guide: how to paint without a gyro (sensor mode). Shown in the middle of the
@@ -1803,50 +1794,78 @@ void GuideBox() {
     std::snprintf(steps[3], sizeof(steps[3]), TL("Tap %s again to walk again.", "Снова нажмите %s, чтобы вернуться к ходьбе."), sticks);
     const char* keys = TL("Keyboard: hold T or G (can sideways), Y shakes, F sprays, the arrow keys aim.",
                           "Клавиатура: удерживайте T или G (баллончик набок), Y — встряхнуть, F — распылять, стрелки — прицел.");
-    const char* again = TL("The Insert menu, Controls tab, shows this again.",
-                           "Это окно снова открывается в меню Insert, вкладка «Управление».");
-    const float w = 640, pad = 30, inner = w - pad * 2, text_x = pad + 40;
-    ImFont* font = ImGui::GetFont();
-    const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    const float k0 = std::min(viewport->WorkSize.y / 720.0f, viewport->WorkSize.x * 0.94f / w);
-    auto height = [&](const char* text, float size, float width) {
-        return font->CalcTextSizeA(size * k0, FLT_MAX, width * k0, text).y / k0;
-    };
-    float step_h[4], h = pad + 30 + 8 + 20 + 22;
+    const char* again = TL("The Insert menu, Controls section, shows this again.",
+                           "Это окно снова открывается в меню Insert, раздел «Управление».");
+    const char* ok = TL("Got it", "Понятно");
+    const float w = 1000, pad = 40, text_x = pad + 64, text_w = w - pad - text_x;
+    SavePainter p = SavePainterFor(w, 700); // k first: the text heights depend on it
+    float step_h[4], h = 30 + 64 + 30 + 1 + 28;
     for (int i = 0; i < 4; ++i) {
-        step_h[i] = std::max(28.0f, height(steps[i], 15.0f, inner - 40));
-        h += step_h[i] + 12;
+        step_h[i] = std::max(44.0f, p.Height(22.0f, steps[i], text_w));
+        h += step_h[i] + 16;
     }
-    const float keys_h = height(keys, 13.0f, inner);
-    h += 8 + keys_h + 22 + 46 + pad;
-    SaveBackdrop(0.6f);
-    SavePainter p = SavePainterFor(w, h);
+    const float keys_h = p.Height(19.0f, keys, w - pad * 2);
+    h += 10 + keys_h + 28 + 1 + 22 + 60 + 26;
+    SaveBackdrop(0.55f);
+    p = SavePainterFor(w, h);
     p.Panel(w, h);
-    float y = pad;
-    p.Text(pad, y, 23.0f, Theme::Text, TL("Graffiti without a gyro", "Граффити без гироскопа"), true);
-    y += 30 + 8;
-    p.Text(pad, y, 14.0f, Theme::Muted, TL("No motion sensor on your controller? Use sensor mode:",
-                                           "На геймпаде нет датчика движения? Включите режим сенсора:"));
-    y += 20 + 22;
+    p.Header(pad, 30, Icon::Gamepad, TL("Graffiti without a gyro", "Граффити без гироскопа"),
+             TL("No motion sensor on your controller? Use sensor mode:",
+                "На геймпаде нет датчика движения? Включите режим сенсора:"));
+    float y = 30 + 64 + 30;
+    p.Line(pad, y, w - pad, y, Theme::Line, 1.0f);
+    y += 1 + 28;
     for (int i = 0; i < 4; ++i) {
-        const ImVec2 c = p.P(pad + 13, y + 11);
-        p.dl->AddCircleFilled(c, 13.0f * p.k, Theme::U32(Theme::Accent, 0.16f));
-        p.dl->AddCircle(c, 13.0f * p.k, Theme::U32(Theme::Accent), 0, 1.5f * p.k);
+        const ImVec2 c = p.P(pad + 22, y + 22);
+        p.dl->AddCircleFilled(c, 21.0f * p.k, Theme::U32(Theme::Accent, 0.16f));
+        p.dl->AddCircle(c, 21.0f * p.k, Theme::U32(Theme::Accent), 0, 2.0f * p.k);
         char number[4];
         std::snprintf(number, sizeof(number), "%d", i + 1);
-        p.Text(pad + 13 - p.Width(14.0f, number, true) / 2, y + 1.5f, 14.0f, Theme::Text, number, true);
-        p.Text(text_x, y + 1, 15.0f, Theme::Text, steps[i], false, 1.0f, inner - 40);
-        y += step_h[i] + 12;
+        p.Text(pad + 22 - p.Width(20.0f, number, true) / 2, y + 22 - 14, 20.0f, Theme::Text, number, true);
+        const float th = p.Height(22.0f, steps[i], text_w);
+        p.Text(text_x, y + (step_h[i] - th) / 2, 22.0f, Theme::Text, steps[i], false, 1.0f, text_w);
+        y += step_h[i] + 16;
     }
-    y += 8;
-    p.Text(pad, y, 13.0f, Theme::Muted, keys, false, 1.0f, inner);
-    y += keys_h + 22;
-    const char* ok = TL("Got it", "Понятно");
-    const float bw = 22 + 20 + 10 + p.Width(15.0f, ok, true) + 22, x0 = w - pad - bw;
-    const float again_w = x0 - pad - 20;
-    p.Text(pad, y + 23 - height(again, 12.5f, again_w) / 2, 12.5f, Theme::Faint, again, false, 1.0f, again_w);
-    p.ActionButton(x0, y, w - pad, y + 46, ok, 0, true);
-    guide_button_rect = ImRect(p.P(x0, y), p.P(w - pad, y + 46));
+    y += 10;
+    p.Text(pad, y, 19.0f, Theme::Muted, keys, false, 1.0f, w - pad * 2);
+    y += keys_h + 28;
+    p.Line(pad, y, w - pad, y, Theme::Line, 1.0f);
+    y += 1 + 22;
+    const float bw = p.PillWidth(ok, 0, 200), x0 = w - pad - bw;
+    const float again_w = x0 - pad - 24;
+    p.Text(pad, y + 30 - p.Height(17.0f, again, again_w) / 2, 17.0f, Theme::Faint, again, false, 1.0f, again_w);
+    p.Pill(x0, y, w - pad, ok, 0, true);
+    guide_button_rect = ImRect(p.P(x0, y), p.P(w - pad, y + 60));
+}
+
+// The game's text dialog as the launcher's panel: the prompt, the text in a field with the
+// caret, what the keys and buttons do.
+void TextEntryBox() {
+    const float w = 900, pad = 40;
+    const char* keys = TL("Keyboard: type, Backspace to erase, Enter = OK, Esc = cancel",
+                          "Клавиатура: ввод текста, Backspace — стереть, Enter — OK, Esc — отмена");
+    const char* pad_keys = TL(PadText("Controller: Cross (A) = OK, Circle (B) = cancel", "Controller: A = OK, B = cancel",
+                                      "Controller: B = OK, A = cancel"),
+                              PadText("Геймпад: крестик (A) — OK, кружок (B) — отмена", "Геймпад: A — OK, B — отмена",
+                                      "Геймпад: B — OK, A — отмена"));
+    const float h = 34 + 30 + 18 + 80 + 22 + 26 + 6 + 26 + 30;
+    SavePainter p = SavePainterFor(w, h);
+    // Above the middle, so the game's keyboard prompt below stays visible.
+    p.at.y = ImGui::GetMainViewport()->WorkPos.y + ImGui::GetMainViewport()->WorkSize.y * 0.42f - h * p.k / 2;
+    p.Panel(w, h);
+    float y = 34;
+    p.Text(pad, y, 22.0f, Theme::Muted, p.Fit(22.0f, text_entry_prompt, w - pad * 2));
+    y += 30 + 18;
+    p.Box(pad, y, w - pad, y + 80, Theme::White(0.06f), kItemRadius);
+    p.Frame(pad, y, w - pad, y + 80, Theme::Accent, kItemRadius, 2.0f, 0.6f);
+    const std::string shown = p.Fit(32.0f, text_entry_text, w - pad * 2 - 60);
+    p.TextLight(pad + 22, y + 18, 32.0f, Theme::Text, shown);
+    const float caret_x = pad + 22 + p.LightWidth(32.0f, shown) + 3;
+    if (std::fmod(ImGui::GetTime(), 1.0) < 0.6) p.Box(caret_x, y + 20, caret_x + 2.5f, y + 60, Theme::Accent, 1.0f);
+    y += 80 + 22;
+    p.Text(pad, y, 17.0f, Theme::Faint, keys);
+    y += 26 + 6;
+    p.Text(pad, y, 17.0f, Theme::Faint, pad_keys);
 }
 
 // imgui_mutex held.
@@ -1884,45 +1903,47 @@ void SaveDialogs() {
     }
 }
 
+// "Compiling shaders" in the launcher's look (renderer v2's own loading screen too): a centred
+// block, 40% of the width, with the step in Light, the blue bar, the count, the time left and a note.
 void LoadingScreen() {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f,
-                                   viewport->WorkPos.y + viewport->WorkSize.y * 0.5f),
-                            ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x * 0.4f, 0.0f), ImGuiCond_Always);
-    ImGui::SetNextWindowBgAlpha(0.0f);
-    ImGui::Begin("##loading", nullptr,
-                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs |
-                     ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoFocusOnAppearing);
+    const float k = viewport->WorkSize.y / 1080.0f;
+    const float w = std::max(640.0f, viewport->WorkSize.x / k * 0.4f);
+    SavePainter p{ImGui::GetForegroundDrawList(), ImGui::GetFont(), k, {}};
+    p.at = ImVec2(viewport->WorkPos.x + (viewport->WorkSize.x - w * k) / 2, viewport->WorkPos.y + viewport->WorkSize.y / 2 - 90 * k);
     const u32 done = loading_done, total = loading_total;
     const bool compile = loading_compile;
-    ImGui::SetWindowFontScale(1.6f);
-    ImGui::TextUnformatted(compile ? TL("Compiling shaders...", "Компиляция шейдеров...")
-                           : total ? TL("Loading shader cache...", "Загрузка кэша шейдеров...")
-                                   : TL("Preparing graphics...", "Подготовка графики..."));
-    ImGui::SetWindowFontScale(1.0f);
+    const char* title = compile ? TL("Compiling shaders...", "Компиляция шейдеров...")
+                        : total ? TL("Loading shader cache...", "Загрузка кэша шейдеров...")
+                                : TL("Preparing graphics...", "Подготовка графики...");
+    p.TextLight(0, 0, 40.0f, Theme::Text, title);
+    float y = 70;
+    p.Box(0, y, w, y + 10, Theme::White(0.1f), 5.0f);
     if (total) {
+        const float f = std::min(1.0f, float(done) / float(total));
+        if (f > 0) p.Box(0, y, w * f, y + 10, Theme::Accent, 5.0f);
         char count[64];
-        std::snprintf(count, sizeof(count), "%u / %u (%u%%)", done, total,
-                      u32(u64(done) * 100 / total));
-        ImGui::ProgressBar(float(done) / float(total), ImVec2(-1.0f, 0.0f), count);
+        std::snprintf(count, sizeof(count), "%u / %u (%u%%)", done, total, u32(u64(std::min(done, total)) * 100 / total));
+        p.Text(0, y + 24, 20.0f, Theme::Text, count);
+        if (compile && done > 0 && done < total) {
+            const double elapsed =
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - loading_compile_started).count();
+            const u32 left = u32(elapsed * double(total - done) / double(done)) + 1;
+            char eta[64];
+            std::snprintf(eta, sizeof(eta), TL("About %u:%02u left", "Осталось около %u:%02u"), left / 60, left % 60);
+            p.TextRight(w, y + 24, 20.0f, Theme::Muted, eta);
+        }
+    } else { // no figure yet: a segment sweeps the bar
+        const float span = w * 0.25f, phase = std::fmod(float(ImGui::GetTime()) * 0.6f, 1.0f);
+        const float s0 = (w + span) * phase - span;
+        p.Box(std::max(s0, 0.0f), y, std::min(s0 + span, w), y + 10, Theme::Accent, 5.0f);
     }
-    if (compile && total && done > 0 && done < total) {
-        const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() -
-                                                             loading_compile_started)
-                                   .count();
-        const u32 left = u32(elapsed * double(total - done) / double(done)) + 1;
-        ImGui::Text(TL("About %u:%02u left", "Осталось около %u:%02u"), left / 60, left % 60);
-    }
-    ImGui::PushTextWrapPos(0.0f);
-    ImGui::TextDisabled("%s", compile ? TL("Only on the first start on this computer and after updates: "
-                                           "then the game runs without compiling shaders.",
-                                           "Только при первом запуске на этом компьютере и после "
-                                           "обновлений: дальше игра работает без компиляции шейдеров.")
-                                      : TL("The first start after an update takes longer.",
-                                           "Первый запуск после обновления занимает больше времени."));
-    ImGui::PopTextWrapPos();
-    ImGui::End();
+    y += 24 + 40;
+    p.Text(0, y, 19.0f, Theme::Muted,
+           compile ? TL("Only on the first start on this computer and after updates: then the game runs without compiling shaders.",
+                        "Только при первом запуске на этом компьютере и после обновлений: дальше игра работает без компиляции шейдеров.")
+                   : TL("The first start after an update takes longer.", "Первый запуск после обновления занимает больше времени."),
+           false, 1.0f, w);
 }
 
 // Frame time statistics over the graph's window.
@@ -2081,19 +2102,16 @@ std::chrono::steady_clock::time_point notice_until;
 
 void NoticeBox() {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f,
-                                   viewport->WorkPos.y + 40.0f * base_scale),
-                            ImGuiCond_Always, ImVec2(0.5f, 0.0f));
-    ImGui::SetNextWindowBgAlpha(Theme::GlassAlpha);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.0f * base_scale, 12.0f * base_scale));
-    ImGui::Begin("##notice", nullptr,
-                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
-                     ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
-                     ImGuiWindowFlags_NoFocusOnAppearing);
-    ImGui::SetWindowFontScale(1.3f);
-    ImGui::TextUnformatted(notice_text.c_str());
-    ImGui::End();
-    ImGui::PopStyleVar();
+    const float k = viewport->WorkSize.y / 1080.0f;
+    SavePainter p{ImGui::GetForegroundDrawList(), ImGui::GetFont(), k, {}};
+    const float w = std::min(p.Width(23.0f, notice_text) + 56, viewport->WorkSize.x / k - 80), h = 72;
+    p.at = ImVec2(viewport->WorkPos.x + (viewport->WorkSize.x - w * k) / 2, viewport->WorkPos.y + 40 * k);
+    for (int i = 2; i >= 1; --i) {
+        const float spread = 8.0f * i;
+        p.Box(-spread, 14 - spread, w + spread, h + 14 + spread, Theme::Ink, 16.0f + spread, 0.1f);
+    }
+    p.Box(0, 0, w, h, ImVec4(32 / 255.0f, 32 / 255.0f, 35 / 255.0f, 1.0f), 16.0f, 0.95f);
+    p.Text(28, 21, 23.0f, Theme::Text, p.Fit(23.0f, notice_text, w - 56));
 }
 
 // The mouse's touchpad (touchpad mode): the pad as the game sees it and the finger on it.
@@ -2132,17 +2150,16 @@ void MousePadBox() {
 void BackgroundLoading() {
     const u32 done = background_done, total = std::max(background_total.load(), 1u);
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    const float pad = 12.0f * base_scale;
-    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + pad,
-                                   viewport->WorkPos.y + viewport->WorkSize.y - pad),
-                            ImGuiCond_Always, ImVec2(0.0f, 1.0f));
-    ImGui::SetNextWindowBgAlpha(0.35f);
-    ImGui::Begin("##background_loading", nullptr,
-                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
-                     ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
-                     ImGuiWindowFlags_NoFocusOnAppearing);
-    ImGui::TextDisabled(TL("Loading shader cache %u%%", "Загрузка кэша шейдеров %u%%"), u32(u64(done) * 100 / total));
-    ImGui::End();
+    const float k = viewport->WorkSize.y / 1080.0f;
+    SavePainter p{ImGui::GetForegroundDrawList(), ImGui::GetFont(), k, {}};
+    char text[96];
+    std::snprintf(text, sizeof(text), TL("Loading shader cache %u%%", "Загрузка кэша шейдеров %u%%"), u32(u64(done) * 100 / total));
+    const float w = p.Width(17.0f, text) + 40, h = 54;
+    p.at = ImVec2(viewport->WorkPos.x + 24 * k, viewport->WorkPos.y + viewport->WorkSize.y - (24 + h) * k);
+    p.Box(0, 0, w, h, ImVec4(28 / 255.0f, 28 / 255.0f, 30 / 255.0f, 1.0f), 12.0f, 0.78f);
+    p.Text(20, 10, 17.0f, Theme::Muted, text);
+    p.Box(20, 38, w - 20, 42, Theme::White(0.12f), 2.0f);
+    p.Box(20, 38, 20 + (w - 40) * std::min(1.0f, float(done) / float(total)), 42, Theme::Accent, 2.0f);
 }
 
 } // namespace
