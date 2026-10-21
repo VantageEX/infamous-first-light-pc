@@ -23,5 +23,5 @@ var easeIO = [0.65, 0, 0.35, 1, 1, 1]
 var icon = {
     play: '', stop: '', folder: '', openFolder: '', save: '',
     log: '', display: '', globe: '', code: '', warning: '',
-    info: '', chevronDown: '', check: '', document: ''
+    info: '', report: '', done: '', chevronDown: '', check: '', document: ''
 }

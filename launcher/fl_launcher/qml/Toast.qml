@@ -8,13 +8,15 @@ Item {
     id: toast
     property string title
     property string text
+    property string kind: 'warning'   // 'warning' or 'done'
     property bool shown: false
     width: 560
     height: card.height
 
-    function show(t, x) {
+    function show(t, x, k) {
         title = t
         text = x
+        kind = k || 'warning'
         shown = true
         timer.restart()
     }
@@ -46,7 +48,7 @@ Item {
             height: 68
             radius: 10
             color: Qt.rgba(1, 1, 1, 0.08)
-            Glyph { anchors.centerIn: parent; name: 'warning'; size: 34; color: T.warn }
+            Glyph { anchors.centerIn: parent; name: toast.kind; size: 34; color: toast.kind === 'done' ? T.ok : T.warn }
         }
         Column {
             id: body

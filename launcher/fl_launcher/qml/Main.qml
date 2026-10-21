@@ -32,7 +32,7 @@ Window {
 
     Connections {
         target: launcher
-        function onNotice(title, text) { toast.show(title, text) }
+        function onNotice(title, text, kind) { toast.show(title, text, kind) }
         function onShowLog() { gameView.showLog() }
     }
 

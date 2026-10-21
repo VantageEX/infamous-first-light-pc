@@ -145,6 +145,24 @@ Item {
                     styleColor: Qt.rgba(0, 0, 0, 0.35)
                     anchors.verticalCenter: parent.verticalCenter
                 }
+                Rectangle {
+                    visible: launcher.testBuild
+                    width: testBadge.implicitWidth + 16
+                    height: 26
+                    radius: 4
+                    color: T.warn
+                    anchors.verticalCenter: parent.verticalCenter
+                    Text {
+                        id: testBadge
+                        anchors.centerIn: parent
+                        text: launcher.tr.test_build
+                        font.family: T.font
+                        font.pixelSize: 16
+                        font.weight: Font.DemiBold
+                        font.letterSpacing: 1.3
+                        color: 'black'
+                    }
+                }
             }
         }
         Text {
@@ -463,11 +481,23 @@ Item {
                 anchors.fill: parent
                 anchors.topMargin: 6
                 visible: view.page === 3
+                Text {
+                    id: testHint
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    visible: launcher.testBuild
+                    height: visible ? implicitHeight + 14 : 0
+                    text: launcher.tr.test_hint
+                    font.family: T.font
+                    font.pixelSize: 20
+                    color: T.warn
+                    wrapMode: Text.Wrap
+                }
                 ScrollView {
                     id: logScroll
                     anchors.left: parent.left
                     anchors.right: parent.right
-                    anchors.top: parent.top
+                    anchors.top: testHint.bottom
                     anchors.bottom: logButtons.top
                     anchors.bottomMargin: 18
                     property bool follow: true
@@ -508,19 +538,25 @@ Item {
                     anchors.bottom: parent.bottom
                     spacing: 16
                     PillButton {
-                        text: launcher.tr.open_logs
-                        glyph: 'openFolder'
+                        text: launcher.tr.create_report
+                        glyph: 'report'
                         size: 58
                         fontSize: 23
-                        minWidth: 250
+                        minWidth: 290
+                        onClicked: launcher.createReport()
+                    }
+                    CircleButton {
+                        width: 58
+                        height: 58
+                        glyph: 'openFolder'
+                        tip: launcher.tr.open_logs
                         onClicked: launcher.openLogs()
                     }
-                    PillButton {
-                        text: launcher.tr.open_saves
+                    CircleButton {
+                        width: 58
+                        height: 58
                         glyph: 'save'
-                        size: 58
-                        fontSize: 23
-                        minWidth: 250
+                        tip: launcher.tr.open_saves
                         onClicked: launcher.openSaves()
                     }
                 }

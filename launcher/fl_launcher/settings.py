@@ -10,6 +10,10 @@ from pathlib import Path
 FROZEN = getattr(sys, 'frozen', False)
 REPO = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parents[2]
 PORT = REPO / 'port'
+# A TEST_BUILD file beside the executable (or in the repository root) makes a build for testers:
+# extra core statistics in the log and the report reminder in the interface.
+TEST_BUILD = (REPO / 'TEST_BUILD').is_file()
+VERSION_FILE = REPO / 'VERSION'
 
 
 def data_dir():
