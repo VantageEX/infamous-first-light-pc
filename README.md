@@ -1,5 +1,15 @@
 # inFAMOUS First Light — native PC port
 
+[![license](https://img.shields.io/badge/license-GPL--2.0-blue)](LICENSE)
+[![platform](https://img.shields.io/badge/platform-Windows-0078D6?logo=windows&logoColor=white)](#playing)
+[![C++](https://img.shields.io/badge/C%2B%2B-23-00599C?logo=cplusplus&logoColor=white)](port/gpu)
+[![C](https://img.shields.io/badge/C-11-A8B9CC?logo=c&logoColor=black)](port/src)
+[![Vulkan](https://img.shields.io/badge/Vulkan-1.3-AC162C?logo=vulkan&logoColor=white)](port/gpu)
+[![Qt](https://img.shields.io/badge/Qt%20Quick-PySide6-41CD52?logo=qt&logoColor=white)](launcher)
+[![release](https://img.shields.io/github/v/release/VantageEX/infamous-first-light-pc?include_prereleases&label=release)](https://github.com/VantageEX/infamous-first-light-pc/releases)
+[![downloads](https://img.shields.io/github/downloads/VantageEX/infamous-first-light-pc/total?label=downloads)](https://github.com/VantageEX/infamous-first-light-pc/releases)
+[![status](https://img.shields.io/badge/status-early%20preview-orange)](#status)
+
 An unofficial native Windows port of **inFAMOUS First Light** (PS4). The game's own x86-64 code runs directly on the PC's processor, a reimplemented PS4 runtime stands in for the console's system libraries, and the graphics are translated to Vulkan. It is not a general-purpose emulator.
 
 > **You need your own copy of the game**, dumped from your own PS4. No game files, firmware, keys or Sony assets are part of this repository or its releases.
