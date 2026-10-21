@@ -26,9 +26,10 @@ FIRST_LIGHT_ENV = {
     # and the emitter counters after them stay precise: without those part of the dash effects
     # vanish. Fixed addresses: the game allocates them the same way every start.
     'TLG_RELAXED_RANGES': '106e159000-106e258000,106ff59000-1070058000',
-    # The light glare reads two occlusion queries a frame. Mode 3 (the core's default) gives it
-    # 0/0 (yellow screens and buildings), 2 a negative count (white-outs).
-    'TLG_OCCLUSION_MODE': '4',
+    # The light glare reads two occlusion queries a frame. Mode 3 gives it 0/0 (yellow screens
+    # and buildings), 2 a negative count (white-outs), 4 (iss_pc's real queries, the core's
+    # default) yellow flickers and host waits. 5 is this port's fixed step.
+    'TLG_OCCLUSION_MODE': '5',
 }
 
 # Test builds (settings.TEST_BUILD) add the core statistics the developer reads in the reports;
