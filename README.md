@@ -18,7 +18,7 @@ An unofficial native Windows port of **inFAMOUS First Light** (PS4). The game's 
 
 | | |
 |---|---|
-| ![Fetch's neon power in a cutscene, 45 FPS](docs/screenshots/gameplay-neon-power.jpg) | ![An arena challenge with the performance overlay, 36 FPS](docs/screenshots/gameplay-arena.jpg) |
+| ![Fetch using her neon power in the city at night, 42 FPS on renderer v2](docs/screenshots/gameplay-city.jpg) | ![Fetch's neon dash close up, with the performance overlay, 41 FPS](docs/screenshots/gameplay-neon-dash.jpg) |
 
 ![The launcher: the game's own art, Play, the newest save to continue and the settings](docs/screenshots/launcher.jpg)
 
