@@ -220,6 +220,76 @@ Item {
                 onClicked: view.browse()
             }
         }
+        // the newest save (saves.py): where Play takes the player back to
+        Item {
+            width: Math.min(parent.width, 620)
+            height: continueCard.visible ? continueCard.height + 28 : 0
+            Rectangle {
+                id: continueCard
+                y: 28
+                visible: launcher.lastSave.mission !== undefined
+                width: parent.width
+                height: continueBody.implicitHeight + 40
+                radius: 14
+                color: Qt.rgba(18 / 255, 18 / 255, 22 / 255, 0.62)
+                border.width: 1
+                border.color: Qt.rgba(1, 1, 1, 0.07)
+                Column {
+                    id: continueBody
+                    x: 26
+                    y: 20
+                    width: parent.width - 52
+                    spacing: 10
+                    Text {
+                        text: launcher.tr['continue'].toUpperCase()
+                        font.family: T.font
+                        font.pixelSize: 16
+                        font.letterSpacing: 1.6
+                        color: T.fg3
+                    }
+                    Text {
+                        width: parent.width
+                        text: launcher.lastSave.mission || ''
+                        font.family: T.font
+                        font.pixelSize: 30
+                        font.weight: Font.Light
+                        color: T.fg
+                        elide: Text.ElideRight
+                    }
+                    Rectangle {
+                        visible: (launcher.lastSave.percent || -1) >= 0
+                        width: parent.width
+                        height: 6
+                        radius: 3
+                        color: Qt.rgba(1, 1, 1, 0.14)
+                        Rectangle {
+                            width: parent.width * Math.max(0, launcher.lastSave.percent || 0) / 100
+                            height: parent.height
+                            radius: parent.radius
+                            color: T.blue
+                        }
+                    }
+                    Row {
+                        width: parent.width
+                        Text {
+                            width: parent.width - saveCount.implicitWidth
+                            text: launcher.lastSave.detail || ''
+                            font.family: T.font
+                            font.pixelSize: 20
+                            color: T.fg2
+                            elide: Text.ElideRight
+                        }
+                        Text {
+                            id: saveCount
+                            text: launcher.lastSave.count || ''
+                            font.family: T.font
+                            font.pixelSize: 20
+                            color: T.fg3
+                        }
+                    }
+                }
+            }
+        }
         Item {
             width: parent.width
             height: 60

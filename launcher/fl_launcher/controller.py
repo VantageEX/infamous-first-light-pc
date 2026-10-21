@@ -5,7 +5,7 @@ from pathlib import Path
 from PySide6.QtCore import Property, QLocale, QObject, QUrl, Signal, Slot
 from PySide6.QtGui import QFontDatabase, QTextCursor
 
-from . import game, report
+from . import game, report, saves
 from .i18n import STRINGS, UI_LANGUAGES, Texts
 from .runner import GameRunner, open_folder, system_language_key
 from .settings import (CORE_DEFAULTS, DISPLAY_MODES, FPS_LIMITS, INI_SWITCHES, PORT, TEST_BUILD, VERSION_FILE,
@@ -26,6 +26,7 @@ class Launcher(QObject):
     settingsChanged = Signal()
     runningChanged = Signal()
     statusChanged = Signal()
+    savesChanged = Signal()          # the game folder, the language or a play session changed the saves
     notice = Signal(str, str, str)   # title, text, kind ('warning' or 'done'): a toast
     showLog = Signal()               # the game failed: open the log page
 
@@ -70,6 +71,7 @@ class Launcher(QObject):
         self.textsChanged.emit()
         self.gameChanged.emit()
         self.settingsChanged.emit()
+        self.savesChanged.emit()
 
     @Property(str, constant=True)
     def iconFont(self):
@@ -119,6 +121,22 @@ class Launcher(QObject):
     def backgroundUrl(self):
         return _url(self.info.background) if self.info else ''
 
+    @Property('QVariantMap', notify=savesChanged)
+    def lastSave(self):
+        """The newest save of this game for the Continue card: mission, percent (-1 unknown),
+        when it was saved, autosave or not, how many saves; empty when there is none."""
+        found = saves.list_saves(self.settings.folder / 'user', self.info.title_id) if self.info else []
+        if not found:
+            return {}
+        newest = found[0]
+        line = [f"{newest['percent']}%"] if newest['percent'] is not None else []
+        line.append(saves.when(newest['mtime'], self.t))
+        if newest['auto']:
+            line.append(self.t('save_auto'))
+        return {'mission': newest['mission'],
+                'percent': newest['percent'] if newest['percent'] is not None else -1,
+                'detail': ' · '.join(line), 'count': self.t('save_count', count=len(found))}
+
     @Slot(str)
     def chooseFolder(self, url):
         folder = QUrl(url).toLocalFile() if '://' in url or url.startswith('file:') else url
@@ -149,6 +167,7 @@ class Launcher(QObject):
             self.settings.save()
         self.gameChanged.emit()
         self.settingsChanged.emit()
+        self.savesChanged.emit()
 
     # ---- settings -----------------------------------------------------------------------------
     @Property('QVariantMap', notify=settingsChanged)
@@ -286,6 +305,7 @@ class Launcher(QObject):
         self._log_line(message)
         self._set_status(message)
         self.runningChanged.emit()
+        self.savesChanged.emit()
         if code:
             self.showLog.emit()
 
