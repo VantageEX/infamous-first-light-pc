@@ -47,3 +47,5 @@ __pycache__/
 /dev/shader_tests/*.spv
 /dist/
 /public/
+/package.log
+/build.log
