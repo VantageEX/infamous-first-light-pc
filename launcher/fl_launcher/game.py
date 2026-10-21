@@ -21,6 +21,11 @@ FIRST_LIGHT_ENV = {
     'TLG_PIPELINE_BINARIES': '0',  # VK_KHR_pipeline_binary crashes on the NVIDIA 595 driver
     'TLG_GC_BUDGET_MB': '3500',    # texture cache budget (iss_pc: 5600 runs out of 6 GB of VRAM)
     'TLG_FRAME_STATS': '1',        # FPS in the log every 5 s
+    # The body of First Light's particle lists (both buffer sets), read by the GPU only: their
+    # read faults stay out of precise mode (a little FPS). Their first page (the list header)
+    # and the emitter counters after them stay precise: without those part of the dash effects
+    # vanish. Fixed addresses: the game allocates them the same way every start.
+    'TLG_RELAXED_RANGES': '106e159000-106e258000,106ff59000-1070058000',
     # The light glare reads two occlusion queries a frame. Mode 3 (the core's default) gives it
     # 0/0 (yellow screens and buildings), 2 a negative count (white-outs).
     'TLG_OCCLUSION_MODE': '4',
