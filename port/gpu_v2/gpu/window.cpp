@@ -448,12 +448,17 @@ LoadingArt& Art(){static LoadingArt art;return art;}
 }
 
 namespace {
-// The loading screen's words, pt-BR or en-US as the launcher's language (TLG_UI_LANG).
-bool Portuguese(){
-    static const bool pt=[]{const char* l=std::getenv("TLG_UI_LANG");return !(l&&!std::strncmp(l,"en",2));}();
-    return pt;
+// The loading screen's words, Russian or English as the launcher's language (TLG_UI_LANG, ru or
+// en), as the overlay picks them (tlg_overlay.cpp UiRussian).
+bool Russian(){
+    static const bool ru=[]{
+        for(const char* name:{"TLG_UI_LANG","ISS_UI_LANG","LC_MESSAGES","LANG"})
+            if(const char* v=std::getenv(name);v&&*v)return (v[0]|0x20)=='r'&&(v[1]|0x20)=='u';
+        return false;
+    }();
+    return ru;
 }
-const wchar_t* L2(const wchar_t* en,const wchar_t* pt){return Portuguese()?pt:en;}
+const wchar_t* L2(const wchar_t* en,const wchar_t* ru){return Russian()?ru:en;}
 }
 
 // Before the renderer can present (v2's first-run steps: indexing and compiling the game's compute
@@ -508,34 +513,34 @@ void WindowSDL::DrawLoading(int phase,unsigned done,unsigned total){
     static unsigned eta_from=0;
     if(phase!=eta_phase){eta_phase=phase;eta_start=GetTickCount64();eta_from=done;}
     const wchar_t* title=
-        phase==5?L2(L"Indexing the game's shaders...",L"Indexando os shaders do jogo..."):
-        phase==4?L2(L"Compiling compute shaders...",L"Compilando shaders de compute..."):
-        phase==1?L2(L"Loading shader cache...",L"Carregando o cache de shaders..."):
-        phase==0?L2(L"Starting...",L"Iniciando..."):
-                 L2(L"Preparing graphics...",L"Preparando os gráficos...");
+        phase==5?L2(L"Indexing the game's shaders...",L"Индексация шейдеров игры..."):
+        phase==4?L2(L"Compiling compute shaders...",L"Компиляция вычислительных шейдеров..."):
+        phase==1?L2(L"Loading shader cache...",L"Загрузка кэша шейдеров..."):
+        phase==0?L2(L"Starting...",L"Запуск..."):
+                 L2(L"Preparing graphics...",L"Подготовка графики...");
     const bool first_run=phase==4||phase==5;
     const wchar_t* note=first_run
         ?L2(L"Only on the first start on this computer and after updates: then the game runs without compiling shaders.",
-            L"Só na primeira abertura neste computador e depois de atualizações: depois o jogo roda sem compilar shaders.")
-        :L2(L"The first start after an update takes longer.",L"A primeira abertura depois de uma atualização demora mais.");
+            L"Только при первом запуске на этом компьютере и после обновлений: дальше игра работает без компиляции шейдеров.")
+        :L2(L"The first start after an update takes longer.",L"Первый запуск после обновления занимает больше времени.");
     Bitmap frame(w,h,PixelFormat32bppPARGB);
     {
         Graphics g(&frame);
         g.DrawImage(art.scaled.get(),0,0,w,h);
         g.SetSmoothingMode(SmoothingModeAntiAlias);
         g.SetTextRenderingHint(TextRenderingHintAntiAliasGridFit);
-        // The overlay's block: 40% of the width, centred; ImGui's dark style colours.
+        // The overlay's block: 40% of the width, centred, in its colours (tlg_overlay.cpp Theme).
         const REAL bw=REAL(w)*0.40f,x=(REAL(w)-bw)/2;
         const REAL base=std::max<REAL>(13.f,REAL(h)*0.018f);
         FontFamily family(L"Segoe UI");
         Font big(&family,base*1.6f,FontStyleRegular,UnitPixel),font(&family,base,FontStyleRegular,UnitPixel);
-        SolidBrush text(Color(255,255,255,255)),dim_text(Color(255,128,128,128));
+        SolidBrush text(Color(255,255,255,255)),dim_text(Color(163,255,255,255));
         const REAL bar_h=base*1.55f;
         REAL y=REAL(h)*0.5f-base*4.0f;
         g.DrawString(title,-1,&big,PointF(x,y),&text);
         y+=base*2.4f;
         if(total){
-            SolidBrush frame_bg(Color(138,41,74,122)),fill(Color(255,230,179,0));
+            SolidBrush frame_bg(Color(18,255,255,255)),fill(Color(255,0x1f,0x8f,0xff));
             g.FillRectangle(&frame_bg,x,y,bw,bar_h);
             const REAL part=bw*REAL(std::min(done,total))/REAL(total);
             if(part>0)g.FillRectangle(&fill,x,y,part,bar_h);
@@ -548,13 +553,13 @@ void WindowSDL::DrawLoading(int phase,unsigned done,unsigned total){
             if(first_run&&done>eta_from&&done<total&&ms>3000){
                 const unsigned left=unsigned(double(ms)/1000.0*double(total-done)/double(done-eta_from))+1;
                 wchar_t eta[64];
-                swprintf(eta,64,L2(L"About %u:%02u left",L"Faltam cerca de %u:%02u"),left/60,left%60);
+                swprintf(eta,64,L2(L"About %u:%02u left",L"Осталось около %u:%02u"),left/60,left%60);
                 g.DrawString(eta,-1,&font,PointF(x,y),&text);
                 y+=base*1.5f;
             }
         }else{
             // Unknown length: a segment sweeping across the bar.
-            SolidBrush frame_bg(Color(138,41,74,122)),fill(Color(255,230,179,0));
+            SolidBrush frame_bg(Color(18,255,255,255)),fill(Color(255,0x1f,0x8f,0xff));
             g.FillRectangle(&frame_bg,x,y,bw,bar_h*0.35f);
             const double t=double(GetTickCount64()%1600)/1600.0;
             const REAL seg=bw*0.25f,sx=x+REAL(t)*(bw+seg)-seg;

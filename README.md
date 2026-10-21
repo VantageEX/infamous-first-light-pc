@@ -35,8 +35,8 @@ An unofficial native Windows port of **inFAMOUS First Light** (PS4). The game's 
 | | |
 |---|---|
 | Tested dump | CUSA00897 (EU), base game 1.00 |
-| Frame rate | about 25–30 FPS on a Ryzen + RTX 4070 SUPER; first goal: a steady 30 FPS on mid-range PCs |
-| Known issues | GPU readbacks cost frame rate (work in progress); some lights pulse in the boat cutscene |
+| Frame rate | about 35–45 FPS with renderer v2 (the default), 15–25 with the classic one, on a Ryzen + RTX 4070 SUPER; goal: a steady 30 FPS on mid-range PCs |
+| Known issues | the first start compiles shaders (a few minutes, then cached); GPU readbacks cost frame rate (work in progress); some lights pulse in the boat cutscene |
 
 ## Playing
 
@@ -80,21 +80,21 @@ pacman -S --needed git patch \
   mingw-w64-clang-x86_64-{sdl3,fmt,boost,robin-map,xxhash,ffmpeg,zydis} \
   mingw-w64-clang-x86_64-{spirv-tools,spirv-headers,spirv-cross}
 git clone --recursive <this repository> && cd <repository>
-cd port && ISS_LTO=OFF bash build.sh && cd ..
+cd port && ISS_LTO=OFF TLG_RENDERER_V2=1 bash build.sh && cd ..
 ```
 
 The launcher (PySide6): `py -m venv .venv`, `.venv\Scripts\pip install PySide6-Essentials pillow iced-x86`, then `launcher\start.bat`. A release folder: `bash dev/package.sh` (`TEST=1` for a test build). `bash dev/export_public.sh` shows exactly what a push publishes.
 
 | Folder | What it holds |
 |---|---|
-| `port/` | The core: loader, PS4 runtime (`src/`), Vulkan renderer (`gpu/`), game preparation scripts |
+| `port/` | The core: loader, PS4 runtime (`src/`), Vulkan renderers (`gpu/` classic, `gpu_v2/` renderer v2), game preparation scripts |
 | `launcher/` | The launcher (PySide6 + Qt Quick) |
 | `dev/` | Packaging, RenderDoc capture, debugging aids |
 | `docs/iss_pc/` | The documentation of the project the core comes from |
 
 ## Credits and license
 
-This port is a fork of [**iss_pc**](https://github.com/HayatoG/iss_pc) by **HayatoG**, the native PC port of inFAMOUS Second Son; its core (runtime, loader, GPU translation and many fixes) is the foundation of this project. The GPU translation comes from [**shadPS4**](https://github.com/shadps4-emu/shadPS4); iss_pc also credits [tlg_pc](https://github.com/HayatoG/tlg_pc), [gr2_pc](https://github.com/HayatoG/gr2_pc), [gow3_pc](https://github.com/FelipePrado0/gow3_pc), [bloodborne_pc](https://github.com/deadinside28/bloodborne_pc), [ShadowOfTheColossus-PC](https://github.com/AjncSystem/ShadowOfTheColossus-PC) and the other projects listed in [docs/iss_pc](docs/iss_pc/README.md). ATRAC9 audio via [LibAtrac9](https://github.com/Thealexbarney/LibAtrac9).
+This port is a fork of [**iss_pc**](https://github.com/HayatoG/iss_pc) by **HayatoG**, the native PC port of inFAMOUS Second Son; its core (runtime, loader, GPU translation and many fixes) is the foundation of this project. The GPU translation comes from [**shadPS4**](https://github.com/shadps4-emu/shadPS4); iss_pc also credits [tlg_pc](https://github.com/HayatoG/tlg_pc), [gr2_pc](https://github.com/HayatoG/gr2_pc), [gow3_pc](https://github.com/FelipePrado0/gow3_pc), [bloodborne_pc](https://github.com/deadinside28/bloodborne_pc), [ShadowOfTheColossus-PC](https://github.com/AjncSystem/ShadowOfTheColossus-PC) and the other projects listed in [docs/iss_pc](docs/iss_pc/README.md). Renderer v2 (`port/gpu_v2`, by way of iss_pc) is **Castlesea**'s renderer from [infamous-second-son-pc-port](https://github.com/Castlesea/infamous-second-son-pc-port), on **weshayoub92**'s [shadPS4-perf](https://github.com/weshayoub92/shadPS4-perf). ATRAC9 audio via [LibAtrac9](https://github.com/Thealexbarney/LibAtrac9).
 
 Licensed under **GPL-2.0**, like the projects it builds on ([LICENSE](LICENSE)).
 
@@ -119,8 +119,8 @@ Licensed under **GPL-2.0**, like the projects it builds on ([LICENSE](LICENSE)).
 | | |
 |---|---|
 | Проверенный дамп | CUSA00897 (EU), базовая игра 1.00 |
-| FPS | около 25–30 на Ryzen + RTX 4070 SUPER; первая цель — стабильные 30 FPS на средних ПК |
-| Известные проблемы | чтение данных с видеокарты стоит FPS (в работе); в катсцене с лодкой мигают некоторые огни |
+| FPS | около 35–45 на рендере v2 (по умолчанию), 15–25 на обычном, Ryzen + RTX 4070 SUPER; цель — стабильные 30 FPS на средних ПК |
+| Известные проблемы | первый запуск компилирует шейдеры (несколько минут, потом из кэша); чтение данных с видеокарты стоит FPS (в работе); в катсцене с лодкой мигают некоторые огни |
 
 ## Как играть
 
@@ -159,7 +159,7 @@ Licensed under **GPL-2.0**, like the projects it builds on ([LICENSE](LICENSE)).
 
 ## Авторы и лицензия
 
-Этот порт — форк [**iss_pc**](https://github.com/HayatoG/iss_pc) от **HayatoG**, нативного порта inFAMOUS Second Son; его ядро (среда выполнения, загрузчик, перевод графики и множество исправлений) — основа этого проекта. Перевод графики взят из [**shadPS4**](https://github.com/shadps4-emu/shadPS4); остальные проекты, на которых построен iss_pc, перечислены в [docs/iss_pc](docs/iss_pc/README.md).
+Этот порт — форк [**iss_pc**](https://github.com/HayatoG/iss_pc) от **HayatoG**, нативного порта inFAMOUS Second Son; его ядро (среда выполнения, загрузчик, перевод графики и множество исправлений) — основа этого проекта. Перевод графики взят из [**shadPS4**](https://github.com/shadps4-emu/shadPS4); остальные проекты, на которых построен iss_pc, перечислены в [docs/iss_pc](docs/iss_pc/README.md). Рендер v2 (`port/gpu_v2`, через iss_pc) — рендер **Castlesea** из [infamous-second-son-pc-port](https://github.com/Castlesea/infamous-second-son-pc-port) на основе [shadPS4-perf](https://github.com/weshayoub92/shadPS4-perf) от **weshayoub92**.
 
 Лицензия **GPL-2.0**, как у проектов, на которых он основан ([LICENSE](LICENSE)).
 
