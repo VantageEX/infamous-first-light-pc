@@ -131,13 +131,25 @@ inline std::array<std::atomic<std::int8_t>, kEntries.size()>& States() {
 } // namespace Detail
 
 /// TLG_OCCLUSION_MODE (ISS_ alias): how the ZPASS_DONE occlusion counter is answered. 0 = the old fake,
-/// ever-growing counter, 1 = both values equal, 2 = end far above begin, 3 = zero counts (default).
+/// ever-growing counter, 1 = both values equal, 2 = end far above begin, 3 = zero counts (default),
+/// 4 = like 0 but TLG_OCCLUSION_STEP pixels per render backend and query (First Light: modes 1-3
+/// write a backend's end over the next one's begin, and 3 gives its light glare a 0/0).
 inline int OcclusionMode() {
     static const int mode = [] {
         const char* v = std::getenv("TLG_OCCLUSION_MODE");
         return v && *v ? std::atoi(v) : 3;
     }();
     return mode;
+}
+
+/// TLG_OCCLUSION_STEP: pixels each render backend counts per query in occlusion mode 4 (default 1024).
+inline unsigned long long OcclusionStep() {
+    static const unsigned long long step = [] {
+        const char* v = std::getenv("TLG_OCCLUSION_STEP");
+        const long long n = v && *v ? std::atoll(v) : 1024;
+        return static_cast<unsigned long long>(n > 0 ? n : 1024);
+    }();
+    return step;
 }
 
 /// State of one backport.

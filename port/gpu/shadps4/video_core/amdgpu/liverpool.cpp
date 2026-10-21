@@ -1208,7 +1208,9 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                                         static_cast<unsigned long long>(results[2]),
                                         static_cast<unsigned long long>(results[3]));
                         }
-                        if (occ_mode == 0) {
+                        if (occ_mode == 0 || occ_mode == 4) {
+                            // Each render backend owns a 16-byte {begin, end} slot; the end event
+                            // writes at the begin address + 8, so one value per backend.
                             for (s32 i = 0; i < num_counter_pairs; ++i, results += 2) {
                                 *results = pixel_counter | OcclusionCounterValidMask;
                             }
@@ -1220,7 +1222,10 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                                              OcclusionCounterValidMask;
                             }
                         }
-                        pixel_counter += OcclusionCounterStep;
+                        // Mode 4: a plausible count per query (every query sees the same number of
+                        // pixels, so "visible / unoccluded" ratios are 1 and nothing divides by 0).
+                        pixel_counter += occ_mode == 4 ? Common::Backports::OcclusionStep()
+                                                       : OcclusionCounterStep;
                     }
                 }
                 break;

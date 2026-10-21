@@ -50,7 +50,9 @@ def module(path):
     def identity(name):
         parts = name.split('#')
         if len(parts) != 3:
-            raise ValueError(f'unsupported symbol encoding {name!r}')
+            # Plain names are not linkable, as in link_modules.py: First Light's libc has
+            # undefined __start__Ztext/__stop__Ztext that no relocation uses.
+            return None
         n, lib, mod = parts
         return (n, libraries[lib], modules[mod])
     symbols = []
@@ -108,6 +110,8 @@ def link(game, out):
     main_modules = {identity:key for key,identity in main['modules'].items()}
     def imported(symbol):
         key = symbol['identity']
+        if key is None:
+            raise ValueError(f'libc relocation to unlinkable symbol {symbol["name"]!r}')
         if key not in identities:
             n,lib,mod = key
             name = (f'{n}#{main_libraries[lib]}#{main_modules[mod]}'

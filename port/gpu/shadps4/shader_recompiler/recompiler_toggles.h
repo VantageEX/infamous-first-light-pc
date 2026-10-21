@@ -27,11 +27,13 @@ inline bool AlwaysOn() {
     return true;
 }
 
-/// inFAMOUS Second Son (CUSA00223 EU/US disc, CUSA00004 US digital): the LDS barrier fixes are
-/// aimed at its GPU particle smoke (iss_pc #7) and stay off for the other games until tested.
+/// inFAMOUS Second Son (CUSA00223 EU/US disc, CUSA00004 US digital) and First Light (CUSA00897,
+/// CUSA00575; same engine and particle shaders): the LDS barrier fixes are aimed at the GPU
+/// particle smoke (iss_pc #7) and stay off for the other games until tested.
 inline bool InfamousDefault() {
     const std::string_view serial = Common::ElfInfo::Instance().GameSerial();
-    return serial == "CUSA00223" || serial == "CUSA00004";
+    return serial == "CUSA00223" || serial == "CUSA00004" || serial == "CUSA00897" ||
+           serial == "CUSA00575";
 }
 } // namespace Detail
 
