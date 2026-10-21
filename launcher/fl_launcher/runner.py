@@ -48,7 +48,7 @@ class GameRunner(QObject):
     def running(self):
         return self.process is not None and self.process.state() != QProcess.NotRunning
 
-    def start(self, game_dir, data_dir, language_id, extra_env=None):
+    def start(self, game_dir, data_dir, language_id, extra_env=None, ui_language='en'):
         if self.running:
             return
         data_dir = Path(data_dir)
@@ -63,6 +63,9 @@ class GameRunner(QObject):
         env.insert('TLG_DATA_DIR', str(data_dir))
         env.insert('TLG_USER_DIR', str(data_dir / 'user'))
         env.insert('TLG_LANGUAGE', str(language_id))
+        # The core's menus and dialogs speak the launcher's language (ru or en).
+        env.insert('TLG_UI_LANG', ui_language)
+        env.insert('ISS_UI_LANG', ui_language)
         env.insert('PYTHONIOENCODING', 'utf-8')
         env.insert('PYTHONUNBUFFERED', '1')
         for key, value in (extra_env or {}).items():

@@ -404,10 +404,10 @@ static void sample_motion(PadData *d, SDL_Gamepad *g, const bool *k) {
         if (toggle && !motion.toggle_held) {
             motion.mode=!motion.mode;
             const char *lang=getenv("TLG_UI_LANG");
-            const int pt=!(lang && !strncmp(lang,"en",2));
-            tlggpu_overlay_notice(motion.mode ? (pt ? "Modo sensor LIGADO (lata de spray): X sacode, R2 pinta, analógico esquerdo mira"
+            const int ru=lang && !strncmp(lang,"ru",2);
+            tlggpu_overlay_notice(motion.mode ? (ru ? "Режим сенсора ВКЛ. (баллончик): крестик встряхивает, R2 распыляет, левый стик целится"
                                                     : "Sensor mode ON (spray can): cross shakes, R2 sprays, left stick aims")
-                                              : (pt ? "Modo sensor desligado" : "Sensor mode off"), 3.0f);
+                                              : (ru ? "Режим сенсора выкл." : "Sensor mode off"), 3.0f);
             printf("Runtime: sensor mode %s\n",motion.mode ? "on" : "off");
             if (motion.mode) tlggpu_graffiti_guide(0); /* the steps, the first time only */
         }
@@ -598,10 +598,10 @@ static uint32_t sample_mouse(PadData *d, bool aiming_can, const bool *k) {
             if (key_down && !key_was_down) {
                 toggled=!toggled;
                 const char *lang=getenv("TLG_UI_LANG");
-                const int pt=!(lang && !strncmp(lang,"en",2));
-                tlggpu_overlay_notice(toggled ? (pt ? "Mouse: modo touchpad LIGADO (esquerdo toca, arrastar desliza, direito = dois dedos)"
+                const int ru=lang && !strncmp(lang,"ru",2);
+                tlggpu_overlay_notice(toggled ? (ru ? "Мышь: режим тачпада ВКЛ. (левая — касание, перетаскивание — свайп, правая — два пальца)"
                                                     : "Mouse: touchpad mode ON (left touches, drag swipes, right = two fingers)")
-                                              : (pt ? "Mouse: câmera" : "Mouse: camera"), 2.5f);
+                                              : (ru ? "Мышь: камера" : "Mouse: camera"), 2.5f);
             }
             pad_mode=toggled;
         } else pad_mode=key_down;

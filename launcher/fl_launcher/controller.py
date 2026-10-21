@@ -254,7 +254,8 @@ class Launcher(QObject):
         self._log_line(self.t('starting'))
         for key, value in extra.items():
             self._log_line(f'{key}={value}')
-        self.runner.start(self.info.folder, self.settings.folder, self._language_id(), extra)
+        self.runner.start(self.info.folder, self.settings.folder, self._language_id(), extra,
+                          ui_language=self.t.language)
         self._set_status(self.t('running') if self.runner.running else '')
         self.runningChanged.emit()
 
