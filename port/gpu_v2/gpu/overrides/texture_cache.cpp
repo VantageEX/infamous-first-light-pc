@@ -351,10 +351,16 @@ void TextureCache::InvalidateMemory(VAddr addr, size_t size) {
             const VAddr ahead = pages_end;
             const VAddr ahead_end = ahead + streak_bytes;
             ImageIds marked;
+            // Only images already hashed: hashing one here reads its memory under this lock, and
+            // pages ahead may still be read-protected for a GPU write. That read faults, the fault
+            // waits for the command processor to read the page back, and the command processor
+            // waits for this lock (FindDepthTarget, BindTextures): the game froze for good
+            // (First Light, 2026-10-21). An image not hashed yet keeps its tracking and faults
+            // on its own when the game reaches it.
             ForEachImageInRegion(ahead, streak_bytes, [&](ImageId image_id, Image& image) {
                 if (image.info.guest_address >= ahead &&
                     image.info.guest_address + image.info.guest_size <= ahead_end &&
-                    image.IsTracked())
+                    image.IsTracked() && image.hash != 0)
                     marked.push_back(image_id);
             });
             for (const ImageId image_id : marked) {
