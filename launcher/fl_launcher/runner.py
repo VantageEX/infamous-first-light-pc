@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Starts the core (port/run.py prepares the game image and runs tlg-probe.exe) and keeps its log."""
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -83,6 +84,11 @@ class GameRunner(QObject):
 
     def stop(self):
         if self.running:
+            # run.py waits on tlg-probe.exe: killing run.py alone would leave the game running.
+            if os.name == 'nt':
+                subprocess.run(['taskkill', '/PID', str(self.process.processId()), '/T', '/F'],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               creationflags=subprocess.CREATE_NO_WINDOW)
             self.process.kill()
 
     def _read(self):
