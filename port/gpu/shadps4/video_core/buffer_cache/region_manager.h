@@ -115,20 +115,19 @@ public:
             if constexpr (!enable) {
                 NoteGpuBitsCleared();
             }
-            if (EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Precise &&
-                !RelaxedReadbackRegion(cpu_addr)) {
+            if (EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Precise) {
                 UpdateProtection<enable, true>();
             }
         }
     }
 
     /// tlg: TLG_RELAXED_RANGES=<start>-<end>[,...] (hex guest addresses): in precise readback
-    /// mode, the 4 MiB regions these ranges touch keep GPU-written pages readable, as in
-    /// relaxed mode. For memory the game rewrites every frame but only the GPU needs (First
-    /// Light's particle pools and lists, double buffered): their read faults made each frame
-    /// wait for the GPU several times (about 45 to 25 FPS), while the few values the CPU really
-    /// reads back (emissive exposure) live elsewhere and stay precise.
-    static bool RelaxedReadbackRegion(VAddr region_base) {
+    /// mode, the 4 KiB pages of these ranges stay readable when the GPU writes them, as in
+    /// relaxed mode. For memory the game rewrites every frame but only the GPU reads: First
+    /// Light's particle lists (double buffered) faulted each frame into GPU waits (about 45 to
+    /// 25 FPS). Their emitter counters, next to them, must stay precise (without them part of
+    /// the dash effects vanish), hence the page granularity.
+    static const std::vector<std::pair<VAddr, VAddr>>& RelaxedRanges() {
         static const std::vector<std::pair<VAddr, VAddr>> ranges = [] {
             std::vector<std::pair<VAddr, VAddr>> out;
             const char* env = std::getenv("TLG_RELAXED_RANGES");
@@ -148,13 +147,26 @@ public:
             }
             return out;
         }();
-        const VAddr region_end = region_base + TRACKER_HIGHER_PAGE_SIZE;
-        for (const auto& [start, stop] : ranges) {
-            if (start < region_end && region_base < stop) {
-                return true;
+        return ranges;
+    }
+
+    /// The pages of this region in TLG_RELAXED_RANGES, or null when none (built once).
+    const RegionBits* RelaxedPages() {
+        if (!relaxed_checked) {
+            relaxed_checked = true;
+            const VAddr region_end = cpu_addr + TRACKER_HIGHER_PAGE_SIZE;
+            for (const auto& [start, stop] : RelaxedRanges()) {
+                if (start >= region_end || stop <= cpu_addr) {
+                    continue;
+                }
+                const size_t first = (std::max(start, cpu_addr) - cpu_addr) / TRACKER_BYTES_PER_PAGE;
+                const size_t last = Common::DivCeil(std::min(stop, region_end) - cpu_addr,
+                                                    TRACKER_BYTES_PER_PAGE);
+                relaxed_pages.SetRange(first, last);
+                relaxed_any = true;
             }
         }
-        return false;
+        return relaxed_any ? &relaxed_pages : nullptr;
     }
 
     /// tlg: after a guest write fault, also unprotects the other pages of the window that
@@ -274,12 +286,19 @@ private:
     template <bool track, bool is_read>
     void UpdateProtection() {
         RENDERER_TRACE;
-        RegionBits mask = is_read ? (~gpu ^ readable) : (cpu ^ writeable);
+        // tlg: pages in TLG_RELAXED_RANGES stay readable whatever the GPU wrote.
+        RegionBits want_readable = ~gpu;
+        if constexpr (is_read) {
+            if (const RegionBits* relaxed = RelaxedPages()) {
+                want_readable |= *relaxed;
+            }
+        }
+        RegionBits mask = is_read ? (want_readable ^ readable) : (cpu ^ writeable);
         if (mask.None()) {
             return;
         }
         if constexpr (is_read) {
-            readable = ~gpu;
+            readable = want_readable;
         } else {
             writeable = cpu;
         }
@@ -388,6 +407,8 @@ private:
     RegionBits gpu;
     RegionBits writeable;
     RegionBits readable;
+    RegionBits relaxed_pages; ///< TLG_RELAXED_RANGES pages (RelaxedPages)
+    bool relaxed_checked = false, relaxed_any = false;
 };
 
 } // namespace VideoCore
