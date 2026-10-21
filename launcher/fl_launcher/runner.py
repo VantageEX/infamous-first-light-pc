@@ -9,7 +9,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QProcess, QProcessEnvironment, Signal
 
 from .game import LANGUAGES
-from .settings import PORT
+from .settings import FROZEN, PORT
 
 KEEP_LOGS = 20
 
@@ -74,12 +74,16 @@ class GameRunner(QObject):
         self.process.setProcessChannelMode(QProcess.MergedChannels)
         self.process.readyReadStandardOutput.connect(self._read)
         self.process.finished.connect(self._finished)
-        # python.exe even when the launcher runs under pythonw.exe: run.py and its scripts write
-        # the log to stdout, which pythonw would drop.
-        interpreter = Path(sys.executable)
-        if interpreter.name.lower() == 'pythonw.exe':
-            interpreter = interpreter.with_name('python.exe')
-        self.process.start(str(interpreter), [str(PORT / 'run.py')])
+        if FROZEN:
+            # The packaged launcher runs Python scripts itself (__main__.py --script).
+            self.process.start(sys.executable, ['--script', str(PORT / 'run.py')])
+        else:
+            # python.exe even when the launcher runs under pythonw.exe: run.py and its scripts
+            # write the log to stdout, which pythonw would drop.
+            interpreter = Path(sys.executable)
+            if interpreter.name.lower() == 'pythonw.exe':
+                interpreter = interpreter.with_name('python.exe')
+            self.process.start(str(interpreter), [str(PORT / 'run.py')])
         self.started.emit()
 
     def stop(self):

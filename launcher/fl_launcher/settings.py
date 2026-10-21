@@ -2,14 +2,18 @@
 """Launcher settings (launcher.json) and the core's tlg.ini, both in the data folder."""
 import json
 import os
+import sys
 from pathlib import Path
 
-REPO = Path(__file__).resolve().parents[2]
+# Packaged (PyInstaller onedir): <dist>/inFAMOUS First Light.exe beside <dist>/port and <dist>/data.
+# Developing: the repository holds port/ and data/.
+FROZEN = getattr(sys, 'frozen', False)
+REPO = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parents[2]
 PORT = REPO / 'port'
 
 
 def data_dir():
-    """FL_DATA_DIR, else <repo>/data while developing."""
+    """FL_DATA_DIR, else data/ beside the launcher executable (packaged) or in the repository."""
     return Path(os.environ.get('FL_DATA_DIR') or REPO / 'data')
 
 
