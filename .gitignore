@@ -33,3 +33,12 @@ port/pgo/
 port/user/
 /game/
 port/dist/
+
+# inFAMOUS First Light port
+/.venv/
+/data/
+/build.log
+__pycache__/
+/CUSA*/
+/game/
+/shots/
