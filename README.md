@@ -24,7 +24,7 @@ An unofficial native Windows port of **inFAMOUS First Light** (PS4). The game's 
 
 ### ▶ Gameplay video
 
-[![inFAMOUS First Light PC Port — Native Gameplay (YouTube)](https://img.youtube.com/vi/bWZa3FkO-LU/maxresdefault.jpg)](https://youtu.be/bWZa3FkO-LU)
+[![inFAMOUS First Light PC Port — Native Gameplay part 2 (YouTube)](https://img.youtube.com/vi/ISWGOfrwtqA/maxresdefault.jpg)](https://youtu.be/ISWGOfrwtqA)
 
 <sub>Ryzen + RTX 4070 SUPER, 1080p. The launcher shows the art of the player's own game files.</sub>
 
@@ -112,7 +112,7 @@ Licensed under **GPL-2.0**, like the projects it builds on ([LICENSE](LICENSE)).
 
 > **Нужна ваша собственная копия игры**, снятая с вашей PS4. Ни файлов игры, ни прошивки, ни ключей, ни материалов Sony в репозитории и релизах нет.
 
-Скриншоты — [в начале страницы](#infamous-first-light--native-pc-port): неоновая сила Проныры в катсцене, испытание на арене с оверлеем производительности и лаунчер. **▶ [Видео геймплея на YouTube](https://youtu.be/bWZa3FkO-LU)**.
+Скриншоты — [в начале страницы](#infamous-first-light--native-pc-port): неоновая сила Проныры в ночном городе, неоновый рывок с оверлеем производительности и лаунчер. **▶ [Видео геймплея на YouTube](https://youtu.be/ISWGOfrwtqA)**.
 
 ## Состояние
 
