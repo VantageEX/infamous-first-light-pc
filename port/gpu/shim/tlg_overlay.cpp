@@ -1211,7 +1211,15 @@ void Menu() {
     default: OverlayTab(); break;
     }
     ImGui::Dummy(ImVec2(0.0f, L(12)));
+    // More rows below: they fade into the panel instead of being cut mid-line.
+    const bool more_below = ImGui::GetScrollY() < ImGui::GetScrollMaxY() - 1.0f;
+    const ImVec2 rows_min = ImGui::GetWindowPos(), rows_max(rows_min.x + ImGui::GetWindowWidth(), rows_min.y + ImGui::GetWindowHeight());
     ImGui::EndChild();
+    if (more_below) {
+        const ImU32 clear = ImGui::GetColorU32(ImVec4(18 / 255.0f, 18 / 255.0f, 22 / 255.0f, 0.0f));
+        const ImU32 shade = ImGui::GetColorU32(ImVec4(18 / 255.0f, 18 / 255.0f, 22 / 255.0f, 0.92f));
+        dl->AddRectFilledMultiColor(ImVec2(rows_min.x, rows_max.y - L(56)), rows_max, clear, clear, shade, shade);
+    }
     ImGui::PopStyleColor();
     ImGui::PopStyleVar(2);
 
@@ -1477,16 +1485,38 @@ std::string SaveWhen(s64 mtime) {
 #else
     localtime_r(&t, &tm);
 #endif
-    char out[64];
-    if (UiRussian()) {
-        std::snprintf(out, sizeof(out), "%02d.%02d.%04d · %02d:%02d", tm.tm_mday, tm.tm_mon + 1,
-                      tm.tm_year + 1900, tm.tm_hour, tm.tm_min);
+    // As the launcher's Continue card (saves.py when): today / yesterday at the time, else the
+    // day and month (and the year when it is not this one).
+    std::tm now{};
+    const time_t now_t = std::time(nullptr);
+#ifdef _WIN32
+    localtime_s(&now, &now_t);
+#else
+    localtime_r(&now_t, &now);
+#endif
+    std::tm yesterday = now;
+    yesterday.tm_mday -= 1;
+    std::mktime(&yesterday);
+    const auto same_day = [](const std::tm& a, const std::tm& b) {
+        return a.tm_year == b.tm_year && a.tm_yday == b.tm_yday;
+    };
+    static const char* const ru_months[] = {"января", "февраля", "марта", "апреля", "мая", "июня",
+                                            "июля", "августа", "сентября", "октября", "ноября", "декабря"};
+    static const char* const en_months[] = {"January", "February", "March", "April", "May", "June",
+                                            "July", "August", "September", "October", "November", "December"};
+    char clock[16], out[80];
+    std::snprintf(clock, sizeof(clock), "%02d:%02d", tm.tm_hour, tm.tm_min);
+    const bool ru = UiRussian();
+    if (same_day(tm, now)) {
+        std::snprintf(out, sizeof(out), ru ? "сегодня в %s" : "today at %s", clock);
+    } else if (same_day(tm, yesterday)) {
+        std::snprintf(out, sizeof(out), ru ? "вчера в %s" : "yesterday at %s", clock);
+    } else if (tm.tm_year == now.tm_year) {
+        if (ru) std::snprintf(out, sizeof(out), "%d %s, %s", tm.tm_mday, ru_months[tm.tm_mon % 12], clock);
+        else std::snprintf(out, sizeof(out), "%s %d, %s", en_months[tm.tm_mon % 12], tm.tm_mday, clock);
     } else {
-        static const char* months[] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                                       "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
-        const int hour = tm.tm_hour % 12 ? tm.tm_hour % 12 : 12;
-        std::snprintf(out, sizeof(out), "%s %d, %d · %d:%02d %s", months[tm.tm_mon % 12], tm.tm_mday,
-                      tm.tm_year + 1900, hour, tm.tm_min, tm.tm_hour < 12 ? "AM" : "PM");
+        if (ru) std::snprintf(out, sizeof(out), "%d %s %d, %s", tm.tm_mday, ru_months[tm.tm_mon % 12], tm.tm_year + 1900, clock);
+        else std::snprintf(out, sizeof(out), "%s %d %d, %s", en_months[tm.tm_mon % 12], tm.tm_mday, tm.tm_year + 1900, clock);
     }
     return out;
 }
