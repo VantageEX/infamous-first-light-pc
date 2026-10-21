@@ -20,6 +20,8 @@ if [[ -z $python ]]; then
     done
 fi
 [[ -n $python ]] || { echo 'Need a Windows Python 3 (python.org) or WINPYTHON=path\to\python.exe' >&2; exit 1; }
+# A login MSYS2 shell drops USERPROFILE, and PyInstaller needs the home folder.
+export USERPROFILE=${USERPROFILE:-$(cygpath -w "/c/Users/$(id -un)")}
 pyenv=port/out/pyenv-fl
 if [[ ! -x $pyenv/Scripts/python.exe ]]; then
     "$python" -m venv "$pyenv"
@@ -35,8 +37,10 @@ for module in argparse base64 collections hashlib json re shutil struct tempfile
     hidden+=(--hidden-import "$module")
 done
 entry=port/out/fl_entry.py
+# A plain import, so PyInstaller sees fl_launcher.__main__ (collect_submodules skips __main__);
+# importing it runs the launcher, or a script with --script.
 printf '%s\n' '# PyInstaller entry: the launcher package run as a program.' \
-    'import runpy' "runpy.run_module('fl_launcher', run_name='__main__', alter_sys=True)" > "$entry"
+    'import fl_launcher.__main__  # noqa: F401' > "$entry"
 "$pyenv/Scripts/python.exe" -m PyInstaller --noconfirm --clean --log-level WARN --windowed \
     --name "$exe_name" --icon "$(cygpath -w "$root/port/packaging/windows/app.ico")" \
     --paths "$(cygpath -w "$root/launcher")" --collect-submodules fl_launcher \
@@ -45,7 +49,9 @@ printf '%s\n' '# PyInstaller entry: the launcher package run as a program.' \
     "$(cygpath -w "$root/$entry")"
 
 dest=dist/$name
-rm -rf -- "$dest"
+# Emptied rather than removed: an Explorer window open on it keeps the folder itself busy.
+mkdir -p "$dest"
+find "$dest" -mindepth 1 -delete
 mkdir -p "$dest/port/out"
 cp -r "port/out/pyi-dist/$exe_name/." "$dest/"
 llvm-strip --strip-debug -o "$dest/port/out/tlg-probe.exe" port/out/tlg-probe.exe
