@@ -777,8 +777,13 @@ void UploadWorker::Run(std::stop_token stoken) {
         {
             std::unique_lock lk{queue_mutex};
             worker_sleeping = true;
-            queue_cv.wait_for(lk, stoken, std::chrono::milliseconds{1},
-                              [this] { return queue.size() >= UploadWorkerWakeJobs; });
+            // One timed wait, not the predicate form: libc++ on Windows truncates the time
+            // left to whole milliseconds for SleepConditionVariableSRW, so a 1 ms wait (and the
+            // last part of any wait) returns at once and the predicate loop spun a core for the
+            // whole millisecond (95% of a core, 2026-10-21). 2 ms nominal sleeps ~1 ms.
+            if (queue.size() < UploadWorkerWakeJobs && !stoken.stop_requested()) {
+                queue_cv.wait_for(lk, std::chrono::milliseconds{2});
+            }
             worker_sleeping = false;
             if (queue.empty()) {
                 continue;
