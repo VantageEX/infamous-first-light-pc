@@ -115,10 +115,46 @@ public:
             if constexpr (!enable) {
                 NoteGpuBitsCleared();
             }
-            if (EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Precise) {
+            if (EmulatorSettings.GetReadbacksMode() == GpuReadbacksMode::Precise &&
+                !RelaxedReadbackRegion(cpu_addr)) {
                 UpdateProtection<enable, true>();
             }
         }
+    }
+
+    /// tlg: TLG_RELAXED_RANGES=<start>-<end>[,...] (hex guest addresses): in precise readback
+    /// mode, the 4 MiB regions these ranges touch keep GPU-written pages readable, as in
+    /// relaxed mode. For memory the game rewrites every frame but only the GPU needs (First
+    /// Light's particle pools and lists, double buffered): their read faults made each frame
+    /// wait for the GPU several times (about 45 to 25 FPS), while the few values the CPU really
+    /// reads back (emissive exposure) live elsewhere and stay precise.
+    static bool RelaxedReadbackRegion(VAddr region_base) {
+        static const std::vector<std::pair<VAddr, VAddr>> ranges = [] {
+            std::vector<std::pair<VAddr, VAddr>> out;
+            const char* env = std::getenv("TLG_RELAXED_RANGES");
+            for (const char* p = env; p && *p;) {
+                char* end = nullptr;
+                const VAddr start = std::strtoull(p, &end, 16);
+                if (end == p || *end != '-') {
+                    break;
+                }
+                p = end + 1;
+                const VAddr stop = std::strtoull(p, &end, 16);
+                if (end == p || stop <= start) {
+                    break;
+                }
+                out.emplace_back(start, stop);
+                p = *end == ',' ? end + 1 : end;
+            }
+            return out;
+        }();
+        const VAddr region_end = region_base + TRACKER_HIGHER_PAGE_SIZE;
+        for (const auto& [start, stop] : ranges) {
+            if (start < region_end && region_base < stop) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /// tlg: after a guest write fault, also unprotects the other pages of the window that

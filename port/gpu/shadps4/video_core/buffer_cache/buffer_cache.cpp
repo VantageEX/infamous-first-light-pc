@@ -195,6 +195,32 @@ s64 NowNs() {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(
                std::chrono::steady_clock::now().time_since_epoch()).count();
 }
+// tlg: TLG_READBACK_STATS also lists the 1 MiB regions the deferred readbacks come from (the
+// game memory that keeps faulting GPU data back to the CPU), most bytes first.
+std::mutex readback_sites_mutex;
+std::unordered_map<u64, std::pair<u64, u64>> readback_sites; // region -> {readbacks, bytes}
+void NoteReadbackSite(VAddr address, u64 bytes) {
+    std::scoped_lock lock{readback_sites_mutex};
+    auto& site = readback_sites[address >> 20];
+    ++site.first;
+    site.second += bytes;
+}
+void ReportReadbackSites() {
+    std::vector<std::pair<u64, std::pair<u64, u64>>> sites;
+    {
+        std::scoped_lock lock{readback_sites_mutex};
+        sites.assign(readback_sites.begin(), readback_sites.end());
+        readback_sites.clear();
+    }
+    std::sort(sites.begin(), sites.end(),
+              [](const auto& a, const auto& b) { return a.second.second > b.second.second; });
+    for (size_t i = 0; i < sites.size() && i < 12; ++i) {
+        std::printf("  readback region %#llx: %llu readbacks, %.2f MB\n",
+                    static_cast<unsigned long long>(sites[i].first << 20),
+                    static_cast<unsigned long long>(sites[i].second.first),
+                    sites[i].second.second / 1048576.0);
+    }
+}
 void ReportReadbacks() {
     auto& r = Readbacks();
     const s64 now = NowNs();
@@ -226,6 +252,7 @@ void ReportReadbacks() {
     std::printf("  waits for a readback copy: %llu, %.1f ms\n",
                 static_cast<unsigned long long>(r.guest_waits.exchange(0)),
                 r.guest_wait_ns.exchange(0) / 1e6);
+    ReportReadbackSites();
     std::fflush(stdout);
 }
 } // namespace
@@ -1132,6 +1159,7 @@ std::shared_ptr<BufferCache::DeferredReadback> BufferCache::StartDeferredReadbac
     if (ReadbackStatsEnabled()) {
         Readbacks().deferred.fetch_add(1);
         Readbacks().deferred_bytes.fetch_add(total_size_bytes);
+        NoteReadbackSite(window_start, total_size_bytes);
     }
     return readback;
 }
