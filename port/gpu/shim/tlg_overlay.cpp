@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <array>
 #include <mutex>
 #include <vector>
 
@@ -114,6 +115,22 @@ float base_scale = 1.0f;
 // Present rate for the FPS counter.
 std::chrono::steady_clock::time_point last_present{};
 float frame_ms_avg = 0.0f;
+// The last present intervals, oldest first from frame_history_next (the overlay's graph).
+std::array<float, 240> frame_history{};
+size_t frame_history_next = 0, frame_history_count = 0;
+
+// Colours of the launcher (launcher/fl_launcher/qml/theme.js): grey see-through panels like its
+// pickers, white text, its blue accent, small corner radii.
+namespace Theme {
+constexpr ImVec4 Glass{28.0f / 255, 28.0f / 255, 30.0f / 255, 1.0f};
+constexpr ImVec4 Text{1.0f, 1.0f, 1.0f, 1.0f};
+constexpr ImVec4 Muted{1.0f, 1.0f, 1.0f, 0.64f};
+constexpr ImVec4 Accent{0x1f / 255.0f, 0x8f / 255.0f, 1.0f, 1.0f};
+constexpr ImVec4 Good{0x2a / 255.0f, 0xd1 / 255.0f, 0x6a / 255.0f, 1.0f};
+constexpr ImVec4 Warn{1.0f, 0xc3 / 255.0f, 0x5a / 255.0f, 1.0f};
+constexpr ImVec4 Bad{1.0f, 0x6b / 255.0f, 0x5a / 255.0f, 1.0f};
+constexpr float PanelRadius = 6.0f, ItemRadius = 4.0f;
+} // namespace Theme
 
 void SetOpen(bool value) {
     if (menu_open.exchange(value) == value) {
@@ -337,10 +354,10 @@ const char* TL(const char* en, const char* pt) { return UiPortuguese() ? pt : en
 const Vulkan::Instance* overlay_instance = nullptr; // for the overlay's measurements
 
 // The performance overlay's text with the current settings (also the menu's preview).
-std::string OverlayText() {
+std::string OverlayText(unsigned exclude = 0) {
     namespace P = TlgPerfStats;
     const auto& s = TlgSettings::Get();
-    const unsigned items = s.overlay_items;
+    const unsigned items = s.overlay_items & ~exclude;
     if ((items & (P::Gpu | P::Cpu | P::Ram | P::Vram)) && overlay_instance) {
         P::Start(*overlay_instance);
     }
@@ -631,8 +648,9 @@ void OverlayTab() {
     if (ImGui::BeginTable("##overlay_items", 2, ImGuiTableFlags_SizingStretchProp)) {
         ImGui::TableNextColumn();
         static const char* const names[] = {"FPS", TL("Frametime", "Tempo de quadro"), "Upscaler", TL("GPU (name and use)", "GPU (nome e uso)"), TL("CPU (game)", "CPU (jogo)"),
-                                            TL("RAM (game / total)", "RAM (jogo / total)"), TL("VRAM (used / available)", "VRAM (usada / disponível)")};
-        for (unsigned item = 0; item < 7; ++item) {
+                                            TL("RAM (game / total)", "RAM (jogo / total)"), TL("VRAM (used / available)", "VRAM (usada / disponível)"),
+                                            TL("Frametime graph", "Gráfico do tempo de quadro")};
+        for (unsigned item = 0; item < P::NumItems; ++item) {
             const unsigned bit = 1u << item;
             bool on = (s.overlay_items & bit) != 0;
             if (ImGui::Checkbox(names[item], &on)) {
@@ -1464,27 +1482,151 @@ void LoadingScreen() {
     ImGui::End();
 }
 
+// Frame time statistics over the graph's window.
+struct FrameStats {
+    float min_fps = 0.0f, avg_fps = 0.0f, low1_fps = 0.0f, max_ms = 0.0f;
+    int stutters = 0; ///< frames over twice the average and over 25 ms
+};
+
+FrameStats ComputeFrameStats() {
+    FrameStats out;
+    if (frame_history_count == 0) {
+        return out;
+    }
+    std::array<float, frame_history.size()> sorted{};
+    double total = 0.0;
+    for (size_t i = 0; i < frame_history_count; ++i) {
+        sorted[i] = frame_history[i];
+        total += frame_history[i];
+        out.max_ms = std::max(out.max_ms, frame_history[i]);
+    }
+    const float avg_ms = float(total / frame_history_count);
+    for (size_t i = 0; i < frame_history_count; ++i) {
+        out.stutters += frame_history[i] > 2.0f * avg_ms && frame_history[i] > 25.0f;
+    }
+    std::sort(sorted.begin(), sorted.begin() + frame_history_count);
+    // 1% low: the frame time 99% of the frames stay under.
+    const float low1_ms = sorted[std::min(frame_history_count - 1, size_t(frame_history_count * 0.99f))];
+    out.avg_fps = 1000.0f / avg_ms;
+    out.min_fps = 1000.0f / out.max_ms;
+    out.low1_fps = 1000.0f / low1_ms;
+    return out;
+}
+
+ImVec4 FpsColor(float fps) {
+    return fps >= 55.0f ? Theme::Good : fps >= 28.0f ? Theme::Warn : Theme::Bad;
+}
+
+// The frame time curve (a "net graph"): the last present intervals, guides at 60 and 30 FPS,
+// stutters marked in red.
+void FrameGraph(float width, float height, float text_scale) {
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const ImVec2 origin = ImGui::GetCursorScreenPos();
+    const ImVec2 end{origin.x + width, origin.y + height};
+    const float rounding = Theme::ItemRadius * base_scale;
+    draw->AddRectFilled(origin, end, ImGui::GetColorU32(ImVec4(1, 1, 1, 0.05f)), rounding);
+    // Scale: at least 40 ms, else the slowest frame plus a margin (at most 100 ms).
+    float top_ms = 40.0f;
+    for (size_t i = 0; i < frame_history_count; ++i) {
+        top_ms = std::max(top_ms, frame_history[i] * 1.15f);
+    }
+    top_ms = std::min(top_ms, 100.0f);
+    const auto y_of = [&](float ms) { return end.y - std::min(ms, top_ms) / top_ms * height; };
+    const ImU32 guide = ImGui::GetColorU32(ImVec4(1, 1, 1, 0.16f));
+    const ImU32 label = ImGui::GetColorU32(Theme::Muted);
+    ImFont* font = ImGui::GetFont();
+    const float label_size = ImGui::GetFontSize() * 0.62f;
+    for (const auto& [ms, text] : {std::pair{1000.0f / 60.0f, "60"}, std::pair{1000.0f / 30.0f, "30"}}) {
+        const float y = y_of(ms);
+        draw->AddLine(ImVec2(origin.x + 4.0f, y), ImVec2(end.x - 4.0f, y), guide, 1.0f);
+        draw->AddText(font, label_size, ImVec2(end.x - label_size * 1.4f, y - label_size - 1.0f), label, text);
+    }
+    if (frame_history_count >= 2) {
+        const size_t n = frame_history_count;
+        const size_t first = (frame_history_next + frame_history.size() - n) % frame_history.size();
+        float avg = 0.0f;
+        for (size_t i = 0; i < n; ++i) {
+            avg += frame_history[i];
+        }
+        avg /= float(n);
+        std::vector<ImVec2> points(n);
+        for (size_t i = 0; i < n; ++i) {
+            const float ms = frame_history[(first + i) % frame_history.size()];
+            points[i] = ImVec2(origin.x + 4.0f + (width - 8.0f) * float(i) / float(frame_history.size() - 1),
+                               y_of(ms));
+        }
+        // a soft fill under the curve, then the curve
+        const ImU32 fill = ImGui::GetColorU32(ImVec4(Theme::Accent.x, Theme::Accent.y, Theme::Accent.z, 0.14f));
+        for (size_t i = 1; i < n; ++i) {
+            draw->AddQuadFilled(points[i - 1], points[i], ImVec2(points[i].x, end.y - 1.0f),
+                                ImVec2(points[i - 1].x, end.y - 1.0f), fill);
+        }
+        draw->AddPolyline(points.data(), int(n), ImGui::GetColorU32(Theme::Accent), ImDrawFlags_None,
+                          1.6f * base_scale);
+        const ImU32 stutter = ImGui::GetColorU32(Theme::Bad);
+        for (size_t i = 0; i < n; ++i) {
+            const float ms = frame_history[(first + i) % frame_history.size()];
+            if (ms > 2.0f * avg && ms > 25.0f) {
+                draw->AddCircleFilled(points[i], 2.6f * base_scale, stutter);
+            }
+        }
+    }
+    ImGui::Dummy(ImVec2(width, height));
+    (void)text_scale;
+}
+
 void FpsCounter() {
+    namespace P = TlgPerfStats;
     const auto& s = TlgSettings::Get();
-    const std::string text = OverlayText();
-    if (text.empty()) {
+    const unsigned items = s.overlay_items;
+    const bool big_fps = items & P::Fps, graph = items & P::Graph;
+    const std::string text = OverlayText(P::Fps);
+    if (text.empty() && !big_fps && !graph) {
         return;
     }
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    const float pad = 12.0f * base_scale;
+    const float pad = 14.0f * base_scale;
     const int corner = s.overlay_corner;
     const bool right = corner == 1 || corner == 3, bottom = corner >= 2;
     ImGui::SetNextWindowPos(ImVec2(right ? viewport->WorkPos.x + viewport->WorkSize.x - pad : viewport->WorkPos.x + pad,
                                    bottom ? viewport->WorkPos.y + viewport->WorkSize.y - pad : viewport->WorkPos.y + pad),
                             ImGuiCond_Always, ImVec2(right ? 1.0f : 0.0f, bottom ? 1.0f : 0.0f));
     ImGui::SetNextWindowBgAlpha(s.overlay_opacity / 100.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, Theme::PanelRadius * base_scale);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.0f * base_scale, 10.0f * base_scale));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0f);
     ImGui::Begin("##fps", nullptr,
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
                      ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
                      ImGuiWindowFlags_NoFocusOnAppearing);
-    ImGui::SetWindowFontScale(s.overlay_scale / 100.0f);
-    ImGui::TextUnformatted(text.c_str());
+    const float font_scale = s.overlay_scale / 100.0f;
+    const FrameStats stats = graph ? ComputeFrameStats() : FrameStats{};
+    if (big_fps) {
+        const float fps = frame_ms_avg > 0.0f ? 1000.0f / frame_ms_avg : 0.0f;
+        ImGui::SetWindowFontScale(font_scale * 2.1f);
+        ImGui::PushStyleColor(ImGuiCol_Text, FpsColor(fps));
+        ImGui::Text("%.0f", fps);
+        ImGui::PopStyleColor();
+        ImGui::SameLine(0.0f, 6.0f * base_scale);
+        ImGui::SetWindowFontScale(font_scale * 0.85f);
+        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + ImGui::GetFontSize() * 1.35f);
+        ImGui::TextColored(Theme::Muted, "FPS");
+    }
+    ImGui::SetWindowFontScale(font_scale);
+    if (!text.empty()) {
+        ImGui::TextUnformatted(text.c_str());
+    }
+    if (graph) {
+        ImGui::Dummy(ImVec2(0.0f, 2.0f * base_scale));
+        FrameGraph(250.0f * base_scale * font_scale, 64.0f * base_scale * font_scale, font_scale);
+        ImGui::SetWindowFontScale(font_scale * 0.8f);
+        ImGui::TextColored(Theme::Muted, "%s %.0f   %s %.0f   1%% %.0f   %s %d", TL("min", "mín"), stats.min_fps,
+                           TL("avg", "méd"), stats.avg_fps, stats.low1_fps, TL("stutters", "travadas"),
+                           stats.stutters);
+    }
+    ImGui::SetWindowFontScale(1.0f);
     ImGui::End();
+    ImGui::PopStyleVar(3);
 }
 
 std::string notice_text;
@@ -1568,17 +1710,83 @@ void Init(const Vulkan::Instance& instance, vk::Format format, u32 image_count) 
     io.BackendFlags |= ImGuiBackendFlags_HasGamepad;
     io.BackendPlatformName = "tlg";
 
+    // The launcher's look: grey see-through panels with a faint border, small radii, white
+    // text, blue accent.
     ImGui::StyleColorsDark();
     ImGuiStyle& style = ImGui::GetStyle();
-    style.WindowRounding = 6.0f;
-    style.FrameRounding = 4.0f;
-    style.GrabRounding = 4.0f;
-    style.Colors[ImGuiCol_WindowBg].w = 0.92f;
+    style.WindowRounding = Theme::PanelRadius;
+    style.ChildRounding = Theme::PanelRadius;
+    style.FrameRounding = Theme::ItemRadius;
+    style.PopupRounding = Theme::PanelRadius;
+    style.GrabRounding = Theme::ItemRadius;
+    style.TabRounding = Theme::ItemRadius;
+    style.ScrollbarRounding = Theme::ItemRadius;
+    style.WindowBorderSize = 1.0f;
+    style.FrameBorderSize = 0.0f;
+    style.WindowPadding = ImVec2(16.0f, 12.0f);
+    style.FramePadding = ImVec2(10.0f, 6.0f);
+    style.ItemSpacing = ImVec2(10.0f, 8.0f);
+    const auto white = [](float alpha) { return ImVec4(1.0f, 1.0f, 1.0f, alpha); };
+    const auto accent = [](float alpha) {
+        return ImVec4(Theme::Accent.x, Theme::Accent.y, Theme::Accent.z, alpha);
+    };
+    ImVec4* c = style.Colors;
+    c[ImGuiCol_Text] = Theme::Text;
+    c[ImGuiCol_TextDisabled] = Theme::Muted;
+    c[ImGuiCol_WindowBg] = ImVec4(Theme::Glass.x, Theme::Glass.y, Theme::Glass.z, 0.78f);
+    c[ImGuiCol_ChildBg] = white(0.03f);
+    c[ImGuiCol_PopupBg] = ImVec4(36.0f / 255, 36.0f / 255, 40.0f / 255, 0.97f);
+    c[ImGuiCol_Border] = white(0.1f);
+    c[ImGuiCol_FrameBg] = white(0.07f);
+    c[ImGuiCol_FrameBgHovered] = white(0.12f);
+    c[ImGuiCol_FrameBgActive] = white(0.16f);
+    c[ImGuiCol_TitleBg] = ImVec4(0.05f, 0.05f, 0.07f, 0.95f);
+    c[ImGuiCol_TitleBgActive] = ImVec4(0.07f, 0.07f, 0.1f, 0.97f);
+    c[ImGuiCol_CheckMark] = accent(1.0f);
+    c[ImGuiCol_SliderGrab] = accent(0.85f);
+    c[ImGuiCol_SliderGrabActive] = accent(1.0f);
+    c[ImGuiCol_Button] = white(0.08f);
+    c[ImGuiCol_ButtonHovered] = white(0.16f);
+    c[ImGuiCol_ButtonActive] = accent(0.6f);
+    c[ImGuiCol_Header] = white(0.08f);
+    c[ImGuiCol_HeaderHovered] = white(0.14f);
+    c[ImGuiCol_HeaderActive] = accent(0.45f);
+    c[ImGuiCol_Separator] = white(0.1f);
+    c[ImGuiCol_Tab] = white(0.05f);
+    c[ImGuiCol_TabHovered] = white(0.14f);
+    c[ImGuiCol_TabSelected] = accent(0.55f);
+    c[ImGuiCol_TabSelectedOverline] = accent(1.0f);
+    c[ImGuiCol_ScrollbarBg] = white(0.02f);
+    c[ImGuiCol_ScrollbarGrab] = white(0.16f);
+    c[ImGuiCol_NavCursor] = accent(1.0f);
+    c[ImGuiCol_TableHeaderBg] = white(0.05f);
+    c[ImGuiCol_TableBorderStrong] = white(0.08f);
+    c[ImGuiCol_TableBorderLight] = white(0.05f);
 
-    ImFontConfig font_config;
-    font_config.FontDataOwnedByAtlas = false;
-    io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(tlg_font_ttf),
-                                   int(tlg_font_ttf_end - tlg_font_ttf), 18.0f, &font_config);
+    // The launcher's font (Segoe UI, every Windows has it; Cyrillic included), else the one
+    // built in.
+    ImFont* font = nullptr;
+#ifdef _WIN32
+    {
+        char windir[260] = {};
+        const DWORD n = GetEnvironmentVariableA("WINDIR", windir, sizeof(windir));
+        const std::string fonts = std::string(n ? windir : "C:\Windows") + "\Fonts\\";
+        for (const char* name : {"segoeui.ttf", "segoeuisl.ttf"}) {
+            const std::string path = fonts + name;
+            if (std::FILE* f = std::fopen(path.c_str(), "rb")) {
+                std::fclose(f);
+                font = io.Fonts->AddFontFromFileTTF(path.c_str(), 19.0f);
+                break;
+            }
+        }
+    }
+#endif
+    if (!font) {
+        ImFontConfig font_config;
+        font_config.FontDataOwnedByAtlas = false;
+        io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(tlg_font_ttf),
+                                       int(tlg_font_ttf_end - tlg_font_ttf), 18.0f, &font_config);
+    }
 
     const vk::Instance vk_instance = instance.GetInstance();
     ImGui_ImplVulkan_LoadFunctions(
@@ -2110,6 +2318,9 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
     last_present = now;
     if (ms > 0.0f && ms < 1000.0f) {
         frame_ms_avg = frame_ms_avg == 0.0f ? ms : frame_ms_avg * 0.95f + ms * 0.05f;
+        frame_history[frame_history_next] = ms;
+        frame_history_next = (frame_history_next + 1) % frame_history.size();
+        frame_history_count = std::min(frame_history_count + 1, frame_history.size());
     }
     ConfirmRestart();
     if (!Visible()) {

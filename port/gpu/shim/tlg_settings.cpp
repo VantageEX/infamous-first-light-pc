@@ -29,8 +29,9 @@ void Set(Values& v, const std::string& key, const std::string& value) {
     const float f = float(std::atof(value.c_str()));
     const int i = std::atoi(value.c_str());
     static const char* const overlay_keys[] = {"overlay_fps", "overlay_frametime", "overlay_upscaler",
-                                               "overlay_gpu", "overlay_cpu", "overlay_ram", "overlay_vram"};
-    for (unsigned item = 0; item < 7; ++item) {
+                                               "overlay_gpu", "overlay_cpu", "overlay_ram", "overlay_vram",
+                                               "overlay_graph"};
+    for (unsigned item = 0; item < TlgPerfStats::NumItems; ++item) {
         if (key == overlay_keys[item]) {
             const unsigned bit = 1u << item;
             v.overlay_items = i ? (v.overlay_items | bit) : (v.overlay_items & ~bit);
@@ -360,11 +361,12 @@ void Save() {
     std::fprintf(file, "enemy_health_bar=%d\n", int(v.enemy_health_bar.load()));
     std::fprintf(file,
                  "overlay_fps=%d\noverlay_frametime=%d\noverlay_upscaler=%d\noverlay_gpu=%d\n"
-                 "overlay_cpu=%d\noverlay_ram=%d\noverlay_vram=%d\noverlay_scale=%d\noverlay_corner=%d\n"
-                 "overlay_opacity=%d\noverlay_layout=%d\nmenu_tab=%d\n",
+                 "overlay_cpu=%d\noverlay_ram=%d\noverlay_vram=%d\noverlay_graph=%d\noverlay_scale=%d\n"
+                 "overlay_corner=%d\noverlay_opacity=%d\noverlay_layout=%d\nmenu_tab=%d\n",
                  int(v.overlay_items >> 0 & 1), int(v.overlay_items >> 1 & 1), int(v.overlay_items >> 2 & 1),
                  int(v.overlay_items >> 3 & 1), int(v.overlay_items >> 4 & 1), int(v.overlay_items >> 5 & 1),
-                 int(v.overlay_items >> 6 & 1), v.overlay_scale.load(), v.overlay_corner.load(),
+                 int(v.overlay_items >> 6 & 1), int(v.overlay_items >> 7 & 1), v.overlay_scale.load(),
+                 v.overlay_corner.load(),
                  v.overlay_opacity.load(), v.overlay_layout.load(), v.menu_tab.load());
     std::fprintf(file,
                  "display_mode=%s\nvsync=%d\nfps_limit=%d\nasync_shaders=%d\n"

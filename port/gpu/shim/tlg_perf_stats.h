@@ -25,10 +25,12 @@ enum Item : unsigned {
     Cpu = 1u << 4,
     Ram = 1u << 5,
     Vram = 1u << 6,
-    AllItems = (1u << 7) - 1,
+    Graph = 1u << 7, ///< frame time graph (drawn by the overlay, not part of the text)
+    AllItems = (1u << 8) - 1,
 };
+inline constexpr unsigned NumItems = 8;
 // tlg: the game renders natively (no upscaler), so the defaults show GPU load and VRAM instead.
-inline constexpr unsigned DefaultItems = Fps | FrameTime | Gpu | Vram;
+inline constexpr unsigned DefaultItems = Fps | FrameTime | Gpu | Vram | Graph;
 
 struct Sample {
     float fps = 0.0f, frame_ms = 0.0f;
