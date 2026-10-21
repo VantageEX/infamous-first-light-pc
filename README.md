@@ -6,6 +6,14 @@ An unofficial native Windows port of **inFAMOUS First Light** (PS4). The game's 
 
 [Русская версия ниже](#русский)
 
+| | |
+|---|---|
+| ![Fetch's neon power in a cutscene, 45 FPS](docs/screenshots/gameplay-neon-power.jpg) | ![An arena challenge with the performance overlay, 36 FPS](docs/screenshots/gameplay-arena.jpg) |
+
+![The launcher: the game's own art, Play and the settings](docs/screenshots/launcher.jpg)
+
+<sub>Ryzen + RTX 4070 SUPER, 1080p. The launcher shows the art of the player's own game files.</sub>
+
 ## Status
 
 **Early, playable.** The game boots, reaches the menus and gameplay, saves, and plays through the first missions; Fetch's neon powers, the dash trail, lights and particles render.
@@ -81,6 +89,8 @@ Licensed under **GPL-2.0**, like the projects it builds on ([LICENSE](LICENSE)).
 Неофициальный нативный порт **inFAMOUS First Light** (PS4) на Windows. Собственный x86-64 код игры выполняется прямо на процессоре ПК, системные библиотеки консоли заменены переписанной средой выполнения, а графика переводится на Vulkan. Это не универсальный эмулятор.
 
 > **Нужна ваша собственная копия игры**, снятая с вашей PS4. Ни файлов игры, ни прошивки, ни ключей, ни материалов Sony в репозитории и релизах нет.
+
+Скриншоты — [в начале страницы](#infamous-first-light--native-pc-port): неоновая сила Проныры в катсцене, испытание на арене с оверлеем производительности и лаунчер.
 
 ## Состояние
 
