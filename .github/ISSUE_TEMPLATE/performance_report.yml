@@ -1,0 +1,72 @@
+name: "Performance report / Отчёт о производительности"
+description: "Played a test build? Send the report from the launcher. / Поиграли в сборку? Пришлите отчёт из лаунчера."
+title: "[Perf] <CPU> + <GPU> — <FPS> FPS"
+labels: ["performance"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Thanks for testing!** In the launcher open **Log → Create report** and attach the zip below (drag it into the box). The report holds logs and your PC's specs, no personal paths. **Never attach game files.**
+
+        **Спасибо за тест!** В лаунчере откройте **«Журнал» → «Собрать отчёт»** и прикрепите архив ниже (перетащите его в поле). В отчёте логи и характеристики ПК, без личных путей. **Файлы игры не прикладывайте.**
+  - type: input
+    id: build
+    attributes:
+      label: "Build / Сборка"
+      description: "Release or test build, with its version (the VERSION file). / Релиз или сборка для замеров, с версией (файл VERSION)."
+      placeholder: "v0.1.0 / test build b2b699a"
+    validations:
+      required: true
+  - type: input
+    id: cpu
+    attributes:
+      label: "CPU / Процессор"
+      placeholder: "Ryzen 7 5800X"
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: "GPU and driver / Видеокарта и драйвер"
+      placeholder: "RTX 3060 12 GB, driver 591.74"
+    validations:
+      required: true
+  - type: input
+    id: ram
+    attributes:
+      label: "RAM / ОЗУ"
+      placeholder: "16 GB"
+  - type: input
+    id: fps
+    attributes:
+      label: "FPS (F10 overlay) / FPS (оверлей F10)"
+      description: "Usual FPS and the lowest you saw. / Обычный FPS и самый низкий, что видели."
+      placeholder: "28-35, drops to 20 when dashing"
+    validations:
+      required: true
+  - type: textarea
+    id: where
+    attributes:
+      label: "Where and what you did / Где и что делали"
+      description: "Mission or area, and what was going on (city, arena, dashes, fights, cutscenes). / Миссия или место и что происходило (город, арена, рывки, бои, катсцены)."
+    validations:
+      required: true
+  - type: textarea
+    id: issues
+    attributes:
+      label: "Anything wrong? / Что-то не так?"
+      description: "Graphics glitches, missing effects, stutters, crashes. Screenshots welcome. / Графические ошибки, пропавшие эффекты, фризы, вылеты. Скриншоты приветствуются."
+  - type: textarea
+    id: report
+    attributes:
+      label: "Report zip / Архив отчёта"
+      description: "Drag report-YYYYMMDD-HHMMSS.zip from data/reports here. / Перетащите сюда report-ГГГГММДД-ЧЧММСС.zip из папки data/reports."
+    validations:
+      required: true
+  - type: checkboxes
+    id: own
+    attributes:
+      label: "Game copy / Копия игры"
+      options:
+        - label: "I play my own dump of the game; I attach no game files. / Я играю на своём дампе игры и не прикладываю её файлы."
+          required: true

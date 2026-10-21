@@ -1,0 +1,52 @@
+name: "Bug report / Сообщение об ошибке"
+description: "Something breaks: a crash, a freeze, a glitch, the launcher. / Что-то ломается: вылет, зависание, графика, лаунчер."
+title: "[Bug] <short description>"
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Attach the report from the launcher (**Log → Create report**): it holds the log of the run that failed. **Never attach game files.**
+
+        Приложите отчёт из лаунчера (**«Журнал» → «Собрать отчёт»**): в нём лог неудачного запуска. **Файлы игры не прикладывайте.**
+  - type: input
+    id: build
+    attributes:
+      label: "Build / Сборка"
+      placeholder: "v0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: pc
+    attributes:
+      label: "CPU, GPU, Windows / Процессор, видеокарта, Windows"
+      placeholder: "Core i5-12400F, RX 6600, Windows 11"
+    validations:
+      required: true
+  - type: input
+    id: dump
+    attributes:
+      label: "Game dump / Дамп игры"
+      description: "Title ID and version (shown in the launcher). / ID и версия (видны в лаунчере)."
+      placeholder: "CUSA00897 01.00"
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: "What happened / Что произошло"
+      description: "What you did, what you expected, what you got. Screenshots or a short video help a lot. / Что делали, что ожидали, что получилось. Скриншоты или короткое видео очень помогают."
+    validations:
+      required: true
+  - type: textarea
+    id: report
+    attributes:
+      label: "Report zip / Архив отчёта"
+      description: "Drag the zip from data/reports here. / Перетащите сюда архив из папки data/reports."
+  - type: checkboxes
+    id: own
+    attributes:
+      label: "Game copy / Копия игры"
+      options:
+        - label: "I play my own dump of the game; I attach no game files. / Я играю на своём дампе игры и не прикладываю её файлы."
+          required: true

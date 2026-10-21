@@ -57,7 +57,13 @@ Xbox, PlayStation and other controllers work, and so does the keyboard. The touc
 
 ## Reporting performance
 
-Test builds carry a `TEST_BUILD` file: they log detailed performance statistics. After playing, open **Log → Create report** in the launcher and send the zip (logs and the PC's specs, no personal paths). Reports from many different PCs are what the optimisation needs.
+Reports from many different PCs are what the optimisation needs:
+
+1. Play 10–15 minutes (the city, running, dashes, a fight). Test builds (with a `TEST_BUILD` file) log extra performance statistics.
+2. In the launcher open **Log → Create report**: it writes a zip in `data/reports` (logs and the PC's specs, no personal paths).
+3. Open a **[performance report](https://github.com/VantageEX/infamous-first-light-pc/issues/new?template=performance_report.yml)**, fill in the form and drag the zip into it. Crashes and glitches go to a **[bug report](https://github.com/VantageEX/infamous-first-light-pc/issues/new?template=bug_report.yml)**.
+
+Never attach game files.
 
 ## Building
 
@@ -135,7 +141,13 @@ Licensed under **GPL-2.0**, like the projects it builds on ([LICENSE](LICENSE)).
 
 ## Отчёты о производительности
 
-В тестовых сборках лежит файл `TEST_BUILD`: они пишут подробную статистику производительности. После игры откройте в лаунчере **«Журнал» → «Собрать отчёт»** и пришлите архив (логи и характеристики ПК, без личных путей). Для оптимизации нужны отчёты с как можно большего числа разных ПК.
+Для оптимизации нужны отчёты с как можно большего числа разных ПК:
+
+1. Поиграйте 10–15 минут (город, бег, рывки, бой). Сборки для замеров (с файлом `TEST_BUILD`) пишут дополнительную статистику производительности.
+2. В лаунчере откройте **«Журнал» → «Собрать отчёт»**: в папке `data/reports` появится архив (логи и характеристики ПК, без личных путей).
+3. Откройте **[отчёт о производительности](https://github.com/VantageEX/infamous-first-light-pc/issues/new?template=performance_report.yml)**, заполните форму и перетащите в неё архив. Вылеты и графические ошибки — в **[сообщение об ошибке](https://github.com/VantageEX/infamous-first-light-pc/issues/new?template=bug_report.yml)**.
+
+Файлы игры не прикладывайте.
 
 ## Сборка из исходников
 
