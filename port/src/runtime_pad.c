@@ -22,6 +22,7 @@
 #include <SDL3/SDL.h>
 #include "mouse_stick.h"
 #include "mouse_touch.h"
+#include "rumble_gate.h"
 #include <sys/stat.h>
 
 #define ERR_INVALID_ARG ((int32_t)0x80920001)
@@ -981,9 +982,14 @@ static ABI int32_t pad_info(int32_t handle, ControllerInfo *info) {
 static ABI int32_t pad_vibration(int32_t handle, const uint8_t *param) {
     if (handle!=PAD_HANDLE || !opened) return ERR_INVALID_HANDLE;
     if (!param) return ERR_INVALID_ARG;
+    static int enabled=-1;   /* TLG_RUMBLE=0: the controller never vibrates */
+    static RumbleGate gate;  /* under the lock */
+    if (enabled<0) { const char *e=getenv("TLG_RUMBLE"); enabled=!(e && *e=='0'); }
+    if (!enabled) return 0;
     pthread_mutex_lock(&lock);
     SDL_Gamepad *g=current_gamepad();
-    if (g) SDL_RumbleGamepad(g,(uint16_t)(param[0]*257),(uint16_t)(param[1]*257),1000);
+    if (g && rumble_gate(&gate,param[0],param[1],now_us()))
+        SDL_RumbleGamepad(g,(uint16_t)(param[0]*257),(uint16_t)(param[1]*257),1000);
     pthread_mutex_unlock(&lock);
     return 0;
 }
