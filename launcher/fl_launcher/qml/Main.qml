@@ -9,8 +9,10 @@ Window {
     id: root
     width: 1440
     height: 810
-    minimumWidth: 960
-    minimumHeight: 540
+    // 960 x 540 at most the screen's free area: a 200% handheld (2560 x 1600, OneXPlayer X1) has
+    // 1280 x 800 logical pixels, less than the default size.
+    minimumWidth: Math.min(960, Screen.width)
+    minimumHeight: Math.min(540, Screen.height)
     visible: true
     color: 'black'
     title: launcher.tr.window_title
@@ -150,8 +152,21 @@ Window {
         }
     }
 
+    // Within the window's screen, centred: a frameless window is never moved back by Windows, so
+    // the default 1440 x 810 on a smaller screen (high DPI scaling) left the settings panel off
+    // the bottom right. 16:9 kept, at most 92% of the width and 88% of the height (the taskbar).
+    function fitScreen() {
+        const sw = Screen.width, sh = Screen.height
+        if (sw <= 0 || sh <= 0) return
+        const scale = Math.min(1, sw * 0.92 / width, sh * 0.88 / height)
+        width = Math.max(minimumWidth, Math.floor(width * scale))
+        height = Math.max(minimumHeight, Math.floor(height * scale))
+        x = Screen.virtualX + Math.max(0, Math.floor((sw - width) / 2))
+        y = Screen.virtualY + Math.max(0, Math.floor((sh * 0.96 - height) / 2))
+    }
+
     // the last update's outcome, then one look for a newer release
-    Component.onCompleted: updater.check()
+    Component.onCompleted: { fitScreen(); updater.check() }
 
     WindowChrome {
         z: 100
