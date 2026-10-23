@@ -26,7 +26,10 @@
 namespace {
 
 std::mutex submit_mutex{};
-u32 num_requests{};
+// tlg: atomic: the build threads count requests in under submit_mutex while the IO thread counts
+// them out without it. A lost update left the count above zero with an empty queue: the IO
+// thread spun on it and WaitIdle never returned (first-start precompile hang).
+std::atomic<u32> num_requests{};
 std::condition_variable_any request_cv{};
 std::queue<std::packaged_task<void()>> req_queue{};
 std::mutex m_request{};
@@ -116,7 +119,7 @@ void ProcessIO(const std::stop_token& stoken) {
     while (!stoken.stop_requested()) {
         {
             std::unique_lock lk{submit_mutex};
-            Common::CondvarWait(request_cv, lk, stoken, [&] { return num_requests; });
+            Common::CondvarWait(request_cv, lk, stoken, [&] { return num_requests.load() != 0; });
         }
 
         if (stoken.stop_requested()) {
@@ -404,7 +407,7 @@ void DataBase::ForEachBlobName(BlobType type,
 }
 
 void DataBase::WaitIdle() {
-    while (opened && std::atomic_ref<u32>(num_requests).load()) {
+    while (opened && num_requests.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 }
