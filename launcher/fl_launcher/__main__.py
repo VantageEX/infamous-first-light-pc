@@ -50,8 +50,11 @@ if len(sys.argv) > 1 and sys.argv[1] == '--run':
     sys.exit(run_script())
 
 try:
-    from .app import main
+    from .app import main, selftest
 except ImportError:   # started as a plain script (the PyInstaller entry point)
-    from fl_launcher.app import main
+    from fl_launcher.app import main, selftest
 
+if len(sys.argv) > 1 and sys.argv[1] == '--selftest':
+    # The package check (CI): the interface loads with every QML file, font and asset it needs.
+    sys.exit(selftest())
 sys.exit(main())

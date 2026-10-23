@@ -1,29 +1,33 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Updates from the GitHub releases: one HTTPS GET to the releases API when the launcher starts (no
 data of the player is sent). A packaged launcher in a folder it can write to downloads the new
-package, checks its SHA-256 against the one GitHub publishes, unpacks it beside itself and quits;
-a PowerShell helper then swaps the package's files (the exe, _internal/, port/, ...) for the new
-ones, puts the old ones back if a move fails, and starts the new launcher. data/ is never
-touched. Elsewhere (a source tree, Program Files) the launcher only points to the release page."""
+package (this system's: the Windows .zip or the Linux .tar.gz), checks its SHA-256 against the one
+GitHub publishes, unpacks it beside itself and quits; a helper (PowerShell on Windows, bash on
+Linux) then swaps the package's files (the launcher, _internal/, port/, ...) for the new ones,
+puts the old ones back if a move fails, and starts the new launcher. data/ is never touched.
+Elsewhere (a source tree, Program Files) the launcher only points to the release page."""
 import hashlib
 import json
 import os
 import shutil
 import subprocess
 import sys
+import tarfile
 import threading
 import urllib.request
 import zipfile
 from pathlib import Path, PurePosixPath
 
-from PySide6.QtCore import Property, QObject, QUrl, Signal, Slot
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtCore import Property, QObject, Signal, Slot
 
+from .runner import desktop_env, open_external
 from .settings import FROZEN, REPO, writable
 
 LATEST_URL = 'https://api.github.com/repos/VantageEX/infamous-first-light-pc/releases/latest'
-RELEASE_FILE = REPO / 'RELEASE'      # the package's tag (dev/package.sh)
-EXE_NAME = 'inFAMOUS First Light.exe'
+RELEASE_FILE = REPO / 'RELEASE'      # the package's tag (dev/package.sh, dev/package_linux.sh)
+WINDOWS = os.name == 'nt'
+EXE_NAME = 'inFAMOUS First Light' + ('.exe' if WINDOWS else '')
+PROBE = 'port/out/tlg-probe' + ('.exe' if WINDOWS else '')
 STAGE = REPO / '.update'             # the download and the unpacked package, beside the old one
 BACKUP = REPO / '.update-backup'     # the replaced files while the helper runs
 CHUNK = 1 << 20
@@ -49,6 +53,14 @@ def installed_tag():
         return os.environ.get('FL_RELEASE', '')   # FL_RELEASE: tests and source trees
 
 
+def is_package(name, windows=WINDOWS):
+    """This system's package among a release's assets: the Windows .zip or the Linux .tar.gz,
+    not a test build."""
+    if '-test' in name:
+        return False
+    return name.endswith('.zip') if windows else name.endswith('.tar.gz') and '-linux' in name
+
+
 def fetch_latest(opener=urllib.request.urlopen):
     """{'tag', 'page', 'asset', 'url', 'size', 'sha256'} of the latest release."""
     request = urllib.request.Request(LATEST_URL, headers={
@@ -59,8 +71,7 @@ def fetch_latest(opener=urllib.request.urlopen):
     except (OSError, ValueError) as error:
         raise UpdateError(f'GitHub: {error}') from error
     tag = str(release.get('tag_name', ''))
-    package = next((a for a in release.get('assets', [])
-                    if str(a.get('name', '')).endswith('.zip') and '-test' not in a.get('name', '')), None)
+    package = next((a for a in release.get('assets', []) if is_package(str(a.get('name', '')))), None)
     digest = str((package or {}).get('digest') or '')
     return {'tag': tag, 'page': str(release.get('html_url', '')),
             'asset': package and package['name'], 'url': package and package['browser_download_url'],
@@ -92,11 +103,20 @@ def download(release, dest, progress, opener=urllib.request.urlopen):
 def unpack(archive, folder, tag):
     """The package's folder inside `folder`, unpacked from `archive` and checked: its own exe,
     launcher files and core, its RELEASE the tag, nothing outside it and no data/ folder.
-    The archive's names may use either slash (Compress-Archive writes backslashes)."""
+    The archive's names may use either slash (Compress-Archive writes backslashes). A .tar.gz
+    (Linux: it keeps the programs executable) goes through tarfile's 'data' filter, which refuses
+    absolute names, '..' and links that lead outside."""
     if folder.exists():
         shutil.rmtree(folder)
     folder.mkdir(parents=True)
     root = folder.resolve()
+    if str(archive).endswith('.tar.gz'):
+        try:
+            with tarfile.open(archive, 'r:gz') as package:
+                package.extractall(root, filter='data')
+        except (tarfile.TarError, OSError) as error:
+            raise UpdateError(f'archive: {error}') from error
+        return check_payload(folder, tag)
     with zipfile.ZipFile(archive) as package:
         for member in package.infolist():
             parts = PurePosixPath(member.filename.replace('\\', '/')).parts
@@ -109,9 +129,13 @@ def unpack(archive, folder, tag):
             target.parent.mkdir(parents=True, exist_ok=True)
             with package.open(member) as source, open(target, 'wb') as out:
                 shutil.copyfileobj(source, out, CHUNK)
+    return check_payload(folder, tag)
+
+
+def check_payload(folder, tag):
     tops = [entry for entry in folder.iterdir()]
     payload = tops[0] if len(tops) == 1 and tops[0].is_dir() else folder
-    for needed in (EXE_NAME, '_internal', 'port/out/tlg-probe.exe', 'RELEASE'):
+    for needed in (EXE_NAME, '_internal', PROBE, 'RELEASE'):
         if not (payload / needed).exists():
             raise UpdateError(f'archive: no {needed}')
     if (payload / 'data').exists():
@@ -172,13 +196,60 @@ try {
 Start-Process -FilePath (Join-Path $Target $Exe) -WorkingDirectory $Target
 '''
 
+# The same steps in bash (Linux): "busy" is a process whose program lies in the folder.
+HELPER_SH = r'''#!/bin/bash
+wait_pid=$1 payload=$2 target=$3 backup=$4 exe=$5 log=$6
+note() { { mkdir -p "$(dirname "$log")" && printf '%s %s\n' "$(date +%Y-%m-%dT%H:%M:%S)" "$1" >> "$log"; } 2>/dev/null || true; }
+restart() { (cd "$target" && exec "./$exe") </dev/null >/dev/null 2>&1 & }
+for _ in $(seq 1200); do kill -0 "$wait_pid" 2>/dev/null || break; sleep 0.1; done
+busy=
+for _ in $(seq 60); do
+    busy=
+    for link in /proc/[0-9]*/exe; do
+        path=$(readlink "$link" 2>/dev/null) || continue
+        [[ $path == "$target"/* ]] && busy="$busy $(basename "$path")"
+    done
+    [[ -z $busy ]] && break
+    sleep 1
+done
+if [[ -n $busy ]]; then note "failed: still running from the folder:$busy"; restart; exit 1; fi
+rm -rf -- "$backup" && mkdir -p -- "$backup" || { note "failed: cannot create $backup"; restart; exit 1; }
+moved=()
+failed=
+shopt -s dotglob nullglob
+for item in "$payload"/*; do
+    name=$(basename "$item")
+    if [[ -e $target/$name ]] && ! mv -- "$target/$name" "$backup/$name"; then failed="cannot move $name aside"; break; fi
+    moved+=("$name")
+    if ! mv -- "$item" "$target/$name"; then failed="cannot move $name in"; break; fi
+done
+if [[ -n $failed ]]; then
+    note "failed: $failed"
+    for name in "${moved[@]}"; do
+        if [[ -e $backup/$name ]]; then rm -rf -- "${target:?}/$name"; mv -- "$backup/$name" "$target/$name"; fi
+    done
+else
+    note "installed"
+fi
+restart
+'''
+
 
 def start_helper(payload, log):
     """Starts the helper detached (it outlives this process) and returns."""
     STAGE.mkdir(parents=True, exist_ok=True)
+    log.parent.mkdir(parents=True, exist_ok=True)
+    if not WINDOWS:
+        script = STAGE / 'install.sh'
+        script.write_text(HELPER_SH, encoding='utf-8')
+        # The system's environment, not PyInstaller's; the new launcher starts as a fresh one.
+        env = {**desktop_env(), 'PYINSTALLER_RESET_ENVIRONMENT': '1'}
+        subprocess.Popen(['/bin/bash', str(script), str(os.getpid()), str(payload), str(REPO), str(BACKUP),
+                          EXE_NAME, str(log)], cwd=str(REPO), env=env, start_new_session=True, close_fds=True,
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return
     script = STAGE / 'install.ps1'
     script.write_text(HELPER, encoding='utf-8-sig')   # with a BOM: PowerShell 5.1 reads it as UTF-8
-    log.parent.mkdir(parents=True, exist_ok=True)
     flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
     subprocess.Popen(['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script),
                       '-WaitPid', str(os.getpid()), '-Payload', str(payload), '-Target', str(REPO),
@@ -255,9 +326,8 @@ class Updater(QObject):
 
     @Property(bool, notify=changed)
     def canInstall(self):
-        """In place only from a package that knows its release, in a folder it can write to, on Windows."""
-        return bool(FROZEN and os.name == 'nt' and installed_tag() and self.release and self.release['url']
-                    and writable(REPO))
+        """In place only from a package that knows its release, in a folder it can write to."""
+        return bool(FROZEN and installed_tag() and self.release and self.release['url'] and writable(REPO))
 
     def _set(self, state, progress=None, error=None):
         self._state = state
@@ -316,7 +386,7 @@ class Updater(QObject):
                 payload = unpack(archive, STAGE / 'package', release['tag'])
                 archive.unlink(missing_ok=True)
                 self._result.emit('ready', payload)
-            except (UpdateError, OSError, zipfile.BadZipFile) as error:
+            except (UpdateError, OSError, zipfile.BadZipFile, tarfile.TarError) as error:
                 shutil.rmtree(STAGE, ignore_errors=True)
                 self._result.emit('failed', str(error))
         threading.Thread(target=work, daemon=True).start()
@@ -324,7 +394,7 @@ class Updater(QObject):
     @Slot()
     def openPage(self):
         if self.release and self.release['page']:
-            QDesktopServices.openUrl(QUrl(self.release['page']))
+            open_external(self.release['page'])
 
     @Slot()
     def dismiss(self):

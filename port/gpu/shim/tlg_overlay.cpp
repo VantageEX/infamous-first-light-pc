@@ -143,9 +143,12 @@ std::atomic<bool> choice_retiring{false};
 float base_scale = 1.0f;
 // Faces beside the default Segoe UI (Init): Semibold for titles and buttons, Light for the menu's
 // labels (the launcher's Font.Light), and Windows' icon font for the menu's glyphs (none: no icons).
+// Without Segoe (Linux, the Steam Deck) they are the port's Open Sans and its subset of Fluent UI
+// System Icons (port/fonts, as in the launcher's fonts.py); icons_fluent then maps the code points.
 ImFont* font_bold = nullptr;
 ImFont* font_light = nullptr;
 ImFont* font_icons = nullptr;
+bool icons_fluent = false;
 
 // The game's frame behind the panels (SetBackdrop): the view the presenter gave for this present,
 // and a descriptor per view the overlay has sampled (ForgetBackdrop drops one). imgui_mutex.
@@ -336,13 +339,33 @@ std::string Utf8(unsigned code) {
 // Segoe Fluent Icons / MDL2 code points (launcher/fl_launcher/qml/theme.js).
 namespace Icon {
 constexpr unsigned Chart = 0xE9D2, Display = 0xE7F4, Speed = 0xEC4A, Gamepad = 0xE7FC, Chevron = 0xE70D,
-                   Check = 0xE73E, Bolt = 0xE945;
+                   Check = 0xE73E, Bolt = 0xE945, Save = 0xE74E, Warning = 0xE7BA;
 }
+
+// The icon font's text for a Segoe code point: the same icon in Fluent UI System Icons (theme.js
+// iconFluent) when that is the font. Fluent's glyphs sit smaller in their em, hence `scale`.
+std::string IconText(unsigned code) {
+    if (!icons_fluent) return Utf8(code);
+    switch (code) {
+    case Icon::Chart: code = 0xF33D; break;
+    case Icon::Display: code = 0xF35A; break;
+    case Icon::Speed: code = 0xF4C8; break;
+    case Icon::Gamepad: code = 0xEEB9; break;
+    case Icon::Chevron: code = 0xF2A4; break;
+    case Icon::Check: code = 0xF295; break;
+    case Icon::Bolt: code = 0xE619; break;
+    case Icon::Save: code = 0xF680; break;
+    case Icon::Warning: code = 0xF86A; break;
+    }
+    return Utf8(code);
+}
+float IconScale() { return icons_fluent ? 1.15f : 1.0f; }
 
 // An icon of `size` launcher pixels centred at `c`; nothing without the icon font.
 void DrawIcon(ImDrawList* dl, unsigned code, ImVec2 c, float size, ImU32 color) {
     if (!font_icons) return;
-    const std::string text = Utf8(code);
+    const std::string text = IconText(code);
+    size *= IconScale();
     const ImVec2 s = font_icons->CalcTextSizeA(L(size), FLT_MAX, 0.0f, text.c_str());
     dl->AddText(font_icons, L(size), ImVec2(c.x - s.x / 2, c.y - s.y / 2), color, text.c_str());
 }
@@ -1373,7 +1396,8 @@ struct SavePainter {
     // An icon of the icon font centred at (x, y); `fallback` draws it without the font.
     void Glyph(unsigned code, float x, float y, float size, const ImVec4& color, float alpha = 1.0f) const {
         if (!font_icons) return;
-        const std::string text = Utf8(code);
+        const std::string text = IconText(code);
+        size *= IconScale();
         const ImVec2 s = font_icons->CalcTextSizeA(size * k, FLT_MAX, 0.0f, text.c_str());
         const ImVec2 c = P(x, y);
         dl->AddText(font_icons, size * k, ImVec2(c.x - s.x / 2, c.y - s.y / 2), Theme::U32(color, alpha), text.c_str());
@@ -1617,7 +1641,7 @@ void SaveListBox() {
     }();
     std::snprintf(sub, sizeof(sub), "%s%s%d %s", game.c_str(), game.empty() ? "" : " · ", saves,
                   Plural(saves, "save", "saves", "сохранение", "сохранения", "сохранений"));
-    p.Header(40, 30, 0xE74E, SaveTitle(save_kind), sub);
+    p.Header(40, 30, Icon::Save, SaveTitle(save_kind), sub);
     p.Line(40, header_h, w - 40, header_h, Theme::Line, 1.0f);
     // The cards, scrolled so the selected one is shown.
     if (choice_index < choice_first) choice_first = choice_index;
@@ -1724,7 +1748,7 @@ void SaveMessageBox() {
     p.Panel(w, h);
 
     float y = pad_y;
-    if (words.warn) p.Glyph(0xE7BA, pad_x + 16, y + 20, 28, Theme::Warn); // a warning sign
+    if (words.warn) p.Glyph(Icon::Warning, pad_x + 16, y + 20, 28, Theme::Warn); // a warning sign
     p.Text(pad_x + title_x, y, 30.0f, Theme::Text, p.Fit(30.0f, words.title, inner - title_x));
     y += 40;
     if (message_has_entry) {
@@ -1821,7 +1845,7 @@ void SaveToastBox(SaveClock::time_point now) {
     p.Box(0, 0, w, h, ImVec4(32 / 255.0f, 32 / 255.0f, 35 / 255.0f, 1.0f), 16.0f, (frosted ? 0.72f : 0.95f) * alpha);
     p.Box(22, 18, 90, 86, Theme::White(0.08f), kItemRadius, alpha);
     if (font_icons) {
-        p.Glyph(0xE73E, 56, 52, 32, Theme::Good, alpha);
+        p.Glyph(Icon::Check, 56, 52, 32, Theme::Good, alpha);
     } else {
         p.Line(42, 52, 52, 62, Theme::Good, 3.0f, alpha);
         p.Line(52, 62, 71, 41, Theme::Good, 3.0f, alpha);
@@ -2293,11 +2317,15 @@ void Init(const Vulkan::Instance& instance, vk::Format format, u32 image_count) 
                                               int(tlg_font_ttf_end - tlg_font_ttf), 18.0f, &font_config);
     };
     ImFont* font = nullptr;
+    // FL_FONTS=bundled: the port's faces on Windows too (the Linux look, as in the launcher).
+    const char* fl_fonts = std::getenv("FL_FONTS");
+    const bool bundled = fl_fonts && std::strcmp(fl_fonts, "bundled") == 0;
 #ifdef _WIN32
     // getenv, not GetEnvironmentVariableA: renderer v2 builds this file without <windows.h>.
     const char* windir = std::getenv("WINDIR");
     const std::string fonts = std::string(windir && *windir ? windir : "C:\\Windows") + "\\Fonts\\";
     for (const char* name : {"segoeui.ttf", "segoeuisl.ttf"}) {
+        if (bundled) break;
         if ((font = add_file(fonts + name, 19.0f))) {
             add_dejavu(true);
             break;
@@ -2311,9 +2339,23 @@ void Init(const Vulkan::Instance& instance, vk::Format format, u32 image_count) 
     }
     // Segoe Fluent Icons (Windows 11), else Segoe MDL2 Assets (Windows 10): the launcher's glyphs.
     for (const char* name : {"SegoeIcons.ttf", "segmdl2.ttf"}) {
+        if (bundled) break;
         if ((font_icons = add_file(fonts + name, 24.0f))) break;
     }
 #endif
+    // The port's own faces (run.py sets TLG_FONT_DIR to port/fonts): Open Sans, Cyrillic included,
+    // and the launcher's Fluent icons.
+    if (const char* dir = std::getenv("TLG_FONT_DIR"); dir && *dir) {
+        const std::string own = std::string(dir) + "/";
+        if (!font && (font = add_file(own + "OpenSans-Regular.ttf", 19.0f))) {
+            add_dejavu(true);
+            if ((font_bold = add_file(own + "OpenSans-SemiBold.ttf", 19.0f))) add_dejavu(true);
+            if ((font_light = add_file(own + "OpenSans-Light.ttf", 25.0f))) add_dejavu(true);
+        }
+        if (!font_icons && (font_icons = add_file(own + "FluentSystemIcons-Subset.ttf", 24.0f))) {
+            icons_fluent = true;
+        }
+    }
     if (!font) {
         font = add_dejavu(false);
     }

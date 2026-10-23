@@ -33,7 +33,27 @@ def _windows():
     return text
 
 
+def _linux():
+    """'SteamOS 3.7.13 · Linux-6.11...' from os-release, the kernel after it."""
+    name = ''
+    try:
+        for line in Path('/etc/os-release').read_text(encoding='utf-8').splitlines():
+            if line.startswith('PRETTY_NAME='):
+                name = line.split('=', 1)[1].strip().strip('"')
+    except OSError:
+        pass
+    return f'{name} · {platform.platform()}' if name else platform.platform()
+
+
 def _cpu():
+    if os.name != 'nt':
+        try:
+            for line in Path('/proc/cpuinfo').read_text(encoding='utf-8').splitlines():
+                if line.startswith('model name'):
+                    return line.split(':', 1)[1].strip()
+        except OSError:
+            pass
+        return platform.processor() or '?'
     try:
         import winreg
         with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r'HARDWARE\DESCRIPTION\System\CentralProcessor\0') as key:
@@ -44,6 +64,12 @@ def _cpu():
 
 def _ram_gb():
     if os.name != 'nt':
+        try:
+            for line in Path('/proc/meminfo').read_text(encoding='utf-8').splitlines():
+                if line.startswith('MemTotal:'):
+                    return int(line.split()[1]) / 1024 ** 2
+        except (OSError, ValueError, IndexError):
+            pass
         return None
     import ctypes
 
@@ -67,7 +93,7 @@ def _private(text, game_dir, data_dir=None):
     folders = [(str(game_dir or ''), f'<game>/{Path(game_dir).name}' if game_dir else ''),
                (str(data_dir or ''), '<data>'),
                (str(REPO), '<install>'),
-               (str(Path.home()), '%USERPROFILE%')]
+               (str(Path.home()), '%USERPROFILE%' if os.name == 'nt' else '~')]
     for path, placeholder in sorted(folders, key=lambda folder: -len(folder[0])):
         if path:
             pattern = re.escape(str(path).replace('/', '\\')).replace(r'\\', r'[\\/]')
@@ -78,7 +104,7 @@ def _private(text, game_dir, data_dir=None):
 def system_text(logs):
     """system.txt: Windows, CPU, RAM and the GPU lines the core printed in the newest log."""
     ram = _ram_gb()
-    lines = [f'Windows: {_windows()}',
+    lines = [f'Windows: {_windows()}' if os.name == 'nt' else f'Linux: {_linux()}',
              f'CPU: {_cpu()}',
              f'Logical processors: {os.cpu_count() or "?"}',
              f'RAM: {ram:.1f} GB' if ram else 'RAM: ?']

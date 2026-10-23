@@ -40,3 +40,16 @@ def create(argv):
 def main():
     app, _engine, _launcher = create(sys.argv)
     return app.exec()
+
+
+def selftest():
+    """Loads the interface (QT_QPA_PLATFORM=offscreen in CI), draws for a moment and quits:
+    'selftest ok' when it loaded and found its fonts."""
+    from PySide6.QtCore import QTimer
+    app, engine, launcher = create(sys.argv[:1])
+    QTimer.singleShot(1500, app.quit)
+    app.exec()
+    ok = bool(engine.rootObjects()) and bool(launcher.iconFont)
+    print('selftest ok' if ok else f'selftest failed: interface {bool(engine.rootObjects())}, icons {launcher.iconFont!r}',
+          flush=True)
+    return 0 if ok else 1

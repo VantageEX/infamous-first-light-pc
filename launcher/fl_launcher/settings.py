@@ -30,13 +30,16 @@ def writable(folder):
 def data_dir():
     """FL_DATA_DIR, else data/ beside the launcher executable (packaged) or in the repository.
     A package unzipped where it cannot write (Program Files) keeps its data in
-    %LOCALAPPDATA%/inFAMOUS First Light PC instead."""
+    %LOCALAPPDATA%/inFAMOUS First Light PC instead (Linux: ~/.local/share)."""
     if os.environ.get('FL_DATA_DIR'):
         return Path(os.environ['FL_DATA_DIR'])
     beside = REPO / 'data'
     if not FROZEN or writable(beside):
         return beside
-    local = os.environ.get('LOCALAPPDATA')
+    if os.name == 'nt':
+        local = os.environ.get('LOCALAPPDATA')
+    else:
+        local = os.environ.get('XDG_DATA_HOME') or str(Path.home() / '.local' / 'share')
     return Path(local) / 'inFAMOUS First Light PC' if local else beside
 
 

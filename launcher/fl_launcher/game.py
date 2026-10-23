@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """What the launcher reads from the player's game folder: param.sfo, the PlayGo languages, art."""
+import os
 import struct
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -110,10 +111,10 @@ def inspect(folder):
 
 
 def renderer_v2_probe(port):
-    """tlg-probe-v2.exe (renderer v2, port/gpu_v2) when this build has it: bin/ (packaged
+    """tlg-probe-v2(.exe) (renderer v2, port/gpu_v2) when this build has it: bin/ (packaged
     layouts that use it) or out/ (dev builds and this port's packages), else None."""
     for folder in ('bin', 'out'):
-        probe = Path(port) / folder / 'tlg-probe-v2.exe'
+        probe = Path(port) / folder / ('tlg-probe-v2.exe' if os.name == 'nt' else 'tlg-probe-v2')
         if probe.is_file():
             return probe
     return None
@@ -122,7 +123,8 @@ def renderer_v2_probe(port):
 def renderer_env(renderer, game_dir, port):
     """The environment renderer v2 starts with, as iss_pc's launcher passes it
     (infamous_run.renderer_v2_env): its defaults file, the game folder its shader index reads,
-    unified memory off on Windows (measured: 11-20 FPS with it on, ~40-45 off, RTX 3060);
+    unified memory off on Windows (measured: 11-20 FPS with it on, ~40-45 off, RTX 3060) and on on
+    Linux, as iss_pc has them;
     TLG_PROBE picks the v2 probe. Nothing for the core's own renderer.
     Native passes off, unlike iss_pc: in First Light they gained ~2 FPS and crashed in NVIDIA's
     driver (nvoglv64.dll) after 4 minutes, and their pause guard only knows Second Son's eboot."""
@@ -138,5 +140,5 @@ def renderer_env(renderer, game_dir, port):
     except OSError:
         pass
     env.update({'TLG_PROBE': str(probe), 'ISS_GAME_DIR': str(game_dir),
-                'ISS_NATIVE_PASSES': '0', 'ISS_UNIFIED_MEMORY': '0'})
+                'ISS_NATIVE_PASSES': '0', 'ISS_UNIFIED_MEMORY': '0' if os.name == 'nt' else '1'})
     return env

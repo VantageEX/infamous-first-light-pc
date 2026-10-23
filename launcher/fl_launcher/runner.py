@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Starts the core (port/run.py prepares the game image and runs tlg-probe.exe) and keeps its log."""
+"""Starts the core (port/run.py prepares the game image and runs tlg-probe) and keeps its log."""
 import codecs
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -94,11 +95,17 @@ class GameRunner(QObject):
 
     def stop(self):
         if self.running:
-            # run.py waits on tlg-probe.exe: killing run.py alone would leave the game running.
+            # run.py waits on tlg-probe: killing run.py alone would leave the game running.
             if os.name == 'nt':
                 subprocess.run(['taskkill', '/PID', str(self.process.processId()), '/T', '/F'],
                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                creationflags=subprocess.CREATE_NO_WINDOW)
+            else:
+                for pid in descendants(self.process.processId()):
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except OSError:
+                        pass
             self.process.kill()
 
     def _read(self, final=False):
@@ -127,8 +134,53 @@ class GameRunner(QObject):
         return Path(data_dir) / 'logs'
 
 
+def descendants(pid):
+    """Linux: every process below pid (from /proc), the deepest first."""
+    children = {}
+    for entry in Path('/proc').iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            # The command name is in parentheses and may hold spaces: the fields follow the last ')'.
+            fields = (entry / 'stat').read_text().rsplit(')', 1)[1].split()
+        except (OSError, IndexError):
+            continue
+        children.setdefault(int(fields[1]), []).append(int(entry.name))
+    found, queue = [], [pid]
+    while queue:
+        for child in children.get(queue.pop(), []):
+            found.append(child)
+            queue.append(child)
+    return found[::-1]
+
+
+def desktop_env():
+    """The environment for programs opened for the player (file manager, browser). The packaged
+    Linux launcher runs with PyInstaller's LD_LIBRARY_PATH (its _internal folder): a program
+    started with it loads the launcher's libraries instead of its own and quits."""
+    env = dict(os.environ)
+    if FROZEN:
+        original = env.pop('LD_LIBRARY_PATH_ORIG', None)
+        if original:
+            env['LD_LIBRARY_PATH'] = original
+        else:
+            env.pop('LD_LIBRARY_PATH', None)
+    return env
+
+
+def open_external(target):
+    """A folder or a URL in the system's own program."""
+    if os.name == 'nt':
+        os.startfile(str(target))
+        return
+    try:
+        subprocess.Popen(['xdg-open', str(target)], env=desktop_env(), stdin=subprocess.DEVNULL,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError:
+        pass
+
+
 def open_folder(path):
     path = Path(path)
     path.mkdir(parents=True, exist_ok=True)
-    if os.name == 'nt':
-        os.startfile(path)
+    open_external(path)

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Windows counterpart of run.sh: prepares the game image and starts tlg-probe.exe.
+"""Prepares the game image and starts tlg-probe (tlg-probe.exe on Windows): the launcher's way in,
+on Windows and on Linux (the Steam Deck) alike; run.sh is the upstream Linux script.
 
 Same environment variables as run.sh (TLG_GAME_DIR, TLG_DATA_DIR, TLG_PATCHES, TLG_MODS_*,
 TLG_USER_DIR, ...). Extra arguments go to tlg-probe.
@@ -10,12 +11,15 @@ The in-game "Apply and restart" runs this script again through TLG_RESTART_COMMA
 import ctypes
 import os
 from pathlib import Path
+import shlex
 import shutil
 import subprocess
 import sys
 import time
 
 PORT = Path(__file__).resolve().parent
+WINDOWS = os.name == 'nt'
+EXE = '.exe' if WINDOWS else ''
 
 
 def _data_dir(data):
@@ -35,6 +39,17 @@ def fail(message):
 
 
 def wait_for(pid):
+    if not WINDOWS:
+        # Linux restarts exec this script in the game's own process (probe.c runtime_restart):
+        # only a different process is waited for.
+        deadline = time.monotonic() + 30
+        while pid != os.getpid() and time.monotonic() < deadline:
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                return
+            time.sleep(0.1)
+        return
     kernel32 = ctypes.windll.kernel32
     SYNCHRONIZE = 0x00100000
     handle = kernel32.OpenProcess(SYNCHRONIZE, False, pid)
@@ -45,7 +60,25 @@ def wait_for(pid):
 
 def no_console():
     """Started without a console (the launcher): console programs must not open their own."""
+    if not WINDOWS:
+        return 0
     return 0 if ctypes.windll.kernel32.GetConsoleWindow() else subprocess.CREATE_NO_WINDOW
+
+
+def linux_libraries(env, probe):
+    """Linux package: the libraries built with the port (SDL3, FFmpeg, ...) are in out/lib beside
+    tlg-probe. The frozen launcher runs with PyInstaller's LD_LIBRARY_PATH (its _internal folder),
+    which the game must not inherit: the one the launcher started with comes back."""
+    frozen = getattr(sys, 'frozen', False)
+    original = env.pop('LD_LIBRARY_PATH_ORIG', None) if frozen else env.get('LD_LIBRARY_PATH')
+    if frozen and original is None:
+        env.pop('LD_LIBRARY_PATH', None)
+    bundled = probe.parent / 'lib'
+    paths = [str(bundled)] if bundled.is_dir() else []
+    if original:
+        paths.append(original)
+    if paths:
+        env['LD_LIBRARY_PATH'] = os.pathsep.join(paths)
 
 
 def parse_cpu_features(output):
@@ -167,11 +200,16 @@ def main():
     if not env.get('TLG_FSR411_DIR') and not (PORT / 'fsr4_411').is_dir() and (data / 'fsr4_411').is_dir():
         env['TLG_FSR411_DIR'] = str(data / 'fsr4_411')
 
-    probe = Path(env['TLG_PROBE']) if env.get('TLG_PROBE') else find_executable('tlg-probe.exe')
+    probe = Path(env['TLG_PROBE']) if env.get('TLG_PROBE') else find_executable('tlg-probe' + EXE)
     if not probe or not probe.is_file():
-        fail('tlg-probe.exe not found: build it with build.sh (MSYS2 CLANG64) or use a packaged build.')
+        fail(f'tlg-probe{EXE} not found: build it with build.sh or use a packaged build.')
+    # The overlay's own faces where Segoe UI is missing (Linux): Open Sans and the Fluent icons.
+    if (PORT / 'fonts').is_dir():
+        env.setdefault('TLG_FONT_DIR', str(PORT / 'fonts'))
+    if not WINDOWS:
+        linux_libraries(env, probe)
     # Development builds run from the MSYS2 tree: its CLANG64 DLLs (SDL3, FFmpeg, ...).
-    if not (probe.parent / 'SDL3.dll').is_file():
+    elif not (probe.parent / 'SDL3.dll').is_file():
         clang64 = Path(env.get('MSYS2_ROOT', r'C:\msys64')) / 'clang64' / 'bin'
         if clang64.is_dir():
             env['PATH'] = f'{clang64}{os.pathsep}{env.get("PATH", "")}'
@@ -280,8 +318,12 @@ def main():
             except OSError as error:
                 print(f'Save backup failed, starting anyway: {error}', flush=True)
         this = ['--run'] if getattr(sys, 'frozen', False) else [str(Path(__file__).resolve())]
-        restart = [sys.executable, *this, '--after', str(os.getpid()), *args]
-        env['TLG_RESTART_COMMAND'] = subprocess.list2cmdline(restart)
+        if WINDOWS:
+            restart = [sys.executable, *this, '--after', str(os.getpid()), *args]
+            env['TLG_RESTART_COMMAND'] = subprocess.list2cmdline(restart)
+        else:
+            # Linux: the game execs this through sh -c in its own process, so nothing to wait for.
+            env['TLG_RESTART_COMMAND'] = shlex.join([sys.executable, *this, *args])
         command = [str(probe), str(out / 'boot-linked.bin'), '--content-profile', str(out / 'content.bin'),
                    '--patches', str(out / 'patches.bin'), '--app0', str(game),
                    '--user', str(user_dir),

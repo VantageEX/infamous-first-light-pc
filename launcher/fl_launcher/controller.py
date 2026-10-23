@@ -189,7 +189,7 @@ class Launcher(QObject):
 
     @Property('QVariantList', notify=textsChanged)
     def renderers(self):
-        """The renderers this build can start: renderer v2 only when tlg-probe-v2.exe is there."""
+        """The renderers this build can start: renderer v2 only when tlg-probe-v2 is there."""
         options = [{'value': '1', 'text': self.t('renderer_classic')}]
         if game.renderer_v2_probe(PORT):
             options.append({'value': '2', 'text': self.t('renderer_v2')})
