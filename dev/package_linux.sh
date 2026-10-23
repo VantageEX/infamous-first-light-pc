@@ -35,10 +35,11 @@ done
 entry=port/out/fl_entry.py
 printf '%s\n' '# PyInstaller entry: the launcher package run as a program.' \
     'import fl_launcher.__main__  # noqa: F401' > "$entry"
+# Absolute paths: PyInstaller reads relative ones from the spec's folder (port/out).
 "$pyenv/bin/python" -m PyInstaller --noconfirm --clean --log-level WARN \
-    --name "$exe_name" --paths launcher --collect-submodules fl_launcher \
-    --add-data "launcher/fl_launcher/qml:fl_launcher/qml" \
-    --add-data "launcher/fl_launcher/assets:fl_launcher/assets" \
+    --name "$exe_name" --paths "$PWD/launcher" --collect-submodules fl_launcher \
+    --add-data "$PWD/launcher/fl_launcher/qml:fl_launcher/qml" \
+    --add-data "$PWD/launcher/fl_launcher/assets:fl_launcher/assets" \
     "${hidden[@]}" --distpath port/out/pyi-dist --workpath port/out/pyi-work --specpath port/out \
     "$PWD/$entry"
 
