@@ -85,7 +85,8 @@ while ((${#queue[@]})); do
 done
 echo "Packaged $(find "$dest/port/out" -maxdepth 1 -iname '*.dll' | wc -l) DLLs from /clang64/bin"
 cp port/run.py "$dest/port/"
-cp -r port/scripts port/patches "$dest/port/"
+# port/fonts: Open Sans and the Fluent icons where Segoe UI is missing (Wine/Proton).
+cp -r port/scripts port/patches port/fonts "$dest/port/"
 # The first-start shader jobs generator (scripts/build_jobs.py runs it).
 mkdir -p "$dest/port/tools"
 cp -r port/tools/xpps "$dest/port/tools/"

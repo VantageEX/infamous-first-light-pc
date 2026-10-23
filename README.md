@@ -100,6 +100,8 @@ This port is a fork of [**iss_pc**](https://github.com/HayatoG/iss_pc) by **Haya
 
 Licensed under **GPL-2.0**, like the projects it builds on ([LICENSE](LICENSE)).
 
+Where Windows' Segoe UI is missing (Linux, the Steam Deck) the launcher and the in-game menus use [Open Sans](https://github.com/googlefonts/opensans) (SIL Open Font License 1.1, [port/fonts/OFL-OpenSans.txt](port/fonts/OFL-OpenSans.txt)) and a subset of Microsoft's [Fluent UI System Icons](https://github.com/microsoft/fluentui-system-icons) (MIT, [port/fonts/LICENSE-FluentSystemIcons.txt](port/fonts/LICENSE-FluentSystemIcons.txt)).
+
 *inFAMOUS* is a trademark of Sony Interactive Entertainment. This project is not affiliated with Sony Interactive Entertainment or Sucker Punch Productions.
 
 ---
@@ -166,5 +168,7 @@ Licensed under **GPL-2.0**, like the projects it builds on ([LICENSE](LICENSE)).
 Этот порт — форк [**iss_pc**](https://github.com/HayatoG/iss_pc) от **HayatoG**, нативного порта inFAMOUS Second Son; его ядро (среда выполнения, загрузчик, перевод графики и множество исправлений) — основа этого проекта. Перевод графики взят из [**shadPS4**](https://github.com/shadps4-emu/shadPS4); остальные проекты, на которых построен iss_pc, перечислены в [docs/iss_pc](docs/iss_pc/README.md). Рендер v2 (`port/gpu_v2`, через iss_pc) — рендер **Castlesea** из [infamous-second-son-pc-port](https://github.com/Castlesea/infamous-second-son-pc-port) на основе [shadPS4-perf](https://github.com/weshayoub92/shadPS4-perf) от **weshayoub92**.
 
 Лицензия **GPL-2.0**, как у проектов, на которых он основан ([LICENSE](LICENSE)).
+
+Там, где нет шрифта Windows Segoe UI (Linux, Steam Deck), лаунчер и меню в игре используют [Open Sans](https://github.com/googlefonts/opensans) (SIL Open Font License 1.1, [port/fonts/OFL-OpenSans.txt](port/fonts/OFL-OpenSans.txt)) и часть иконок Microsoft [Fluent UI System Icons](https://github.com/microsoft/fluentui-system-icons) (MIT, [port/fonts/LICENSE-FluentSystemIcons.txt](port/fonts/LICENSE-FluentSystemIcons.txt)).
 
 *inFAMOUS* — товарный знак Sony Interactive Entertainment. Проект не связан с Sony Interactive Entertainment и Sucker Punch Productions.

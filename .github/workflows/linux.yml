@@ -1,0 +1,108 @@
+# The Linux / Steam Deck package (dev/package_linux.sh), built on Ubuntu 24.04 (glibc 2.39:
+# SteamOS 3.6 and newer), the way HayatoG/iss_pc builds its own. Started by hand (Actions → Linux
+# package → Run workflow): the package comes out as the run's artifact, and with "attach" also on
+# the release of that tag (the release must exist; nothing is published otherwise).
+# No game or console file is ever built in or uploaded.
+name: Linux package
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Release tag the package reports (e.g. v0.3.3); empty: no auto-update'
+        type: string
+        required: false
+        default: ''
+      attach:
+        description: 'Attach the .tar.gz to that release'
+        type: boolean
+        required: false
+        default: false
+      test_build:
+        description: 'Test build (TEST_BUILD: reports after playing)'
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: write   # only used by the "Attach to the release" step
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    env:
+      CC: gcc-14
+      CXX: g++-14
+      PKG_CONFIG_PATH: /opt/tlgdeps/lib/pkgconfig:/opt/tlgdeps/lib64/pkgconfig:/opt/tlgdeps/lib/x86_64-linux-gnu/pkgconfig
+      CMAKE_PREFIX_PATH: /opt/tlgdeps
+      LD_LIBRARY_PATH: /opt/tlgdeps/lib:/opt/tlgdeps/lib64:/opt/tlgdeps/lib/x86_64-linux-gnu
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0   # the package's VERSION and release tag come from git
+      - name: System packages
+        run: |
+          sudo apt-get update -q
+          # libxcb-cursor0: Qt's xcb platform plugin needs it, and PyInstaller bundles it with the
+          # launcher (Game Mode on the Steam Deck runs X11 apps through Xwayland).
+          sudo apt-get install -y -q --no-install-recommends gcc-14 g++-14 cmake ninja-build pkg-config nasm \
+            curl git python3-venv libvulkan-dev glslang-tools libboost-dev \
+            libxxhash-dev zlib1g-dev libx11-dev libxcb1-dev libxext-dev libxrandr-dev libxcursor-dev \
+            libxi-dev libxss-dev libxtst-dev libxkbcommon-dev libwayland-dev wayland-protocols \
+            libdecor-0-dev libegl-dev libgl-dev libdrm-dev libgbm-dev libpulse-dev libasound2-dev \
+            libpipewire-0.3-dev libudev-dev libdbus-1-dev libusb-1.0-0-dev libfreetype-dev \
+            clang libssl-dev libxcb-cursor0 libxkbcommon-x11-0 libfontconfig1 libegl1
+      - name: Cache built libraries
+        id: deps
+        uses: actions/cache@v4
+        with:
+          path: /opt/tlgdeps
+          key: tlgdeps-ubuntu2404-${{ hashFiles('port/packaging/linux/build_deps.sh') }}
+      - name: Build libraries (SDL3, Zydis, fmt, FFmpeg)
+        if: steps.deps.outputs.cache-hit != 'true'
+        working-directory: port
+        run: |
+          sudo mkdir -p /opt/tlgdeps && sudo chown "$USER" /opt/tlgdeps
+          bash packaging/linux/build_deps.sh
+      - name: Build the core (both renderers)
+        working-directory: port
+        run: |
+          (while sleep 60; do
+            echo "Build running: $(date -u +%H:%M:%S) UTC"
+            tail -n 1 out/gpu-build.log out/gpu_v2-build.log 2>/dev/null || true
+          done) &
+          progress_pid=$!
+          trap 'kill "$progress_pid" 2>/dev/null || true' EXIT
+          TLG_RENDERER_V2=1 TLG_LTO=ON TLG_PGO=off bash build.sh
+      - name: Package
+        env:
+          RELEASE: ${{ inputs.release }}
+          TEST: ${{ inputs.test_build && '1' || '0' }}
+        run: bash dev/package_linux.sh
+      - name: Smoke test (the packaged launcher)
+        # The frozen launcher loads its interface offscreen: a package that cannot start (missing
+        # Qt plugin, QML, font) must not reach players.
+        run: |
+          set -euo pipefail
+          name=inFAMOUS-First-Light-PC-linux-x86_64${{ inputs.test_build && '-test' || '' }}
+          smoke=$(mktemp -d)
+          tar -C "$smoke" -xzf "dist/$name.tar.gz"
+          out=$(QT_QPA_PLATFORM=offscreen FL_UPDATE_CHECK=0 FL_DATA_DIR="$smoke/data" \
+                timeout 120 "$smoke/$name/inFAMOUS First Light" --selftest 2>&1) || { echo "$out"; exit 1; }
+          echo "$out"
+          grep -qx 'selftest ok' <<<"$out"
+          # The core starts and checks the CPU (no GPU or game needed).
+          LD_LIBRARY_PATH="$smoke/$name/port/out/lib" "$smoke/$name/port/out/tlg-probe" --cpu-features || [[ $? == 20 ]]
+          sha256sum "dist/$name.tar.gz" | tee "dist/$name.tar.gz.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: inFAMOUS-First-Light-PC-linux-x86_64
+          path: dist/inFAMOUS-First-Light-PC-linux-x86_64*.tar.gz*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Attach to the release
+        if: inputs.attach && inputs.release != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ inputs.release }}" dist/inFAMOUS-First-Light-PC-linux-x86_64*.tar.gz --clobber
