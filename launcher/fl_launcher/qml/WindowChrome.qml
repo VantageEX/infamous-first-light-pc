@@ -19,8 +19,11 @@ Item {
         if (maximized) window.showNormal(); else window.showMaximized()
     }
 
-    // Segoe Fluent Icons chrome glyphs (the system font Windows' own title bars use)
-    readonly property var glyphs: ({ minimize: '', maximize: '', restore: '', close: '' })
+    // The chrome glyphs: Segoe Fluent Icons (the font Windows' own title bars use), else the same
+    // four in Fluent UI System Icons (16 px; Linux).
+    readonly property var glyphs: launcher.iconFluent
+        ? ({ minimize: '\uEBCF', maximize: '\uF533', restore: '\uEB95', close: '\uF368' })
+        : ({ minimize: '', maximize: '', restore: '', close: '' })
 
     // ---- drag strip ---------------------------------------------------------------------------
     MouseArea {
@@ -58,7 +61,7 @@ Item {
                     text: button.modelData.key === 'maximize' && chrome.maximized ? chrome.glyphs.restore
                                                                                    : chrome.glyphs[button.modelData.key]
                     font.family: launcher.iconFont !== '' ? launcher.iconFont : 'Segoe Fluent Icons'
-                    font.pixelSize: 11
+                    font.pixelSize: launcher.iconFluent ? 14 : 11
                     color: T.fg
                     opacity: area.containsMouse ? 1 : 0.85
                 }

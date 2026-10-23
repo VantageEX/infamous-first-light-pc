@@ -8,6 +8,7 @@ from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuickControls2 import QQuickStyle
 
+from . import fonts
 from .controller import Launcher
 from .updates import Updater
 
@@ -22,7 +23,7 @@ def create(argv):
     # The port's own icon (dev/make_icon.py), on the window and the taskbar.
     app.setWindowIcon(QIcon(str(Path(__file__).resolve().parent / 'assets' / 'icon.png')))
     app.styleHints().setColorScheme(Qt.ColorScheme.Dark)   # dark title bar
-    launcher = Launcher()
+    launcher = Launcher(fonts.setup())
     updater = Updater(lambda: launcher.t, launcher.settings.folder, lambda: launcher.runner.running, launcher)
     updater.notice.connect(launcher.notice)
     launcher.textsChanged.connect(updater.changed)

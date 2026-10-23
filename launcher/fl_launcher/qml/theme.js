@@ -2,7 +2,8 @@
 // Colours, fonts and timings of the console-style interface (all sizes are on the 1920x1080 stage).
 .pragma library
 
-var font = 'Segoe UI'
+// fonts.py substitutes Segoe UI for this (Windows) or the bundled Open Sans (Linux)
+var font = 'FL Sans'
 var mono = 'Consolas'
 var fg = '#ffffff'
 var fg2 = Qt.rgba(1, 1, 1, 0.64)
@@ -24,4 +25,9 @@ var icon = {
     play: '', stop: '', folder: '', openFolder: '', save: '',
     log: '', display: '', globe: '', code: '', warning: '',
     info: '', report: '', done: '', chevronDown: '', check: '', document: '', download: ''
+}
+
+// The same icons in Fluent UI System Icons (24 px regular; fonts.py loads the subset in port/fonts).
+var iconFluent = {
+    play: '\uF606', stop: '\uF72B', folder: '\uF419', openFolder: '\uF42F', save: '\uF680', log: '\uE558', display: '\uF35A', globe: '\uF45B', code: '\uF2F0', warning: '\uF86A', info: '\uF4A4', report: '\uF403', done: '\uF299', chevronDown: '\uF2A4', check: '\uF295', document: '\uF379', download: '\uF151'
 }

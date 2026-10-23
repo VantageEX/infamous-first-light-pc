@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from PySide6.QtCore import Property, QLocale, QObject, QUrl, Signal, Slot
-from PySide6.QtGui import QFontDatabase, QTextCursor
+from PySide6.QtGui import QTextCursor
 
 from . import game, report, saves
 from .i18n import STRINGS, UI_LANGUAGES, Texts
@@ -30,7 +30,7 @@ class Launcher(QObject):
     notice = Signal(str, str, str)   # title, text, kind ('warning' or 'done'): a toast
     showLog = Signal()               # the game failed: open the log page
 
-    def __init__(self, parent=None):
+    def __init__(self, icon_font=('', False), parent=None):
         super().__init__(parent)
         self.settings = Settings()
         self.info = None
@@ -42,8 +42,8 @@ class Launcher(QObject):
         self.t = Texts(QLocale.system().name()[:2] if ui == 'auto' else ui)
         # The advanced box starts on when it holds something, as the old window's checkable group did.
         self._advanced = bool(self.settings.launcher['extra_env'].strip())
-        families = QFontDatabase.families()
-        self._icon_font = next((f for f in ('Segoe Fluent Icons', 'Segoe MDL2 Assets') if f in families), '')
+        # app.py set the fonts up (fonts.setup) before this.
+        self._icon_font, self._icon_fluent = icon_font
         self.runner = GameRunner(self)
         self.runner.line.connect(self._log_line)
         self.runner.finished.connect(self._game_finished)
@@ -76,6 +76,11 @@ class Launcher(QObject):
     @Property(str, constant=True)
     def iconFont(self):
         return self._icon_font
+
+    @Property(bool, constant=True)
+    def iconFluent(self):
+        """The icon font is Fluent UI System Icons (theme.js iconFluent), not Segoe's."""
+        return self._icon_fluent
 
     # ---- game folder --------------------------------------------------------------------------
     @Property(bool, notify=gameChanged)
