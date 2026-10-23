@@ -2317,10 +2317,10 @@ void Init(const Vulkan::Instance& instance, vk::Format format, u32 image_count) 
                                               int(tlg_font_ttf_end - tlg_font_ttf), 18.0f, &font_config);
     };
     ImFont* font = nullptr;
+#ifdef _WIN32
     // FL_FONTS=bundled: the port's faces on Windows too (the Linux look, as in the launcher).
     const char* fl_fonts = std::getenv("FL_FONTS");
     const bool bundled = fl_fonts && std::strcmp(fl_fonts, "bundled") == 0;
-#ifdef _WIN32
     // getenv, not GetEnvironmentVariableA: renderer v2 builds this file without <windows.h>.
     const char* windir = std::getenv("WINDIR");
     const std::string fonts = std::string(windir && *windir ? windir : "C:\\Windows") + "\\Fonts\\";

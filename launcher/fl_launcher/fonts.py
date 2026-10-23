@@ -28,6 +28,9 @@ def setup():
             if font_id >= 0 and 'Open Sans' in QFontDatabase.applicationFontFamilies(font_id):
                 text = 'Open Sans'
     QFont.insertSubstitution(TEXT_ALIAS, text)
+    # theme.js mono (the log): Consolas is Windows'; elsewhere the system's fixed-width face.
+    if 'Consolas' not in families:
+        QFont.insertSubstitution('Consolas', QFontDatabase.systemFont(QFontDatabase.FixedFont).family())
     if not bundled:
         for family in ('Segoe Fluent Icons', 'Segoe MDL2 Assets'):
             if family in families:

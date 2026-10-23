@@ -156,10 +156,13 @@ def descendants(pid):
 
 def desktop_env():
     """The environment for programs opened for the player (file manager, browser). The packaged
-    Linux launcher runs with PyInstaller's LD_LIBRARY_PATH (its _internal folder): a program
-    started with it loads the launcher's libraries instead of its own and quits."""
+    Linux launcher runs with PyInstaller's LD_LIBRARY_PATH (its _internal folder) and its Qt
+    plugin and QML paths: a program started with them loads the launcher's libraries and Qt
+    plugins (Dolphin is Qt 6 too) instead of its own and quits."""
     env = dict(os.environ)
     if FROZEN:
+        env.pop('QT_PLUGIN_PATH', None)
+        env.pop('QML2_IMPORT_PATH', None)
         original = env.pop('LD_LIBRARY_PATH_ORIG', None)
         if original:
             env['LD_LIBRARY_PATH'] = original
