@@ -30,7 +30,6 @@
 #include "shader_recompiler/info.h"
 #include "video_core/amdgpu/liverpool.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
-#include "video_core/renderer_vulkan/vk_pipeline_compile_pool.h"
 #include "video_core/renderer_vulkan/vk_presenter.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "tlg_overlay.h"
@@ -251,8 +250,6 @@ void PrecompileJobs() {
     const char* trace_value = std::getenv("TLG_V3_PRECOMPILE_TRACE");
     const u32 trace = trace_value ? static_cast<u32>(std::strtoul(trace_value, nullptr, 10)) : 0;
 
-    // Compute pipelines built here, not by the compile pool (its compiles raced the screen).
-    Vulkan::g_sync_compute_pipelines.store(true);
     static auto* const code = new CodeStore; // kept: later permutations translate from it
     auto regs = std::make_unique<AmdGpu::Regs>();
     auto& cs = liverpool->GetCsRegs();
@@ -327,7 +324,6 @@ void PrecompileJobs() {
         Shader::g_synthetic_flats = nullptr;
     }
     cs = saved_cs;
-    Vulkan::g_sync_compute_pipelines.store(false);
     TlgOverlay::SetLoadingCompile(false);
     TlgOverlay::SetLoading(false, 0, 0);
     std::fprintf(stderr, "V3 precompile: %u records, %u graphics, %u compute, %u failed in %.0f s\n", total,

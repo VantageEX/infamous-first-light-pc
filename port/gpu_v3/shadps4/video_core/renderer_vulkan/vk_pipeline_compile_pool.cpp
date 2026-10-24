@@ -204,17 +204,12 @@ Pool& GetPool() {
 
 } // Anonymous namespace
 
-// This port (renderer v3): set while its job file compiles before the game (glue/
-// precompile_jobs.cpp): the pool's compiles raced the boot screen's presents there (a crash in
-// NVIDIA's driver), so they run synchronously then.
-std::atomic<bool> g_sync_compute_pipelines{false};
-
 bool AsyncComputePipelinesEnabled() {
     static const bool enabled = [] {
         const char* value = std::getenv("SHADPS4_ASYNC_COMPUTE_PIPELINES");
         return value && value[0] == '1';
     }();
-    return enabled && !g_sync_compute_pipelines.load(std::memory_order_relaxed);
+    return enabled;
 }
 
 vk::PipelineCreateFlags DiagPipelineCreateFlags() {

@@ -22,8 +22,6 @@ namespace Vulkan {
 /// has started it, else waits for that worker: never later than the synchronous path.
 /// The boot preload (WarmUp) defers the same way, so the game starts while they compile.
 bool AsyncComputePipelinesEnabled();
-/// This port (renderer v3): forces synchronous compute pipelines while set (precompile_jobs.cpp).
-extern std::atomic<bool> g_sync_compute_pipelines;
 
 /// SHADPS4_PIPELINE_NO_OPT=1 (diagnostic, 2026-10-07): every game pipeline (graphics and compute)
 /// is created with VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT, to measure how much faster the

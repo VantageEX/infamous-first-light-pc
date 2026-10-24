@@ -181,6 +181,15 @@ static LONG fatal_exception(EXCEPTION_POINTERS *info) {
                 (void *)record->ExceptionInformation[1],where,GetCurrentThreadId());
     else
         fprintf(stderr,"Fault: exception 0x%08lx at %s (thread %lu)\n",record->ExceptionCode,where,GetCurrentThreadId());
+    {   /* The thread's name (the renderers name theirs): which one faulted. */
+        typedef HRESULT (WINAPI *GetDescription)(HANDLE, PWSTR *);
+        GetDescription get_description=(GetDescription)(void (*)(void))GetProcAddress(GetModuleHandleA("kernel32.dll"),"GetThreadDescription");
+        PWSTR wide=NULL;
+        if (get_description && SUCCEEDED(get_description(GetCurrentThread(),&wide)) && wide) {
+            fprintf(stderr,"  thread name: %ls\n",wide);
+            LocalFree(wide);
+        }
+    }
     fprintf(stderr,"  rax=%016llx rbx=%016llx rcx=%016llx rdx=%016llx\n  rsi=%016llx rdi=%016llx rbp=%016llx rsp=%016llx\n",
             c->Rax,c->Rbx,c->Rcx,c->Rdx,c->Rsi,c->Rdi,c->Rbp,c->Rsp);
     if (gpu_enabled) tlggpu_dump_guest_writes(info);
