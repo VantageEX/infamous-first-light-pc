@@ -1,0 +1,37 @@
+// SPDX-FileCopyrightText: Copyright 2026 shadPS4 Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+#version 450
+
+// SHADPS4_DLSS_UPSCALE (vk_dlss_upscale.cpp): the frame at the output size = the game's HUD layer
+// (its draws blend premultiplied ONE / ONE_MINUS_SRC_ALPHA onto a cleared target, so rgb = HUD
+// colour, a = coverage) over the DLSS output, in the sRGB-encoded space the game blends in; then
+// decoded, because the post pass expects what sampling the sRGB display buffer gives.
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform texture2D hud_layer; // game resolution, RGBA8 UNORM
+layout(set = 0, binding = 1) uniform texture2D scene;     // output size, RGBA8 UNORM (DLSS)
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D frame_out;
+layout(set = 0, binding = 3) uniform sampler linear_sampler;
+
+vec3 SrgbToLinear(vec3 c) {
+    const vec3 lo = c / 12.92;
+    const vec3 hi = pow((c + 0.055) / 1.055, vec3(2.4));
+    return mix(lo, hi, greaterThan(c, vec3(0.04045)));
+}
+
+void main() {
+    const ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
+    const ivec2 size = imageSize(frame_out);
+    if (pos.x >= size.x || pos.y >= size.y) {
+        return;
+    }
+    const vec2 uv = (vec2(pos) + 0.5) / vec2(size);
+    const vec4 hud = texture(sampler2D(hud_layer, linear_sampler), uv);
+    const vec3 base = texelFetch(sampler2D(scene, linear_sampler), pos, 0).rgb;
+    const vec3 encoded = clamp(hud.rgb + (1.0 - hud.a) * base, 0.0, 1.0);
+    // The game's frame is red / blue swapped in its own images; its final copy (fs_529286b5)
+    // swaps them back on the way to the display buffer, which this pass replaces (s1364 picture).
+    imageStore(frame_out, pos, vec4(SrgbToLinear(encoded.bgr), 1.0));
+}

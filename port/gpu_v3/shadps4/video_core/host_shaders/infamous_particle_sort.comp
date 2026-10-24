@@ -1,0 +1,159 @@
+// SPDX-FileCopyrightText: Copyright 2026 shadPS4 Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+#version 450
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference_uvec2 : require
+// Optional replacement for captured cs_a16fa93a. Preserve the merge algorithm,
+// buffer bindings, push offsets, tie rule, and indirect vertex-count write.
+// All invocations participate in synchronization, including a partial last group.
+layout(local_size_x = 64) in;
+layout(set=0, binding=0, std430) readonly buffer Count { uint data[]; } count_buf;
+layout(set=0, binding=1, std430) buffer Indirect { uint data[]; } indirect_buf;
+layout(set=0, binding=2, std430) readonly buffer Params { uint data[]; } params;
+layout(set=0, binding=3, std430) coherent buffer A { uint data[]; } a_buf;
+layout(set=0, binding=4, std430) coherent buffer B { uint data[]; } b_buf;
+layout(push_constant, std430) uniform Push { uint words[30]; } pc;
+
+// q36 (design-game-main D2 round 3): invalid widths (first 0, first > last, or a width that would overflow) never end the
+// pass loop below (TDR -> device lost when the lane reads fresh zero bytes at boot). The guard exits and counts them in a
+// host-visible buffer by pointer (SORT_GUARD_LO / HI defines; 0 = no counter). Valid params run the loop unchanged.
+layout(buffer_reference, std430, buffer_reference_align = 4) buffer SortGuard {
+    uint hits; uint first; uint last; uint overflow;
+    // SORT_VERIFY (SHADPS4_SORT_VERIFY=1, 2026-10-18): the particle flicker hunt. checked = dispatches;
+    // in_viol = lanes whose INPUT pair was out of order inside a run the previous dispatch sorted
+    // (= that dispatch's writes were not visible: a missing barrier between dispatches, or a race
+    // with whatever else writes the list); in_groups = groups with any such lane; out_viol = lanes
+    // out of order after this dispatch's own in-group steps (= this shader is wrong);
+    // worst_width = the largest first width that saw an input violation; viol_count = its count.
+    uint checked; uint in_viol; uint in_groups; uint out_viol; uint worst_width; uint viol_count;
+};
+#ifndef SORT_GUARD_LO
+#define SORT_GUARD_LO 0u
+#define SORT_GUARD_HI 0u
+#endif
+void guard_hit(uint first, uint last, bool overflow) {
+    if (gl_LocalInvocationIndex != 0 || (SORT_GUARD_LO == 0u && SORT_GUARD_HI == 0u)) return;
+    SortGuard g = SortGuard(uvec2(SORT_GUARD_LO, SORT_GUARD_HI));
+    atomicAdd(g.hits, 1u);
+    g.first = first;
+    g.last = last;
+    if (overflow) atomicAdd(g.overflow, 1u);
+}
+
+uint offset_words(uint binding) {
+    return ((pc.words[20 + binding / 4] >> ((binding % 4) * 8)) & 255u) / 4;
+}
+
+uvec2 load_pair(bool from_a, uint index) {
+    uint offset = offset_words(from_a ? 3u : 4u) + index * 2;
+    if (from_a) return uvec2(a_buf.data[offset], a_buf.data[offset + 1]);
+    return uvec2(b_buf.data[offset], b_buf.data[offset + 1]);
+}
+
+void store_pair(bool to_a, uint index, uvec2 value) {
+    uint offset = offset_words(to_a ? 3u : 4u) + index * 2;
+    if (to_a) {
+        a_buf.data[offset] = value.x;
+        a_buf.data[offset + 1] = value.y;
+    } else {
+        b_buf.data[offset] = value.x;
+        b_buf.data[offset + 1] = value.y;
+    }
+}
+
+uvec2 merge_pair(bool from_a, uint index, uint count, uint width) {
+    uint rank = index & (width - 1);
+    uint start = index - rank;
+    uint half_width = width / 2;
+    uint right = start + half_width;
+    if (right >= count) return load_pair(from_a, index);
+    uint left_size = min(half_width, count - start);
+    uint right_size = min(half_width, count - right);
+    uint low = rank > right_size ? rank - right_size : 0;
+    uint high = min(rank, left_size);
+    while (low < high) {
+        uint mid = (low + high) / 2;
+        uvec2 left_item = load_pair(from_a, start + mid);
+        uvec2 right_item = load_pair(from_a, right + rank - mid - 1);
+        if (uintBitsToFloat(left_item.x) > uintBitsToFloat(right_item.x)) low = mid + 1;
+        else high = mid;
+    }
+    uint left_rank = low;
+    uint right_rank = rank - low;
+    if (left_rank >= left_size) return load_pair(from_a, right + right_rank);
+    if (right_rank >= right_size) return load_pair(from_a, start + left_rank);
+    uvec2 left_item = load_pair(from_a, start + left_rank);
+    uvec2 right_item = load_pair(from_a, right + right_rank);
+    return uintBitsToFloat(left_item.x) > uintBitsToFloat(right_item.x)
+        ? left_item : right_item;
+}
+
+#ifdef SORT_VERIFY
+shared uint s_group_viol;
+#endif
+
+void main() {
+    uint index = gl_GlobalInvocationID.x;
+    uint count = count_buf.data[offset_words(0)];
+    uint first_width = params.data[offset_words(2)];
+    uint last_width = params.data[offset_words(2) + 1];
+    if (index == 0 && pc.words[4] > 0) indirect_buf.data[offset_words(1)] = count * 4;
+
+    if (first_width == 0u || first_width > last_width) {
+        guard_hit(first_width, last_width, false); // uniform over the group: no barrier is skipped by part of it
+        return;
+    }
+    bool from_a = true;
+#ifdef SORT_VERIFY
+    // Input check: the previous dispatch left runs of first_width / 2 sorted (descending keys).
+    // Every lane reads its pair and the next one in the same run, before any write of this
+    // dispatch (the barrier below keeps the first step's stores after every lane's check).
+    const bool verify_on = SORT_GUARD_LO != 0u || SORT_GUARD_HI != 0u;
+    if (gl_LocalInvocationIndex == 0) s_group_viol = 0u;
+    barrier();
+    const uint run = first_width / 2u;
+    if (verify_on && run > 1u && index + 1u < count && ((index + 1u) % run) != 0u) {
+        if (uintBitsToFloat(load_pair(true, index).x) < uintBitsToFloat(load_pair(true, index + 1u).x)) {
+            SortGuard g = SortGuard(uvec2(SORT_GUARD_LO, SORT_GUARD_HI));
+            atomicAdd(g.in_viol, 1u);
+            atomicMax(g.worst_width, first_width);
+            g.viol_count = count;
+            s_group_viol = 1u;
+        }
+    }
+    memoryBarrierBuffer();
+    barrier();
+    if (verify_on && gl_LocalInvocationIndex == 0) {
+        SortGuard g = SortGuard(uvec2(SORT_GUARD_LO, SORT_GUARD_HI));
+        if (gl_WorkGroupID.x == 0u) atomicAdd(g.checked, 1u);
+        if (s_group_viol != 0u) atomicAdd(g.in_groups, 1u);
+    }
+#endif
+    // Captured contract: multiple steps fit within one64-lane group (2..64);
+    // every larger merge has one step and an external dispatch barrier.
+    for (uint width = first_width; ; width *= 2) {
+        if (index < count) store_pair(!from_a, index, merge_pair(from_a, index, count, width));
+        memoryBarrierBuffer();
+        barrier();
+        if (width >= last_width) {
+#ifdef SORT_VERIFY
+            // Output check for the in-group steps (runs of last_width <= 64 lie inside this
+            // group's 64 lanes, visible after the barrier above).
+            if ((SORT_GUARD_LO != 0u || SORT_GUARD_HI != 0u) && last_width <= 64u &&
+                index + 1u < count && ((index + 1u) % last_width) != 0u &&
+                uintBitsToFloat(load_pair(!from_a, index).x) <
+                    uintBitsToFloat(load_pair(!from_a, index + 1u).x)) {
+                SortGuard g = SortGuard(uvec2(SORT_GUARD_LO, SORT_GUARD_HI));
+                atomicAdd(g.out_viol, 1u);
+            }
+#endif
+            break;
+        }
+        if (width >= 0x80000000u) {
+            guard_hit(first_width, last_width, true); // last_width > 2^31: the doubling would wrap to 0
+            break;
+        }
+        from_a = !from_a;
+    }
+}

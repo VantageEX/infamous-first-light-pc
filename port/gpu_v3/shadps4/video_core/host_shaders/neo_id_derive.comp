@@ -1,0 +1,37 @@
+// SPDX-FileCopyrightText: Copyright 2026 shadPS4 Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+// SHADPS4_NEO_IDBUF_DERIVE: approximate the PS4 Pro hardware ID buffer (per-sample object/primitive
+// ID written alongside depth) from the game's own 2-sample scene depth. The checkerboard resolve only
+// tests IDs for equality with their neighbours, so any locally consistent labelling works: here a
+// coarse depth bucket. Guest sample s on row y covers horizontal half h = s ^ ((y + k) & 1); the
+// emulated depth sample for half h is 1 - h (Vulkan standard 2x positions: sample 0 is the right one).
+
+#version 450
+#extension GL_EXT_samplerless_texture_functions : require
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(binding = 0) uniform texture2DMS depth_ms;
+layout(binding = 1, r32ui) uniform writeonly uimage2DMS id_ms;
+
+layout(push_constant) uniform Params {
+    uint width;
+    uint height;
+    uint parity;   // k
+    uint mask;     // depth-bit mask defining the bucket
+} params;
+
+void main() {
+    const ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= int(params.width) || p.y >= int(params.height)) {
+        return;
+    }
+    for (int s = 0; s < 2; ++s) {
+        const uint h = uint(s) ^ ((uint(p.y) + params.parity) & 1u);
+        const int d = int(1u - h);
+        const float z = texelFetch(depth_ms, p, d).r;
+        const uint id = floatBitsToUint(z) & params.mask;
+        imageStore(id_ms, p, s, uvec4(id));
+    }
+}
