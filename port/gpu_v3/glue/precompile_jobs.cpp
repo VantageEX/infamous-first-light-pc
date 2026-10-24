@@ -230,22 +230,12 @@ void PrecompileJobs() {
     const u32 total = static_cast<u32>(records.size());
     std::fprintf(stderr, "V3 precompile: %u records from %s\n", total, jobs.string().c_str());
 
-    // This port's "Compiling shaders" screen, presented between records about every 100 ms. From
-    // this thread, as the fork draws its boot screen between its warm-up steps: a present from
-    // another thread raced the pipeline builds on the same queue (a crash in NVIDIA's driver).
+    // This port's "Compiling shaders" screen: the VideoOut present thread draws a blank frame
+    // every vblank until the game opens its port, and the presenter draws the overlay over each.
+    // Never presented from here: two threads presenting raced on the swapchain (a crash in
+    // NVIDIA's driver, a read at 0x130, on the present thread).
     TlgOverlay::SetLoadingCompile(true);
     TlgOverlay::SetLoading(true, 0, total);
-    // TLG_V3_PRECOMPILE_SCREEN=0: no screen (the window stays as it is).
-    const char* screen = std::getenv("TLG_V3_PRECOMPILE_SCREEN");
-    const bool show = !(screen && screen[0] == '0');
-    auto last_shown = std::chrono::steady_clock::now() - std::chrono::seconds(1);
-    const auto paint = [&] {
-        const auto now = std::chrono::steady_clock::now();
-        if (show && now - last_shown >= std::chrono::milliseconds(100)) {
-            last_shown = now;
-            presenter->DrawBootScreen("", "", 0.0f, true);
-        }
-    };
     // TLG_V3_PRECOMPILE_TRACE=N: the first N records named before they are looked up.
     const char* trace_value = std::getenv("TLG_V3_PRECOMPILE_TRACE");
     const u32 trace = trace_value ? static_cast<u32>(std::strtoul(trace_value, nullptr, 10)) : 0;
@@ -265,7 +255,6 @@ void PrecompileJobs() {
             std::fflush(stderr);
         }
         if ((done & 63) == 0) TlgOverlay::SetLoading(true, done, total);
-        paint();
         if ((done % 2000) == 0) {
             std::fprintf(stderr, "V3 precompile: %u / %u, %u graphics, %u compute, %u skipped, %u failed, %.0f s\n",
                          done, total, graphics, compute, skipped, failed,
