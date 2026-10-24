@@ -237,6 +237,19 @@ int VideoOutDriver::ChangeBufferAttribute(VideoOutPort* port, s32 attributeIndex
 }
 
 /// SHADPS4_VO_EARLY_RELEASE=1 (see SubmitFlipInternal).
+/// This port: TLG_V3_FLIP_IMMEDIATE=1 (default on; 0: the fork's behaviour) presents a flip as soon
+/// as it is queued, not at the next vblank tick. The vblank ticks and their events stay at the
+/// vblank rate. A frame that takes 18 ms is then shown after 18 ms, not held to the 33 ms tick (the
+/// frame rate drops in steps of the refresh no more: 35-45 FPS of mixed 16.7 / 33.3 ms frames);
+/// the swapchain's present mode (Mailbox) keeps it tear-free.
+static bool FlipImmediate() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("TLG_V3_FLIP_IMMEDIATE");
+        return !(value && value[0] == '0');
+    }();
+    return enabled;
+}
+
 static bool VoEarlyRelease() {
     static const bool enabled = [] {
         const char* value = std::getenv("SHADPS4_VO_EARLY_RELEASE");
@@ -373,6 +386,7 @@ void VideoOutDriver::SubmitFlipInternal(VideoOutPort* port, s32 index, s64 flip_
         .index = index,
         .eop = is_eop,
     });
+    request_cv.notify_one();
 }
 
 void VideoOutDriver::PresentThread(std::stop_token token) {
@@ -403,6 +417,7 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
             LOG_INFO(Lib_VideoOut, "vblank_frequency now {} Hz", hz);
         }
         timer.Start();
+        const auto tick_start = std::chrono::steady_clock::now();
 
         if (DebugState.IsGuestThreadsPaused()) {
             DrawLastFrame();
@@ -450,6 +465,28 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
             vblank_status.process_time = Libraries::Kernel::sceKernelGetProcessTime();
             vblank_status.tsc = Libraries::Kernel::sceKernelReadTsc();
             main_port.vblank_cv.notify_all();
+        }
+
+        // TLG_V3_FLIP_IMMEDIATE: until shortly before the next tick, every flip queued is
+        // presented when it arrives (the timer then sleeps the rest of the interval precisely).
+        if (FlipImmediate() && main_port.flip_rate == 0 && !DebugState.IsGuestThreadsPaused()) {
+            const auto deadline = tick_start + std::chrono::nanoseconds(1000000000 / vblank_hz) -
+                                  std::chrono::microseconds(1500);
+            std::unique_lock lk{mutex};
+            for (;;) {
+                if (!requests.empty()) {
+                    const auto request = requests.front();
+                    requests.pop();
+                    lk.unlock();
+                    Flip(request);
+                    FRAME_END;
+                    lk.lock();
+                    continue;
+                }
+                if (request_cv.wait_until(lk, deadline) == std::cv_status::timeout) {
+                    break;
+                }
+            }
         }
 
         timer.End();
