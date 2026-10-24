@@ -47,7 +47,7 @@ file(GLOB_RECURSE VIDEO_CORE ${SRC}/video_core/*.cpp)
 file(GLOB_RECURSE RECOMPILER ${SRC}/shader_recompiler/*.cpp)
 set(ALL ${VIDEO_CORE} ${RECOMPILER})
 foreach(n decoder error fault_monitor io_file native_clock number_utils path_util rdtsc
-          recursive_lock signal_context spin_lock stb string_util thread)
+          recursive_lock reserved_memory signal_context spin_lock stb string_util thread)
     list(APPEND ALL ${SRC}/common/${n}.cpp)
 endforeach()
 list(APPEND ALL ${SRC}/core/libraries/gnmdriver/gnmdriver.cpp ${SRC}/core/libraries/kernel/equeue.cpp
@@ -92,7 +92,14 @@ if (WIN32)
         NTDDI_VERSION=0x0A000006)
     target_compile_options(issgpu3 PRIVATE -include ${CMAKE_CURRENT_SOURCE_DIR}/../gpu_v2/compat/mingw.h)
 endif()
-target_sources(issgpu3 PRIVATE ${GLUE}/gpu_host.cpp ${GLUE}/window.cpp)
+target_sources(issgpu3 PRIVATE ${GLUE}/gpu_host.cpp ${GLUE}/window.cpp ${GLUE}/bridge.cpp)
+pkg_check_modules(PNG REQUIRED IMPORTED_TARGET libpng)
+find_package(Zydis QUIET)
+if (NOT Zydis_FOUND)
+    pkg_check_modules(ZYDIS REQUIRED IMPORTED_TARGET zydis)
+    add_library(Zydis::Zydis ALIAS PkgConfig::ZYDIS)
+endif()
+target_link_libraries(issgpu3 PUBLIC PkgConfig::PNG Zydis::Zydis)
 
 # Windows: tlg-probe-v3.exe, this port's loader and runtime (as port/gpu/CMakeLists.txt builds
 # tlg-probe.exe) linked with this renderer.

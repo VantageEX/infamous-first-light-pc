@@ -162,6 +162,9 @@ struct VirtualMemoryArea {
     }
 };
 
+// This port (renderer v3): the runtime owns the guest mappings, not vma_map (glue/bridge.cpp).
+bool GlueIsValidMapping(VAddr virtual_addr, u64 size);
+
 class MemoryManager {
     using PhysMap = std::map<PAddr, PhysicalMemoryArea>;
     using PhysHandle = PhysMap::iterator;
@@ -229,6 +232,8 @@ public:
     }
 
     bool IsValidMapping(const VAddr virtual_addr, const u64 size = 0) {
+        // This port (renderer v3): vma_map stays empty here, the runtime answers.
+        return GlueIsValidMapping(virtual_addr, size);
         const auto end_it = std::prev(vma_map.end());
         const VAddr end_addr = end_it->first + end_it->second.size;
 

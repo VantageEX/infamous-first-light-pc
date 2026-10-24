@@ -853,6 +853,30 @@ void *runtime_memory_backing_view(uintptr_t address, uint64_t size) {
     read_unlock();
     return view;
 }
+/* tlg: renderer v3 (gpu_v3/glue/bridge.cpp): the pool's second view, which carries no guest or
+ * GPU page protection, and its size (direct then flexible memory); NULL without guest memory. */
+unsigned char *runtime_memory_backing_base(uint64_t *size) {
+    if (pool()) { if (size) *size=0; return NULL; }
+    if (size) *size=POOL_SIZE+FLEX_SPAN;
+    return backing_base;
+}
+/* tlg: renderer v3: the mappings around address that the pool backs contiguously (direct or
+ * flexible memory): [start,end) and the pool offset of start. 0 when address is not backed. */
+int runtime_memory_backing_span(uintptr_t address, uintptr_t *start, uintptr_t *end, uint64_t *phys) {
+    read_lock();
+    size_t i=vma_index(address);
+    int ok=i<vma_count && vmas[i].start<=address && vmas[i].kind!=KIND_RESERVED;
+    if (ok) {
+        size_t first=i, last=i;
+        while (first>0 && vmas[first-1].kind!=KIND_RESERVED && vmas[first-1].end==vmas[first].start &&
+               vmas[first-1].phys+(vmas[first-1].end-vmas[first-1].start)==vmas[first].phys) --first;
+        while (last+1<vma_count && vmas[last+1].kind!=KIND_RESERVED && vmas[last+1].start==vmas[last].end &&
+               vmas[last].phys+(vmas[last].end-vmas[last].start)==vmas[last+1].phys) ++last;
+        *start=vmas[first].start; *end=vmas[last].end; *phys=vmas[first].phys;
+    }
+    read_unlock();
+    return ok;
+}
 /* tlg: renderer v2's host interface (gpu_v2): direct mappings with their backing
  * view, the mapping table's generation, and a shared hold on the table while it publishes. */
 void runtime_memory_visit(void (*visit)(uint64_t address, uint64_t size, uint8_t *backing)) {

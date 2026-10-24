@@ -1,35 +1,44 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-// Linux: renderer v2 behind this port's GPU library interface (gpu/tlggpu.h). The
-// runtime (src/runtime_*.c) calls the tlggpu_* functions; they drive the renderer through its own
-// host interface (iss_gpu.h), whose callbacks are the runtime's memory functions.
+// Renderer v3 behind this port's GPU library interface (gpu/tlggpu.h). The runtime
+// (src/runtime_*.c) calls the tlggpu_* functions; they start the fork's video core as its
+// emulator would (the GnmDriver/VideoOut libraries make the presenter and the rasterizer) over the
+// runtime's memory (bridge.cpp), and hand it this port's window, overlay and save dialogs.
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
+#include <boost/asio/executor_work_guard.hpp>
+#include <boost/asio/io_context.hpp>
 #include <imgui.h>
 #include <SDL3/SDL.h>
-#include "iss_gpu.h"
 #include "tlggpu.h"
+#include "common/elf_info.h"
+#include "common/memory_patcher.h"
+#include "common/path_util.h"
+#include "common/thread.h"
 #include "common/types.h"
+#include "core/debug_state.h"
+#include "core/libraries/kernel/equeue.h"
+#include "core/loader/symbols_resolver.h"
 #include "core/memory.h"
+#include "core/signals.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "sdl_window.h"
 #include "tlg_overlay.h"
 #include "tlg_png.h"
 #include "tlg_settings.h"
+#include "v3_glue.h"
 
 extern "C" {
 // runtime_memory.c
-void* runtime_memory_backing_view(uintptr_t address, uint64_t size);
-uint64_t runtime_memory_clamp(uintptr_t address, uint64_t size);
-void runtime_memory_gpu_protect(uintptr_t address, uint64_t size, int read, int write);
 void runtime_memory_visit(void (*visit)(uint64_t address, uint64_t size, uint8_t* backing));
-uint64_t runtime_memory_epoch(void);
-uint64_t runtime_memory_lock_shared(void);
-void runtime_memory_unlock_shared(void);
 typedef void (*RuntimeGpuRange)(uintptr_t address, uint64_t size);
 void runtime_memory_set_gpu_hooks(RuntimeGpuRange map, RuntimeGpuRange unmap, RuntimeGpuRange invalidate);
 // runtime_kernel.c
@@ -38,116 +47,200 @@ uint64_t runtime_tsc_frequency(void);
 int32_t* runtime_errno(void);
 // runtime.c
 void runtime_report(void);
-// bridge.cpp
-void iss_gpu_install_image(uint64_t image_base);
+}
+
+namespace Libraries::GnmDriver {
+void RegisterLib(Core::Loader::SymbolsResolver* sym);
+}
+namespace Libraries::VideoOut {
+void RegisterLib(Core::Loader::SymbolsResolver* sym);
+}
+namespace Libraries::Kernel {
+extern boost::asio::io_context io_context;
 }
 
 extern Frontend::WindowSDL* g_window;
-namespace {
-std::string g_title, g_serial, g_user_dir;
-std::atomic<uint64_t> g_flips{0};
 
-uint8_t* Backing(uint64_t address, uint64_t size) {
-    return static_cast<uint8_t*>(runtime_memory_backing_view(address, size));
+// ElfInfo's fields are its emulator's to set (common/elf_info.h: friend class Core::Emulator).
+namespace Core {
+class Emulator {
+public:
+    static void Configure() {
+        auto& info = Common::ElfInfo::Instance();
+        info.initialized = true;
+        info.game_serial = V3::g_host.serial;
+        info.title = V3::g_host.title;
+        info.sdk_ver = V3::g_host.sdk_version;
+        info.psf_attributes.raw = V3::g_host.psf_attributes;
+        info.app_ver = "01.00";
+    }
+};
+} // namespace Core
+
+namespace {
+Core::Loader::SymbolsResolver g_resolver;
+std::mutex g_ready_mutex;
+std::condition_variable g_ready_cv;
+int g_ready = 0; // 0 starting, 1 running, -1 failed
+
+Vulkan::Rasterizer* Rasterizer() {
+    return Core::Memory::Instance()->GetRasterizer();
 }
-uint64_t Clamp(uint64_t address, uint64_t size) {
-    return runtime_memory_clamp(address, size);
+
+void MapForGpu(uint64_t address, uint64_t size, uint8_t*) {
+    if (auto* r = Rasterizer()) r->MapMemory(address, size);
 }
-void VisitMappings(void (*visit)(uint64_t address, uint64_t size, uint8_t* backing)) {
-    runtime_memory_visit(visit);
+
+// The fork keeps its files (pipeline cache, shader dumps, logs) under one user folder: this
+// port's, beside the saves (TLG_GPU_USER_DIR), so renderer v3's cache is its own.
+void SetPaths(const std::filesystem::path& user) {
+    namespace FS = Common::FS;
+    const auto v3 = user / "v3";
+    for (int i = 0; i <= static_cast<int>(FS::PathType::CustomModulesDir); ++i) {
+        const auto type = static_cast<FS::PathType>(i);
+        FS::SetUserPath(type, v3 / std::to_string(i));
+    }
+    FS::SetUserPath(FS::PathType::UserDir, v3);
+    FS::SetUserPath(FS::PathType::CacheDir, user / "cache" / "v3");
 }
-int Protect(uint64_t address, uint64_t size, uint32_t permissions) {
-    runtime_memory_gpu_protect(address, size, (permissions & 1) != 0, (permissions & 2) != 0);
-    return 1;
+
+// The window's thread: the window answers from its first instant while the libraries (the
+// renderer, its pipeline cache) start on a thread of their own, as renderer v2 does it.
+void WindowThread() {
+    try {
+        g_window = new Frontend::WindowSDL(V3::g_host.width, V3::g_host.height, V3::g_host.title.c_str());
+        std::atomic<int> init_state{0};
+        std::string init_error;
+        std::thread init([&] {
+            try {
+                Common::SetCurrentThreadName("v3:Init");
+                Libraries::Kernel::RegisterEventQueue(&g_resolver);
+                static auto work = boost::asio::make_work_guard(Libraries::Kernel::io_context);
+                std::thread([] {
+                    Common::SetCurrentThreadName("v3:KernelService");
+                    Libraries::Kernel::io_context.run();
+                }).detach();
+                Libraries::GnmDriver::RegisterLib(&g_resolver);
+                Libraries::VideoOut::RegisterLib(&g_resolver);
+                // The mappings made before the rasterizer existed.
+                runtime_memory_visit(MapForGpu);
+                init_state.store(1, std::memory_order_release);
+            } catch (const std::exception& e) {
+                init_error = e.what();
+                init_state.store(-1, std::memory_order_release);
+            }
+        });
+        while (init_state.load(std::memory_order_acquire) == 0) {
+            if (!g_window->PollEvents()) {
+                std::fputs("V3: window closed while loading\n", stderr);
+                runtime_report();
+                std::fflush(nullptr);
+                std::_Exit(0);
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        init.join();
+        if (init_state.load() < 0) throw std::runtime_error(init_error);
+        {
+            std::scoped_lock lock{g_ready_mutex};
+            g_ready = 1;
+        }
+        g_ready_cv.notify_all();
+        for (;;) {
+            if (!g_window->PollEvents()) {
+                std::fputs("V3: window closed\n", stderr);
+                runtime_report();
+                std::fflush(nullptr);
+                std::_Exit(0);
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "GPU initialization failed (renderer v3): %s\n", e.what());
+        {
+            std::scoped_lock lock{g_ready_mutex};
+            g_ready = -1;
+        }
+        g_ready_cv.notify_all();
+    }
 }
 } // namespace
 
-[[noreturn]] void IssHostExit() {
-    runtime_report();
-    std::fflush(nullptr);
-    std::_Exit(0);
-}
-
 extern "C" void tlggpu_register_kernel(void) {
-    // The renderer registers the kernel event queues itself (bridge.cpp, its init thread).
+    // The renderer registers the kernel event queues itself (WindowThread's init).
 }
 
 extern "C" void tlggpu_init_headless(const TlgGpuConfig*) {}
 
 extern "C" int tlggpu_init(const TlgGpuConfig* config) {
-    g_title = config->title ? config->title : "inFAMOUS Second Son";
-    g_serial = config->serial ? config->serial : "CUSA00223";
-    g_user_dir = config->user_dir ? config->user_dir : ".";
-    // Mappings made from now on reach the renderer; the existing ones are replayed now (they
-    // are registered again, with the renderer, when it starts: MemoryManager::SetRasterizer).
+    auto& host = V3::g_host;
+    host.title = config->title ? config->title : "inFAMOUS First Light";
+    host.serial = config->serial ? config->serial : "CUSA00897";
+    host.user_dir = config->user_dir ? config->user_dir : ".";
+    host.sdk_version = config->sdk_version;
+    host.psf_attributes = config->psf_attributes;
+    host.width = config->width > 0 ? config->width : 1920;
+    host.height = config->height > 0 ? config->height : 1080;
+    host.tsc_frequency = runtime_tsc_frequency;
+    host.process_time_us = runtime_process_time_us;
+    host.errno_location = runtime_errno;
+    MemoryPatcher::g_game_serial = host.serial;
+    Core::Emulator::Configure();
+    SetPaths(std::filesystem::u8path(host.user_dir));
+    // Mappings made from now on reach the rasterizer once it exists (WindowThread replays the
+    // earlier ones).
     runtime_memory_set_gpu_hooks(
-        [](uintptr_t address, uint64_t size) { iss_gpu_map(address, size, Backing(address, size)); },
+        [](uintptr_t address, uint64_t size) { MapForGpu(address, size, nullptr); },
         [](uintptr_t address, uint64_t size) {
-            if (auto* r = Core::Memory::Instance()->GetRasterizer()) r->UnmapMemory(address, size);
+            if (auto* r = Rasterizer()) r->UnmapMemory(address, size);
         },
         [](uintptr_t address, uint64_t size) {
-            if (auto* r = Core::Memory::Instance()->GetRasterizer()) r->InvalidateMemory(address, size);
+            if (auto* r = Rasterizer()) r->InvalidateMemory(address, size);
         });
-    static IssGpuCallbacks callbacks{};
-    callbacks.struct_size = sizeof(callbacks);
-    callbacks.sdk_version = config->sdk_version;
-    callbacks.psf_attributes = config->psf_attributes;
-    callbacks.width = static_cast<uint32_t>(config->width);
-    callbacks.height = static_cast<uint32_t>(config->height);
-    callbacks.serial = g_serial.c_str();
-    callbacks.title = g_title.c_str();
-    callbacks.user_dir = g_user_dir.c_str();
-    callbacks.tsc_frequency = runtime_tsc_frequency;
-    callbacks.process_time_us = runtime_process_time_us;
-    callbacks.errno_location = runtime_errno;
-    callbacks.backing = Backing;
-    callbacks.clamp = Clamp;
-    callbacks.visit_mappings = VisitMappings;
-    callbacks.protect = Protect;
-    callbacks.image_base = 0; // tlggpu_set_guest_image
-    callbacks.mapping_epoch = runtime_memory_epoch;
-    callbacks.mapping_lock_shared = runtime_memory_lock_shared;
-    callbacks.mapping_unlock_shared = runtime_memory_unlock_shared;
     TlgSettings::Load(); // tlg.ini: the overlay, the menu and the input settings
-    // The launcher's choices (backports_table.py): TLG_RENDERER=2 picked this renderer, and
-    // TLG_NATIVE_PASSES sets ISS_NATIVE_PASSES (off by default: NVIDIA's Linux driver).
-    const char* native = std::getenv("ISS_NATIVE_PASSES");
-    std::printf("GPU: native passes %s (TLG_NATIVE_PASSES)\n", native && native[0] == '1' ? "on" : "off");
-    std::printf("GPU: renderer v2 (gpu_v2)\n");
-    return iss_gpu_initialize(&callbacks) == 0 ? 0 : -1;
+    std::printf("GPU: renderer v3 (gpu_v3: axylpup second-son-v1.1.1)\n");
+    std::fflush(stdout);
+    std::thread(WindowThread).detach();
+    std::unique_lock lock{g_ready_mutex};
+    g_ready_cv.wait(lock, [] { return g_ready != 0; });
+    return g_ready == 1 ? 0 : -1;
 }
 
 extern "C" void tlggpu_set_guest_image(uintptr_t base, uint64_t) {
-    iss_gpu_install_image(base);
+    V3::g_host.image_base = base;
+    MemoryPatcher::g_eboot_address = base;
 }
 
-extern "C" uintptr_t iss_gpu_resolve_nid(const char* nid, size_t length);
 extern "C" uintptr_t tlggpu_resolve(const char* scoped_nid) {
-    // "NID#library...": the renderer's symbols by NID, as this port's own GPU library does.
+    // "NID#library...": the libraries' symbols by NID, as this port's own GPU library does.
     const char* hash = std::strchr(scoped_nid, '#');
-    return iss_gpu_resolve_nid(scoped_nid, hash ? size_t(hash - scoped_nid) : std::strlen(scoped_nid));
+    const size_t length = hash ? size_t(hash - scoped_nid) : std::strlen(scoped_nid);
+    for (const auto& symbol : g_resolver.GetSymbols()) {
+        if (symbol.nid_name.size() == length && std::memcmp(symbol.nid_name.data(), scoped_nid, length) == 0) {
+            return symbol.virtual_address;
+        }
+    }
+    return 0;
 }
 
 extern "C" int tlggpu_handle_fault(void* ucontext, void* address) {
-    return iss_gpu_fault(ucontext, address) ? 1 : 0;
+    return Core::Signals::Instance()->DispatchAccessViolation(ucontext, address) ? 1 : 0;
 }
 
 extern "C" int tlggpu_cpu_write(void*, const void*, int, uint64_t) {
     return 0; // the runtime writes normally (faults reach tlggpu_handle_fault)
 }
 
-namespace ImGui::Core { extern std::atomic<uint64_t> g_shown_frames; }
 extern "C" void tlggpu_frame_counters(TlgGpuFrameCounters* out) {
     // Only the frames presented: the freeze report (src/runtime_freeze.c) needs nothing else.
     *out = {};
-    out->shown = out->presented = ImGui::Core::g_shown_frames.load(std::memory_order_relaxed);
+    out->shown = out->presented = DebugState.GetFrameNum();
 }
-namespace Vulkan { extern std::atomic<u64> g_iss_total_draws; }
 extern "C" uint64_t tlggpu_total_draws(void) {
-    return Vulkan::g_iss_total_draws.load(std::memory_order_relaxed);
+    return 0;
 }
 extern "C" unsigned tlggpu_symbol_count(void) {
-    return 1; // nonzero: the renderer provides GnmDriver/VideoOut
+    return static_cast<unsigned>(g_resolver.GetSize());
 }
 extern "C" void tlggpu_set_wait_hooks(TlgGpuWaitBegin, TlgGpuWaitEnd) {}
 extern "C" void tlggpu_note_open(const char*) {}
@@ -238,13 +331,3 @@ extern "C" void tlggpu_mouse_pad_hud(int active, float x, float y, int touching,
     TlgOverlay::SetMousePad(active != 0, x, y, touching != 0, clicking != 0);
 }
 // tlggpu_mouse_take: window.cpp (the game's mouse, as in this port's renderer).
-
-// The Windows save dialog (save_dialog_ui.cpp, XInput) is left out: the window and the
-// presenter find no dialog up.
-namespace iss::save_ui {
-bool Active() { return false; }
-void Draw(float, float, float) {}
-void LoadFonts(ImGuiIO&) {}
-bool OnEvent(const SDL_Event&) { return false; }
-} // namespace iss::save_ui
-
