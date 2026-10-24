@@ -20,7 +20,10 @@ std::atomic<uint64_t> g_faults{0};
 
 namespace {
 std::mutex g_faults_mutex;
-std::unordered_map<uint64_t, uint32_t> g_frame_faults; // MiB -> faults this frame
+struct RegionFaults {
+    uint32_t reads, writes, cp; // cp: of either kind, on the command processor's thread
+};
+std::unordered_map<uint64_t, RegionFaults> g_frame_faults; // MiB -> faults this frame
 std::mutex g_sites_mutex;
 std::vector<Site*> g_sites;
 
@@ -40,10 +43,12 @@ const char* BaseName(const char* path) {
 }
 } // namespace
 
-void RecordFault(uintptr_t address) {
+void RecordFault(uintptr_t address, bool write, bool cp_thread) {
     if (!Enabled()) return;
     std::scoped_lock lock{g_faults_mutex};
-    ++g_frame_faults[address >> 20];
+    RegionFaults& region = g_frame_faults[address >> 20];
+    ++(write ? region.writes : region.reads);
+    region.cp += cp_thread;
 }
 
 void Site::Register(Site* site) {
@@ -81,7 +86,7 @@ void OnPresent() {
     const uint64_t faults = g_faults.load(std::memory_order_relaxed);
     const uint64_t frame_faults = faults - last_faults;
     last_faults = faults;
-    std::unordered_map<uint64_t, uint32_t> regions;
+    std::unordered_map<uint64_t, RegionFaults> regions;
     {
         std::scoped_lock lock{g_faults_mutex};
         regions.swap(g_frame_faults);
@@ -110,13 +115,18 @@ void OnPresent() {
                       deltas[i].site->format ? deltas[i].site->format : "");
         sites += part;
     }
-    std::vector<std::pair<uint64_t, uint32_t>> busiest(regions.begin(), regions.end());
-    std::sort(busiest.begin(), busiest.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+    std::vector<std::pair<uint64_t, RegionFaults>> busiest(regions.begin(), regions.end());
+    const auto total = [](const RegionFaults& f) { return f.reads + f.writes; };
+    std::sort(busiest.begin(), busiest.end(),
+              [&](const auto& a, const auto& b) { return total(a.second) > total(b.second); });
+    // Each region as address:r<reads>w<writes>[cp<on the command processor>].
     std::string where;
     for (size_t i = 0; i < busiest.size() && i < 5; ++i) {
-        char part[48];
-        std::snprintf(part, sizeof(part), " %#llx:%u", static_cast<unsigned long long>(busiest[i].first << 20),
-                      busiest[i].second);
+        const RegionFaults& f = busiest[i].second;
+        char part[80];
+        int n = std::snprintf(part, sizeof(part), " %#llx:r%uw%u", static_cast<unsigned long long>(busiest[i].first << 20),
+                              f.reads, f.writes);
+        if (f.cp) std::snprintf(part + n, sizeof(part) - n, "cp%u", f.cp);
         where += part;
     }
     std::fprintf(stderr,

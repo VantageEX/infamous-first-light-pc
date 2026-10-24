@@ -26,8 +26,9 @@ struct Site {
 
 /// Every write fault the renderer took (gpu_host.cpp tlggpu_handle_fault).
 extern std::atomic<uint64_t> g_faults;
-/// A guest fault's address, for the report's busiest MiB of the frame (tlggpu_handle_fault).
-void RecordFault(uintptr_t address);
+/// A guest fault's address, for the report's busiest MiB of the frame (tlggpu_handle_fault): a read
+/// or a write, and whether the command processor's own thread took it.
+void RecordFault(uintptr_t address, bool write, bool cp_thread);
 
 /// The presenter, once per presented game frame (glue/overrides/vk_presenter.cpp).
 void OnPresent();
