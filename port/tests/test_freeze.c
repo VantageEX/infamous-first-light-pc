@@ -248,6 +248,15 @@ static void wait_slots_recycle(void) {
     assert(!pthread_join(thread, NULL));
 }
 
+/* A wait on a mutex the caller does not hold fails with EPERM and leaves the mutex free
+ * (the game's Wwise job wait does this; the host wait used to return holding it). */
+static void cond_wait_unowned(void) {
+    void *mutex = NULL, *cond = NULL;
+    assert(mutex_init(&mutex, NULL, "unowned") == 0 && cond_init(&cond, NULL, "unowned") == 0);
+    assert(cond_wait(&cond, &mutex) == (int32_t)0x80020001);
+    assert(mutex_lock(&mutex) == 0 && mutex_unlock(&mutex) == 0);
+}
+
 int main(void) {
     /* Before any marked wait: the accounting is read once (TLG_WAIT_STATS). */
     setenv("TLG_WAIT_STATS", "1", 1);
@@ -274,6 +283,7 @@ int main(void) {
     slot_levels();
     contended_mutex();
     cond_and_sema();
+    cond_wait_unowned();
     contended_rwlock();
     wait_slots_recycle();
     puts("freeze report tests passed");

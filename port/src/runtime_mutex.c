@@ -186,8 +186,12 @@ static ABI int32_t cond_destroy(GuestCond **cond) {
     if (!e) { free(*cond); *cond = NULL; }
     return orbis_error(e);
 }
-/* The mutex is released while waiting: its holder is cleared for the report, then restored. */
+/* The mutex is released while waiting: its holder is cleared for the report, then restored.
+ * A caller that does not hold the mutex gets EPERM at once, as from the PS4's libthr: the host
+ * wait would return holding a mutex the guest never unlocks. inFAMOUS's Wwise job wait (guest
+ * 0x803e90) waits on a mutex it has just unlocked, and the leaked lock froze it (#586, #628). */
 static int wait_cond(GuestCond *c, GuestMutex *m, const struct timespec *end, uintptr_t frame) {
+    if (!m->depth || m->owner != holder()) return EPERM;
     void *owner = m->owner;
     unsigned depth = m->depth;
     m->owner = NULL; m->depth = 0;
