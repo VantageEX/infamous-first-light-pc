@@ -30,6 +30,7 @@
 #include "shader_recompiler/info.h"
 #include "video_core/amdgpu/liverpool.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
+#include "video_core/renderer_vulkan/vk_pipeline_compile_pool.h"
 #include "video_core/renderer_vulkan/vk_presenter.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "tlg_overlay.h"
@@ -247,6 +248,11 @@ void PrecompileJobs() {
     u32 done = 0, graphics = 0, compute = 0, failed = 0, skipped = 0;
     std::unordered_set<u64> seen_compute;
     const auto started = std::chrono::steady_clock::now();
+    // SHADPS4_ASYNC_COMPUTE_PIPELINES=1: a compute record only queues its driver compile on the
+    // pool (SHADPS4_ASYNC_COMPUTE_THREADS workers), so the screen counts the compiled ones: the
+    // records looked up less the compute jobs still queued. One by one, a fresh driver cache took
+    // 55 ms per compute pipeline: 17,110 of First Light's in 16 minutes (Ryzen 5 5600X, issue #3).
+    const bool async_compute = Vulkan::AsyncComputePipelinesEnabled();
     for (const auto& record : records) {
         ++done;
         if (done <= trace) {
@@ -254,7 +260,7 @@ void PrecompileJobs() {
                          record.stages.size());
             std::fflush(stderr);
         }
-        if ((done & 63) == 0) TlgOverlay::SetLoading(true, done, total);
+        if ((done & 63) == 0) TlgOverlay::SetLoading(true, async_compute ? done - compute : done, total);
         if ((done % 2000) == 0) {
             std::fprintf(stderr, "V3 precompile: %u / %u, %u graphics, %u compute, %u skipped, %u failed, %.0f s\n",
                          done, total, graphics, compute, skipped, failed,
@@ -313,6 +319,15 @@ void PrecompileJobs() {
         Shader::g_synthetic_flats = nullptr;
     }
     cs = saved_cs;
+    if (async_compute) {
+        // The queued compute compiles finish behind the same screen (the game would otherwise
+        // start while they run, and wait for each one it meets first).
+        for (;;) {
+            const size_t left = Vulkan::PipelineCompilePool::WaitIdleFor(std::chrono::milliseconds(250));
+            TlgOverlay::SetLoading(true, total - std::min<u32>(static_cast<u32>(left), compute), total);
+            if (left == 0) break;
+        }
+    }
     TlgOverlay::SetLoadingCompile(false);
     TlgOverlay::SetLoading(false, 0, 0);
     std::fprintf(stderr, "V3 precompile: %u records, %u graphics, %u compute, %u failed in %.0f s\n", total,
