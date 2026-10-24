@@ -14,6 +14,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -29,6 +30,7 @@
 #include "shader_recompiler/info.h"
 #include "video_core/amdgpu/liverpool.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
+#include "video_core/renderer_vulkan/vk_pipeline_compile_pool.h"
 #include "video_core/renderer_vulkan/vk_presenter.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "tlg_overlay.h"
@@ -229,17 +231,28 @@ void PrecompileJobs() {
     const u32 total = static_cast<u32>(records.size());
     std::fprintf(stderr, "V3 precompile: %u records from %s\n", total, jobs.string().c_str());
 
-    // This port's "Compiling shaders" screen, presented every 100 ms however long a record takes.
+    // This port's "Compiling shaders" screen, presented between records about every 100 ms. From
+    // this thread, as the fork draws its boot screen between its warm-up steps: a present from
+    // another thread raced the pipeline builds on the same queue (a crash in NVIDIA's driver).
     TlgOverlay::SetLoadingCompile(true);
     TlgOverlay::SetLoading(true, 0, total);
-    std::atomic<bool> loading{true};
-    std::thread painter([&loading] {
-        while (loading.load(std::memory_order_acquire)) {
+    // TLG_V3_PRECOMPILE_SCREEN=0: no screen (the window stays as it is).
+    const char* screen = std::getenv("TLG_V3_PRECOMPILE_SCREEN");
+    const bool show = !(screen && screen[0] == '0');
+    auto last_shown = std::chrono::steady_clock::now() - std::chrono::seconds(1);
+    const auto paint = [&] {
+        const auto now = std::chrono::steady_clock::now();
+        if (show && now - last_shown >= std::chrono::milliseconds(100)) {
+            last_shown = now;
             presenter->DrawBootScreen("", "", 0.0f, true);
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
-    });
+    };
+    // TLG_V3_PRECOMPILE_TRACE=N: the first N records named before they are looked up.
+    const char* trace_value = std::getenv("TLG_V3_PRECOMPILE_TRACE");
+    const u32 trace = trace_value ? static_cast<u32>(std::strtoul(trace_value, nullptr, 10)) : 0;
 
+    // Compute pipelines built here, not by the compile pool (its compiles raced the screen).
+    Vulkan::g_sync_compute_pipelines.store(true);
     static auto* const code = new CodeStore; // kept: later permutations translate from it
     auto regs = std::make_unique<AmdGpu::Regs>();
     auto& cs = liverpool->GetCsRegs();
@@ -249,7 +262,13 @@ void PrecompileJobs() {
     const auto started = std::chrono::steady_clock::now();
     for (const auto& record : records) {
         ++done;
+        if (done <= trace) {
+            std::fprintf(stderr, "V3 precompile: record %u kind %u, %zu stages\n", done, record.kind,
+                         record.stages.size());
+            std::fflush(stderr);
+        }
         if ((done & 63) == 0) TlgOverlay::SetLoading(true, done, total);
+        paint();
         if ((done % 2000) == 0) {
             std::fprintf(stderr, "V3 precompile: %u / %u, %u graphics, %u compute, %u skipped, %u failed, %.0f s\n",
                          done, total, graphics, compute, skipped, failed,
@@ -308,8 +327,7 @@ void PrecompileJobs() {
         Shader::g_synthetic_flats = nullptr;
     }
     cs = saved_cs;
-    loading.store(false, std::memory_order_release);
-    painter.join();
+    Vulkan::g_sync_compute_pipelines.store(false);
     TlgOverlay::SetLoadingCompile(false);
     TlgOverlay::SetLoading(false, 0, 0);
     std::fprintf(stderr, "V3 precompile: %u records, %u graphics, %u compute, %u failed in %.0f s\n", total,
