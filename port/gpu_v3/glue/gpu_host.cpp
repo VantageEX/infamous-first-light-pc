@@ -129,6 +129,8 @@ void WindowThread() {
                 Libraries::VideoOut::RegisterLib(&g_resolver);
                 // The mappings made before the rasterizer existed.
                 runtime_memory_visit(MapForGpu);
+                // This port's first-start shader compilation (the job file), before the game.
+                V3::PrecompileJobs();
                 init_state.store(1, std::memory_order_release);
             } catch (const std::exception& e) {
                 init_error = e.what();

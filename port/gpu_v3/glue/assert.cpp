@@ -37,7 +37,15 @@ void PrintStackToStderr(unsigned skip) {
 
 } // namespace Common
 
+namespace V3 {
+thread_local bool g_assert_throws = false;
+}
+
 void assert_fail_impl() {
+    // The job file's records (precompile_jobs.cpp): a record the translator refuses is skipped.
+    if (V3::g_assert_throws) {
+        throw std::runtime_error("assertion failed");
+    }
     std::fprintf(stderr, "V3: assertion failed; call stack (module+offset):\n");
     Common::PrintStackToStderr(0);
     std::fflush(stdout);
@@ -50,6 +58,9 @@ void assert_fail_impl() {
 }
 
 void assert_fail_debug_msg(const char* msg) {
+    if (V3::g_assert_throws) {
+        throw std::runtime_error(msg);
+    }
     std::fprintf(stderr, "V3: assertion failed: %s\n", msg);
     LOG_CRITICAL(Debug, "Assertion Failed!\n{}", msg);
     assert_fail_impl();

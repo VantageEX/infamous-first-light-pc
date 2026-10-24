@@ -7,6 +7,7 @@
 #include <cstring>
 #include <optional>
 #include <span>
+#include <unordered_map>
 #include <vector>
 #include <boost/container/static_vector.hpp>
 #include "common/assert.h"
@@ -88,6 +89,9 @@ struct InfoPersistent {
 /// pointers in user data. Set only by WarmUp, before the game runs; thread_local (study sec. 5
 /// finding 6) so a rebuild on a boot thread never leaks into another thread's translation.
 inline thread_local const std::vector<u32>* g_synthetic_flat = nullptr;
+/// This port (renderer v3, glue/precompile_jobs.cpp): the job file's flattened user data per
+/// program hash, for a record's several stages; consulted like g_synthetic_flat.
+inline thread_local const std::unordered_map<u64, std::vector<u32>>* g_synthetic_flats = nullptr;
 
 /// q9b: SHADPS4_ASC_NODMA=1 (see Info::nodma_pinned).
 inline bool NoDmaMode() {
@@ -217,6 +221,14 @@ struct Info : InfoPersistent {
 
     void RefreshFlatBuf() {
         flattened_ud_buf.resize(srt_info.flattened_bufsize_dw);
+        if (g_synthetic_flats) [[unlikely]] {
+            std::fill(flattened_ud_buf.begin(), flattened_ud_buf.end(), 0u);
+            if (const auto it = g_synthetic_flats->find(pgm_hash); it != g_synthetic_flats->end()) {
+                std::memcpy(flattened_ud_buf.data(), it->second.data(),
+                            std::min(flattened_ud_buf.size(), it->second.size()) * sizeof(u32));
+            }
+            return;
+        }
         if (g_synthetic_flat) [[unlikely]] {
             // Pre-compile: a recorded or synthesized image, no guest pointers to walk.
             std::fill(flattened_ud_buf.begin(), flattened_ud_buf.end(), 0u);

@@ -437,6 +437,9 @@ std::shared_ptr<EmulatorSettingsImpl> EmulatorSettingsImpl::GetInstance() {
         s_instance->SetReadbacksMode(readbacks);
         s_instance->SetReadbackLinearImagesEnabled(true);
         s_instance->SetRcasEnabled(true);
+        // The on-disk pipeline cache (off by default in the fork's code, on in its config):
+        // without it every start compiles every pipeline again while the game plays.
+        s_instance->SetPipelineCacheEnabled(true);
         s_instance->SetInternalScreenWidth(static_cast<u32>(V3::g_host.width));
         s_instance->SetInternalScreenHeight(static_cast<u32>(V3::g_host.height));
     }

@@ -19,5 +19,9 @@ struct HostConfig {
     int32_t* (*errno_location)(){};
 };
 extern HostConfig g_host;
+/// While set (this thread), a failed assert throws std::runtime_error instead of stopping.
+extern thread_local bool g_assert_throws;
+/// The job file's records compiled before the game starts (precompile_jobs.cpp).
+void PrecompileJobs();
 
 } // namespace V3
