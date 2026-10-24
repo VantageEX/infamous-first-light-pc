@@ -1183,6 +1183,9 @@ void Instance::CollectDeviceParameters() {
     const std::string api_version = GetReadableVersion(properties.apiVersion);
     const std::string extensions = fmt::format("{}", fmt::join(available_extensions, ", "));
 
+    // This port: the line the launcher's report reads (as this port's other renderers print it).
+    std::printf("GPU: using %s, %s, Vulkan %s\n", model_name.c_str(), driver_name.c_str(), api_version.c_str());
+    std::fflush(stdout);
     LOG_INFO(Render_Vulkan, "GPU_Vendor: {}", vendor_name);
     LOG_INFO(Render_Vulkan, "GPU_Model: {}", model_name);
     LOG_INFO(Render_Vulkan, "GPU_Integrated: {}", IsIntegrated() ? "Yes" : "No");
