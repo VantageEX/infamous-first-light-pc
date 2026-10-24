@@ -1,0 +1,85 @@
+name: "Linux / Steam Deck report / Отчёт с Linux и Steam Deck"
+description: "The Linux build does not start, crashes or works differently than on Windows. / Linux-сборка не запускается, вылетает или работает не так, как в Windows."
+title: "[Linux] <short description>"
+labels: ["linux"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The Linux / Steam Deck build is new: thank you for trying it. Attach the report from the launcher (**Log → Create report**) if the launcher opens; if it does not, paste what the terminal printed (start it from a terminal in its folder: `./"inFAMOUS First Light"`). **Never attach game files.**
+
+        Linux / Steam Deck сборка новая — спасибо, что пробуете. Приложите отчёт из лаунчера (**«Журнал» → «Собрать отчёт»**), если лаунчер открывается; если нет — вставьте вывод терминала (запустите из терминала в его папке: `./"inFAMOUS First Light"`). **Файлы игры не прикладывайте.**
+  - type: input
+    id: build
+    attributes:
+      label: "Build / Сборка"
+      placeholder: "v0.3.3"
+    validations:
+      required: true
+  - type: dropdown
+    id: device
+    attributes:
+      label: "Device / Устройство"
+      options:
+        - "Steam Deck LCD"
+        - "Steam Deck OLED"
+        - "Other handheld / Другой портативный ПК"
+        - "Desktop or laptop / Настольный ПК или ноутбук"
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: "Where it was started / Где запускали"
+      options:
+        - "Gaming Mode (as a non-Steam game) / Игровой режим (как сторонняя игра в Steam)"
+        - "Desktop Mode / Режим рабочего стола"
+        - "A regular Linux desktop / Обычный рабочий стол Linux"
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: "Distribution, CPU, GPU and driver / Дистрибутив, процессор, видеокарта и драйвер"
+      description: "For a Steam Deck the SteamOS version is enough. / Для Steam Deck достаточно версии SteamOS."
+      placeholder: "SteamOS 3.7.13 / Fedora 41, Ryzen 5 7600, RX 7700 XT, Mesa 24.3"
+    validations:
+      required: true
+  - type: input
+    id: dump
+    attributes:
+      label: "Game dump / Дамп игры"
+      description: "Title ID and version (shown in the launcher). / ID и версия (видны в лаунчере)."
+      placeholder: "CUSA00897 01.00"
+    validations:
+      required: true
+  - type: dropdown
+    id: stage
+    attributes:
+      label: "How far it got / До чего дошло"
+      options:
+        - "The launcher does not open / Лаунчер не открывается"
+        - "The launcher opens, the game does not start / Лаунчер открывается, игра не запускается"
+        - "The game starts, then crashes or freezes / Игра запускается, потом вылетает или зависает"
+        - "It plays, but something is wrong (graphics, sound, controls, speed) / Играется, но что-то не так (графика, звук, управление, скорость)"
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: "What happened / Что произошло"
+      description: "What you did, what you expected, what you got. Screenshots or a short video help a lot. / Что делали, что ожидали, что получилось. Скриншоты или короткое видео очень помогают."
+    validations:
+      required: true
+  - type: textarea
+    id: report
+    attributes:
+      label: "Report zip or terminal output / Архив отчёта или вывод терминала"
+      description: "Drag the zip from data/reports here, or paste the terminal output. / Перетащите сюда архив из папки data/reports или вставьте вывод терминала."
+  - type: checkboxes
+    id: own
+    attributes:
+      label: "Game copy / Копия игры"
+      options:
+        - label: "I play my own dump of the game; I attach no game files. / Я играю на своём дампе игры и не прикладываю её файлы."
+          required: true

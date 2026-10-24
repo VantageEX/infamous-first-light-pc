@@ -21,7 +21,9 @@ Other Linux PCs
 x86-64 with glibc 2.39 or newer (Ubuntu 24.04, Fedora 40, Arch, SteamOS 3.6 or newer) and a
 Vulkan driver (Mesa RADV for AMD, the NVIDIA driver). Unpack and start "inFAMOUS First Light".
 
-Problems: Log → Create report in the launcher, and send the zip.
+Problems (it does not start, crashes or works differently than on Windows): open a Linux /
+Steam Deck report and attach Log → Create report from the launcher:
+https://github.com/VantageEX/infamous-first-light-pc/issues/new?template=linux_report.yml
 
 ----------------------------------------------------------------------------------------------
 
@@ -48,4 +50,6 @@ Steam Deck
 x86-64, glibc 2.39 или новее (Ubuntu 24.04, Fedora 40, Arch, SteamOS 3.6 и новее) и драйвер
 Vulkan (Mesa RADV для AMD, драйвер NVIDIA). Распакуйте и запустите «inFAMOUS First Light».
 
-Проблемы: в лаунчере «Журнал» → «Собрать отчёт», и пришлите zip.
+Проблемы (не запускается, вылетает или работает не так, как в Windows): заполните отчёт
+с Linux / Steam Deck и приложите «Журнал» → «Собрать отчёт» из лаунчера:
+https://github.com/VantageEX/infamous-first-light-pc/issues/new?template=linux_report.yml
