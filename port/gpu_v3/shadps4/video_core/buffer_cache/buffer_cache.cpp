@@ -1254,6 +1254,10 @@ void BufferCache::InvalidateMemory(VAddr device_addr, u64 size, InvalidateOrigin
     struct HeapBlock {
         u64 bytes = 0;
         VAddr lo = VideoCore::GuestAddr(0x248000000ULL), hi = VideoCore::GuestAddr(0x269e00000ULL);
+        // This port (renderer v3): TLG_V3_WRITE_BLOCK_RANGE=lo-hi (hex), a second span widened
+        // the same way: First Light's particle arena, which the fork finds through Second Son's
+        // code (ParticleArenaDiscardHook) and this port does not hook.
+        VAddr lo2 = 0, hi2 = 0;
     };
     static const HeapBlock heap_block = [] {
         HeapBlock c{};
@@ -1269,9 +1273,18 @@ void BufferCache::InvalidateMemory(VAddr device_addr, u64 size, InvalidateOrigin
                 c.hi = hi;
             }
         }
+        if (const char* range = std::getenv("TLG_V3_WRITE_BLOCK_RANGE")) {
+            char* end = nullptr;
+            const VAddr lo = std::strtoull(range, &end, 16);
+            const VAddr hi = end && *end == '-' ? std::strtoull(end + 1, nullptr, 16) : 0;
+            if (hi > lo) {
+                c.lo2 = lo;
+                c.hi2 = hi;
+            }
+        }
         if (c.bytes != 0) {
-            LOG_INFO(Render, "SHADPS4_HEAP_WRITE_BLOCK: {} KB blocks over {:#x}-{:#x}",
-                     c.bytes >> 10, c.lo, c.hi);
+            LOG_INFO(Render, "SHADPS4_HEAP_WRITE_BLOCK: {} KB blocks over {:#x}-{:#x} and {:#x}-{:#x}",
+                     c.bytes >> 10, c.lo, c.hi, c.lo2, c.hi2);
         }
         return c;
     }();
@@ -1285,12 +1298,18 @@ void BufferCache::InvalidateMemory(VAddr device_addr, u64 size, InvalidateOrigin
     u64 settle_size = size;
     if (heap_block.bytes != 0 && origin == InvalidateOrigin::GuestWriteFault &&
         ((device_addr >= heap_block.lo && device_addr + size <= heap_block.hi) ||
+         (device_addr >= heap_block.lo2 && device_addr + size <= heap_block.hi2) ||
          (g_arena_block && device_addr >= g_arena_lo.load(std::memory_order_relaxed) &&
           device_addr + size <= g_arena_hi.load(std::memory_order_relaxed)))) {
         const VAddr block = Common::AlignDown(device_addr, heap_block.bytes);
         const bool in_heap = device_addr >= heap_block.lo && device_addr + size <= heap_block.hi;
-        const VAddr span_lo = in_heap ? heap_block.lo : g_arena_lo.load(std::memory_order_relaxed);
-        const VAddr span_hi = in_heap ? heap_block.hi : g_arena_hi.load(std::memory_order_relaxed);
+        const bool in_second = device_addr >= heap_block.lo2 && device_addr + size <= heap_block.hi2;
+        const VAddr span_lo = in_heap     ? heap_block.lo
+                              : in_second ? heap_block.lo2
+                                          : g_arena_lo.load(std::memory_order_relaxed);
+        const VAddr span_hi = in_heap     ? heap_block.hi
+                              : in_second ? heap_block.hi2
+                                          : g_arena_hi.load(std::memory_order_relaxed);
         if (block >= span_lo && block + heap_block.bytes <= span_hi &&
             device_addr + size <= block + heap_block.bytes) {
             block_bytes = heap_block.bytes;
