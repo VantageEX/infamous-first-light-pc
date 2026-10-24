@@ -465,6 +465,12 @@ Item {
                         onPicked: v => launcher.setRenderer(v)
                     }
                     ChoiceRow {
+                        label: launcher.tr.render_resolution
+                        options: launcher.renderResolutions
+                        value: launcher.core.render_resolution
+                        onPicked: v => launcher.setCore('render_resolution', v)
+                    }
+                    ChoiceRow {
                         id: displayModeRow
                         label: launcher.tr.display_mode
                         options: launcher.displayModes

@@ -31,6 +31,10 @@ STRINGS = {
                         'Если что-то не так, вернитесь на рендер v2.',
                   'en': 'This is an early version: expect artifacts, crashes and frame drops, no promises. '
                         'If something is wrong, switch back to renderer v2.'},
+    'render_resolution': {'ru': 'Разрешение рендера', 'en': 'Render resolution'},
+    'res_native': {'ru': '1080p — как в игре', 'en': "1080p — the game's own"},
+    'res_800p': {'ru': '800p — для Steam Deck', 'en': '800p — for Steam Deck'},
+    'res_720p': {'ru': '720p — для слабых видеокарт', 'en': '720p — for weaker graphics cards'},
     'windowed': {'ru': 'В окне', 'en': 'Windowed'},
     'borderless': {'ru': 'Окно без рамки', 'en': 'Borderless'},
     'fullscreen': {'ru': 'Полный экран', 'en': 'Fullscreen'},

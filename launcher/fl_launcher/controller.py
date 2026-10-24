@@ -8,7 +8,7 @@ from PySide6.QtGui import QTextCursor
 from . import game, report, saves
 from .i18n import STRINGS, UI_LANGUAGES, Texts
 from .runner import GameRunner, open_folder, system_language_key
-from .settings import (CORE_DEFAULTS, DISPLAY_MODES, FPS_LIMITS, INI_SWITCHES, PORT, TEST_BUILD, VERSION_FILE,
+from .settings import (CORE_DEFAULTS, DISPLAY_MODES, FPS_LIMITS, INI_SWITCHES, PORT, RENDER_RESOLUTIONS, TEST_BUILD, VERSION_FILE,
                        Settings, parse_env)
 
 LOG_LINES = 5000
@@ -223,6 +223,10 @@ class Launcher(QObject):
     @Property('QVariantList', notify=textsChanged)
     def fpsLimits(self):
         return [{'value': v, 'text': self.t('unlimited') if v == '0' else v} for v in FPS_LIMITS]
+
+    @Property('QVariantList', notify=textsChanged)
+    def renderResolutions(self):
+        return [{'value': v, 'text': self.t('res_' + v)} for v in RENDER_RESOLUTIONS]
 
     @Property('QVariantList', notify=gameChanged)
     def gameLanguages(self):

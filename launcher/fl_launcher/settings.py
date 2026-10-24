@@ -55,9 +55,12 @@ CORE_DEFAULTS = {
     'async_shaders': '1',
     'deferred_readback': '1',
     'stale_readback': '1',
+    'render_resolution': 'native',   # the game's render size (run.py: the engine's size patch)
 }
 DISPLAY_MODES = ('windowed', 'borderless', 'fullscreen')
 FPS_LIMITS = ('30', '60', '120', '240', '0')
+# Offered render resolutions (port/scripts/graphics_options.py RESOLUTIONS has the rest).
+RENDER_RESOLUTIONS = ('native', '800p', '720p')
 
 LAUNCHER_DEFAULTS = {
     'game_dir': '',
@@ -119,6 +122,8 @@ class Settings:
             self.core['display_mode'] = CORE_DEFAULTS['display_mode']
         if self.core['fps_limit'] not in FPS_LIMITS:
             self.core['fps_limit'] = CORE_DEFAULTS['fps_limit']
+        if self.core['render_resolution'] not in RENDER_RESOLUTIONS:
+            self.core['render_resolution'] = CORE_DEFAULTS['render_resolution']
 
     def save(self):
         self.folder.mkdir(parents=True, exist_ok=True)
