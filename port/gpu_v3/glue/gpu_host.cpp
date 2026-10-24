@@ -29,6 +29,7 @@
 #include "common/thread.h"
 #include "common/types.h"
 #include "core/debug_state.h"
+#include "core/emulator_settings.h"
 #include "core/libraries/kernel/equeue.h"
 #include "core/loader/symbols_resolver.h"
 #include "core/memory.h"
@@ -217,6 +218,9 @@ extern "C" int tlggpu_init(const TlgGpuConfig* config) {
             if (auto* r = Rasterizer()) r->InvalidateMemory(address, size);
         });
     TlgSettings::Load(); // tlg.ini: the overlay, the menu and the input settings
+    // The launcher's VSync: on = Mailbox (no tearing, no wait for the refresh), off = Immediate.
+    // Its FPS limit is read live by the present thread (V3::FpsLimit).
+    EmulatorSettings.SetPresentMode(TlgSettings::Get().vsync ? "Mailbox" : "Immediate");
     std::printf("GPU: renderer v3 (gpu_v3: axylpup second-son-v1.1.1)\n");
     std::fflush(stdout);
     std::thread(WindowThread).detach();
@@ -224,6 +228,13 @@ extern "C" int tlggpu_init(const TlgGpuConfig* config) {
     g_ready_cv.wait(lock, [] { return g_ready != 0; });
     return g_ready == 1 ? 0 : -1;
 }
+
+namespace V3 {
+/// The launcher's / menu's FPS limit (0: none), for the present thread (videoout/driver.cpp).
+int FpsLimit() {
+    return TlgSettings::Get().fps_limit.load(std::memory_order_relaxed);
+}
+} // namespace V3
 
 extern "C" void tlggpu_set_guest_image(uintptr_t base, uint64_t) {
     V3::g_host.image_base = base;

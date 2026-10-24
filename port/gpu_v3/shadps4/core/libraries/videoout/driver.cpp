@@ -19,6 +19,10 @@
 extern std::unique_ptr<Vulkan::Presenter> presenter;
 extern std::unique_ptr<AmdGpu::Liverpool> liverpool;
 
+namespace V3 {
+int FpsLimit(); ///< This port (glue/gpu_host.cpp): the launcher's FPS limit, 0 = none.
+}
+
 namespace Libraries::VideoOut {
 
 constexpr static bool Is32BppPixelFormat(PixelFormat format) {
@@ -409,6 +413,7 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
     };
 
     u32 vblank_hz = EmulatorSettings.GetVblankFrequency();
+    auto last_flip = std::chrono::steady_clock::time_point{}; // this port: the FPS limit
     while (!token.stop_requested()) {
         // F3 -> Vblank Frequency applies live (user 10-21): the tick follows the setting.
         if (const u32 hz = EmulatorSettings.GetVblankFrequency(); hz != vblank_hz) [[unlikely]] {
@@ -427,7 +432,12 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
 
         // Check if it's time to take a request.
         auto& vblank_status = main_port.vblank_status;
-        if (vblank_status.count % (main_port.flip_rate + 1) == 0) {
+        // This port: with TLG_V3_FLIP_IMMEDIATE the FPS limit holds at the tick too.
+        const int limit = FlipImmediate() ? ::V3::FpsLimit() : 0;
+        const bool limit_ok = limit <= 0 || std::chrono::steady_clock::now() - last_flip >=
+                                                std::chrono::nanoseconds(1000000000 / limit) -
+                                                    std::chrono::microseconds(500);
+        if (vblank_status.count % (main_port.flip_rate + 1) == 0 && limit_ok) {
             const auto request = receive_request();
             if (!request) {
                 if (timer.GetTotalWait().count() < 0) { // Dont draw too fast
@@ -438,6 +448,7 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
                     }
                 }
             } else {
+                last_flip = std::chrono::steady_clock::now();
                 Flip(request);
                 FRAME_END;
             }
@@ -474,7 +485,22 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
                                   std::chrono::microseconds(1500);
             std::unique_lock lk{mutex};
             for (;;) {
+                // The FPS limit: a flip no sooner than 1/limit after the previous one (less
+                // half a millisecond of tolerance).
+                const int limit = ::V3::FpsLimit();
+                const auto earliest =
+                    limit > 0 ? last_flip + std::chrono::nanoseconds(1000000000 / limit) -
+                                    std::chrono::microseconds(500)
+                              : std::chrono::steady_clock::time_point{};
+                if (!requests.empty() && std::chrono::steady_clock::now() < earliest) {
+                    if (earliest >= deadline) {
+                        break; // the next tick's interval takes it
+                    }
+                    request_cv.wait_until(lk, earliest);
+                    continue;
+                }
                 if (!requests.empty()) {
+                    last_flip = std::chrono::steady_clock::now();
                     const auto request = requests.front();
                     requests.pop();
                     lk.unlock();
