@@ -232,11 +232,13 @@ static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
         }
     }
     if (code==EXCEPTION_ACCESS_VIOLATION && record->NumberParameters>=2) {
-        /* GPU page tracking (write-protected guest pages) is resolved first. */
-        if (gpu_enabled && tlggpu_handle_fault(info,(void *)record->ExceptionInformation[1])) return EXCEPTION_CONTINUE_EXECUTION;
         if (runtime_fault_recover) {
-            /* A speculative guest memory read (GPU draw preparation) faulted: the thread resumes
-             * in tlg_longjmp, outside the exception dispatcher, back at its recovery point. */
+            /* A speculative guest memory read (GPU draw preparation, shader capture) faulted: the
+             * thread resumes in tlg_longjmp, outside the exception dispatcher, back at its
+             * recovery point. This comes before the GPU page tracking, as on Linux: with precise
+             * readbacks the page may be read-protected because the GPU wrote it, and its readback
+             * waits on the GPU thread, which can be waiting on this worker (a shared lock on the
+             * pipeline cache): the freeze "inside GPU page fault handler" (tlg_pc #37, gr2_pc #48). */
             unsigned long long *buffer=*runtime_fault_recover;
             runtime_fault_recover=NULL;
             CONTEXT *c=info->ContextRecord;
@@ -246,6 +248,8 @@ static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
             c->Rip=(DWORD64)(uintptr_t)tlg_longjmp;
             return EXCEPTION_CONTINUE_EXECUTION;
         }
+        /* GPU page tracking (write-protected guest pages). */
+        if (gpu_enabled && tlggpu_handle_fault(info,(void *)record->ExceptionInformation[1])) return EXCEPTION_CONTINUE_EXECUTION;
     }
     if (code==EXCEPTION_ACCESS_VIOLATION || code==EXCEPTION_ILLEGAL_INSTRUCTION || code==EXCEPTION_PRIV_INSTRUCTION ||
         code==EXCEPTION_STACK_OVERFLOW || code==EXCEPTION_INT_DIVIDE_BY_ZERO || code==EXCEPTION_DATATYPE_MISALIGNMENT) {
