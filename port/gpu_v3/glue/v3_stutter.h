@@ -33,6 +33,9 @@ void RecordFault(uintptr_t address, bool write, bool cp_thread);
 /// common one printed with the report (module+offset, for llvm-symbolizer).
 void RecordCpWriteStack();
 
+/// The game frames presented so far (OnPresent), for the thread report's frame rate.
+extern std::atomic<uint64_t> g_presented;
+
 /// The presenter, once per presented game frame (glue/overrides/vk_presenter.cpp).
 void OnPresent();
 

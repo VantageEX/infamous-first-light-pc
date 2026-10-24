@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-// Renderer v3 diagnostics: TLG_V3_THREAD_CPU=1 prints, every 15 s, the busiest threads of the
-// process by name with their share of one core over the interval (which thread holds the frame
+// Renderer v3 diagnostics: TLG_V3_THREAD_CPU=1 prints, every 10 s (the GPU timer's window,
+// SHADPS4_GPU_BATCH_TIMING=1), the frame rate and the busiest threads of the process by name with
+// their share of one core over the interval (which thread holds the frame
 // rate back: a game thread, the command processor front or back, a worker).
 #include <algorithm>
 #include <chrono>
@@ -15,6 +16,7 @@
 #include <tlhelp32.h>
 #endif
 #include "v3_glue.h"
+#include "v3_stutter.h"
 
 namespace V3 {
 
@@ -28,10 +30,14 @@ void StartThreadCpuReport() {
             reinterpret_cast<void (*)()>(GetProcAddress(GetModuleHandleA("kernel32.dll"), "GetThreadDescription")));
         std::unordered_map<DWORD, unsigned long long> last;
         auto last_time = std::chrono::steady_clock::now();
+        uint64_t last_frames = Stutter::g_presented.load(std::memory_order_relaxed);
         for (;;) {
-            std::this_thread::sleep_for(std::chrono::seconds(15));
+            std::this_thread::sleep_for(std::chrono::seconds(10));
             const auto now = std::chrono::steady_clock::now();
             const double wall_100ns = std::chrono::duration<double>(now - last_time).count() * 1e7;
+            const uint64_t frames = Stutter::g_presented.load(std::memory_order_relaxed);
+            const double fps = double(frames - last_frames) * 1e7 / wall_100ns;
+            last_frames = frames;
             last_time = now;
             HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
             if (snapshot == INVALID_HANDLE_VALUE) continue;
@@ -80,7 +86,8 @@ void StartThreadCpuReport() {
                 std::snprintf(part, sizeof(part), " %s %.0f%%", rows[i].name.c_str(), rows[i].percent);
                 line += part;
             }
-            std::fprintf(stderr, "V3 thread CPU (15 s, %% of a core; process %.0f%%):%s\n", sum, line.c_str());
+            std::fprintf(stderr, "V3 thread CPU (10 s, %.1f FPS, %% of a core; process %.0f%%):%s\n", fps, sum,
+                         line.c_str());
         }
     }).detach();
 #endif

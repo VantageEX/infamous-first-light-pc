@@ -428,7 +428,8 @@ private:
                 double(std::chrono::duration_cast<std::chrono::nanoseconds>(now - window_start)
                            .count());
             if (wall_ns >= 10e9) {
-                LOG_INFO(Render_Vulkan,
+                // This port: a warning, so it shows at renderer v3's default log level.
+                LOG_WARNING(Render_Vulkan,
                          "GpuBatchTiming: batches={} busy_pct={:.1f} batch_us={:.1f} "
                          "max_batch_us={:.1f} gap_us={:.1f} draws_per_batch={:.1f} "
                          "gpu_us_per_draw={:.3f} render_begins={} buf_barrier_calls={} buf_barriers={} "

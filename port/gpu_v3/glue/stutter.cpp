@@ -22,6 +22,7 @@
 namespace V3::Stutter {
 
 std::atomic<uint64_t> g_faults{0};
+std::atomic<uint64_t> g_presented{0};
 
 namespace {
 std::mutex g_faults_mutex;
@@ -97,6 +98,7 @@ void Site::Register(Site* site) {
 }
 
 void OnPresent() {
+    g_presented.fetch_add(1, std::memory_order_relaxed);
     if (!Enabled()) return;
     using Clock = std::chrono::steady_clock;
     static Clock::time_point last_present{};
