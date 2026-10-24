@@ -89,14 +89,14 @@ The launcher (PySide6): `py -m venv .venv`, `.venv\Scripts\pip install PySide6-E
 
 | Folder | What it holds |
 |---|---|
-| `port/` | The core: loader, PS4 runtime (`src/`), Vulkan renderers (`gpu/` classic, `gpu_v2/` renderer v2), game preparation scripts |
+| `port/` | The core: loader, PS4 runtime (`src/`), Vulkan renderers (`gpu/` classic, `gpu_v2/` renderer v2, `gpu_v3/` renderer v3, experimental), game preparation scripts |
 | `launcher/` | The launcher (PySide6 + Qt Quick) |
 | `dev/` | Packaging, RenderDoc capture, debugging aids |
 | `docs/iss_pc/` | The documentation of the project the core comes from |
 
 ## Credits and license
 
-This port is a fork of [**iss_pc**](https://github.com/HayatoG/iss_pc) by **HayatoG**, the native PC port of inFAMOUS Second Son; its core (runtime, loader, GPU translation and many fixes) is the foundation of this project. The GPU translation comes from [**shadPS4**](https://github.com/shadps4-emu/shadPS4); iss_pc also credits [tlg_pc](https://github.com/HayatoG/tlg_pc), [gr2_pc](https://github.com/HayatoG/gr2_pc), [gow3_pc](https://github.com/FelipePrado0/gow3_pc), [bloodborne_pc](https://github.com/deadinside28/bloodborne_pc), [ShadowOfTheColossus-PC](https://github.com/AjncSystem/ShadowOfTheColossus-PC) and the other projects listed in [docs/iss_pc](docs/iss_pc/README.md). Renderer v2 (`port/gpu_v2`, by way of iss_pc) is **Castlesea**'s renderer from [infamous-second-son-pc-port](https://github.com/Castlesea/infamous-second-son-pc-port), on **weshayoub92**'s [shadPS4-perf](https://github.com/weshayoub92/shadPS4-perf). ATRAC9 audio via [LibAtrac9](https://github.com/Thealexbarney/LibAtrac9).
+This port is a fork of [**iss_pc**](https://github.com/HayatoG/iss_pc) by **HayatoG**, the native PC port of inFAMOUS Second Son; its core (runtime, loader, GPU translation and many fixes) is the foundation of this project. The GPU translation comes from [**shadPS4**](https://github.com/shadps4-emu/shadPS4); iss_pc also credits [tlg_pc](https://github.com/HayatoG/tlg_pc), [gr2_pc](https://github.com/HayatoG/gr2_pc), [gow3_pc](https://github.com/FelipePrado0/gow3_pc), [bloodborne_pc](https://github.com/deadinside28/bloodborne_pc), [ShadowOfTheColossus-PC](https://github.com/AjncSystem/ShadowOfTheColossus-PC) and the other projects listed in [docs/iss_pc](docs/iss_pc/README.md). Renderer v2 (`port/gpu_v2`, by way of iss_pc) is **Castlesea**'s renderer from [infamous-second-son-pc-port](https://github.com/Castlesea/infamous-second-son-pc-port), on **weshayoub92**'s [shadPS4-perf](https://github.com/weshayoub92/shadPS4-perf). Renderer v3 (`port/gpu_v3`, experimental) is **axylpup**'s multithreaded Second Son build of shadPS4 ([second-son](https://github.com/axylpup/shadPS4/tree/second-son), release `second-son-v1.1.1`). ATRAC9 audio via [LibAtrac9](https://github.com/Thealexbarney/LibAtrac9).
 
 Licensed under **GPL-2.0**, like the projects it builds on ([LICENSE](LICENSE)).
 
@@ -165,7 +165,7 @@ Where Windows' Segoe UI is missing (Linux, the Steam Deck) the launcher and the 
 
 ## Авторы и лицензия
 
-Этот порт — форк [**iss_pc**](https://github.com/HayatoG/iss_pc) от **HayatoG**, нативного порта inFAMOUS Second Son; его ядро (среда выполнения, загрузчик, перевод графики и множество исправлений) — основа этого проекта. Перевод графики взят из [**shadPS4**](https://github.com/shadps4-emu/shadPS4); остальные проекты, на которых построен iss_pc, перечислены в [docs/iss_pc](docs/iss_pc/README.md). Рендер v2 (`port/gpu_v2`, через iss_pc) — рендер **Castlesea** из [infamous-second-son-pc-port](https://github.com/Castlesea/infamous-second-son-pc-port) на основе [shadPS4-perf](https://github.com/weshayoub92/shadPS4-perf) от **weshayoub92**.
+Этот порт — форк [**iss_pc**](https://github.com/HayatoG/iss_pc) от **HayatoG**, нативного порта inFAMOUS Second Son; его ядро (среда выполнения, загрузчик, перевод графики и множество исправлений) — основа этого проекта. Перевод графики взят из [**shadPS4**](https://github.com/shadps4-emu/shadPS4); остальные проекты, на которых построен iss_pc, перечислены в [docs/iss_pc](docs/iss_pc/README.md). Рендер v2 (`port/gpu_v2`, через iss_pc) — рендер **Castlesea** из [infamous-second-son-pc-port](https://github.com/Castlesea/infamous-second-son-pc-port) на основе [shadPS4-perf](https://github.com/weshayoub92/shadPS4-perf) от **weshayoub92**. Рендер v3 (`port/gpu_v3`, экспериментальный) — многопоточная сборка shadPS4 для Second Son от **axylpup** ([second-son](https://github.com/axylpup/shadPS4/tree/second-son), релиз `second-son-v1.1.1`).
 
 Лицензия **GPL-2.0**, как у проектов, на которых он основан ([LICENSE](LICENSE)).
 

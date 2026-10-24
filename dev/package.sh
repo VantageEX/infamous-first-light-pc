@@ -65,11 +65,18 @@ if [[ -f port/out/tlg-probe-v2.exe ]]; then
     mkdir -p "$dest/port/gpu_v2"
     cp port/gpu_v2/defaults.env "$dest/port/gpu_v2/"
 fi
+# Renderer v3 (port/gpu_v3, experimental) when it was built (TLG_RENDERER_V3=1 build.sh): the same.
+if [[ -f port/out/tlg-probe-v3.exe ]]; then
+    llvm-strip --strip-debug -o "$dest/port/out/tlg-probe-v3.exe" port/out/tlg-probe-v3.exe
+    mkdir -p "$dest/port/gpu_v3"
+    cp port/gpu_v3/defaults.env port/gpu_v3/README.md "$dest/port/gpu_v3/"
+fi
 # Every DLL tlg-probe.exe loads from the CLANG64 tree, by walking the import tables (names that
 # are not in /clang64/bin are Windows' own).
 declare -A shipped=()
 queue=("$dest/port/out/tlg-probe.exe")
 [[ -f "$dest/port/out/tlg-probe-v2.exe" ]] && queue+=("$dest/port/out/tlg-probe-v2.exe")
+[[ -f "$dest/port/out/tlg-probe-v3.exe" ]] && queue+=("$dest/port/out/tlg-probe-v3.exe")
 while ((${#queue[@]})); do
     binary=${queue[0]}
     queue=("${queue[@]:1}")
