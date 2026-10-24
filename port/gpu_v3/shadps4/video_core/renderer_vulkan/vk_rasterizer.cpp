@@ -1476,7 +1476,7 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_,
                    (AmdGpu::NativeRec::g_gpu_mode == 1 || AmdGpu::NativeRec::g_gpu_mode == 3);
     native_pt_extra = native_pt_on && Shader::g_native_pt == 2 ? 1u : 0u; // the compare SSBO
     if (Shader::g_native_pt != 0) {
-        LOG_INFO(Render_Vulkan, "NativePt: mode {}{}", Shader::g_native_pt,
+        LOG_WARNING(Render_Vulkan, "NativePt: mode {}{}", Shader::g_native_pt,
                  native_pt_on ? "" : " (needs SHADPS4_NATIVE_GPU_DIRECT=1; off)");
     }
     native_seg_on = Shader::g_native_seg != 0 && native_pt_on;
@@ -7381,6 +7381,7 @@ bool Rasterizer::NativeSegEvaluate(const AmdGpu::CpSplit::SplitSegmentRecord& se
 }
 
 void Rasterizer::NativeLog() {
+    // This port: the native path's report lines are warnings, shown at renderer v3's log level.
     const auto& st = native_stats;
     std::string closes;
     for (u32 i = 0; i < st.close.size(); ++i) {
@@ -7388,7 +7389,7 @@ void Rasterizer::NativeLog() {
             closes += fmt::format(" c{}={}", i, st.close[i]);
         }
     }
-    LOG_INFO(Render_Vulkan,
+    LOG_WARNING(Render_Vulkan,
              "NativePass: opens={} joins={} open_fail={} verify_draws={} verify_mismatch={} "
              "epoch_same={} tick_moved={} closes:{}",
              st.opens, st.joins, st.open_fail, st.verify_draws, st.verify_mismatch,
@@ -7396,7 +7397,7 @@ void Rasterizer::NativeLog() {
     if (native_pt_dbg) {
         // SHADPS4_NATIVE_PT=2: the count every time (a clean run shows 0), the entries once.
         const auto* d = reinterpret_cast<const u32*>(native_pt_dbg->mapped_data.data());
-        LOG_INFO(Render_Vulkan, "NativePt compare: {} mismatching loads", d[0]);
+        LOG_WARNING(Render_Vulkan, "NativePt compare: {} mismatching loads", d[0]);
         if (d[0] != 0 && native_pt_logged < 4) {
             ++native_pt_logged;
             for (u32 e = 0; e < 64 && e < d[0]; ++e) {
@@ -9046,7 +9047,7 @@ void Rasterizer::OnSubmit() {
             const auto now = std::chrono::steady_clock::now();
             if (now - window >= std::chrono::seconds(10)) {
                 const u64 pages = buffer_cache.FaultPagesProcessed();
-                LOG_INFO(Render_Vulkan, "NativePt faults: pages={}", pages - last);
+                LOG_WARNING(Render_Vulkan, "NativePt faults: pages={}", pages - last);
                 last = pages;
                 window = now;
             }
