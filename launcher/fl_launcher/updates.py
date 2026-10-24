@@ -159,6 +159,7 @@ function Note($text) {
         Add-Content -LiteralPath $Log -Value ("{0} {1}" -f (Get-Date -Format s), $text) -Encoding UTF8
     } catch {}
 }
+Note "started"
 try { Wait-Process -Id $WaitPid -Timeout 120 -ErrorAction SilentlyContinue } catch {}
 $busy = $null
 for ($i = 0; $i -lt 60; $i++) {
@@ -201,6 +202,7 @@ HELPER_SH = r'''#!/bin/bash
 wait_pid=$1 payload=$2 target=$3 backup=$4 exe=$5 log=$6
 note() { { mkdir -p "$(dirname "$log")" && printf '%s %s\n' "$(date +%Y-%m-%dT%H:%M:%S)" "$1" >> "$log"; } 2>/dev/null || true; }
 restart() { (cd "$target" && exec "./$exe") </dev/null >/dev/null 2>&1 & }
+note started
 for _ in $(seq 1200); do kill -0 "$wait_pid" 2>/dev/null || break; sleep 0.1; done
 busy=
 for _ in $(seq 60); do
@@ -235,10 +237,25 @@ restart
 '''
 
 
+CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+
+
+def note(log, text):
+    """One line in the update log, as the helpers write theirs."""
+    import datetime
+    try:
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with open(log, 'a', encoding='utf-8') as out:
+            out.write(f"{datetime.datetime.now().strftime('%Y-%m-%dT%H:%M:%S')} {text}\n")
+    except OSError:
+        pass
+
+
 def start_helper(payload, log):
-    """Starts the helper detached (it outlives this process) and returns."""
+    """Starts the helper (it outlives this process) and returns."""
     STAGE.mkdir(parents=True, exist_ok=True)
     log.parent.mkdir(parents=True, exist_ok=True)
+    note(log, 'requested')   # the helper's own lines follow: started, then the outcome
     if not WINDOWS:
         script = STAGE / 'install.sh'
         script.write_text(HELPER_SH, encoding='utf-8')
@@ -250,12 +267,21 @@ def start_helper(payload, log):
         return
     script = STAGE / 'install.ps1'
     script.write_text(HELPER, encoding='utf-8-sig')   # with a BOM: PowerShell 5.1 reads it as UTF-8
-    flags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
-    subprocess.Popen(['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script),
-                      '-WaitPid', str(os.getpid()), '-Payload', str(payload), '-Target', str(REPO),
-                      '-Backup', str(BACKUP), '-Exe', EXE_NAME, '-Log', str(log)],
-                     cwd=str(REPO), creationflags=flags, close_fds=True,
-                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # A hidden console of its own, not DETACHED_PROCESS: with no console at all powershell.exe
+    # ends before it runs the script (v0.3.2 / v0.3.3: no update ever applied, issue #2). Out of
+    # the launcher's job when allowed, so closing the launcher cannot end it.
+    flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+    args = ['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(script),
+            '-WaitPid', str(os.getpid()), '-Payload', str(payload), '-Target', str(REPO),
+            '-Backup', str(BACKUP), '-Exe', EXE_NAME, '-Log', str(log)]
+    for extra in (CREATE_BREAKAWAY_FROM_JOB, 0):
+        try:
+            subprocess.Popen(args, cwd=str(REPO), creationflags=flags | extra, close_fds=True,
+                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return
+        except PermissionError:
+            if not extra:
+                raise
 
 
 def finish(log):
@@ -267,6 +293,11 @@ def finish(log):
             outcome = log.read_text(encoding='utf-8-sig').strip().splitlines()[-1].split(' ', 1)[1]
         except (OSError, IndexError):
             outcome = ''
+        # The launcher's own 'requested' or the helper's 'started' last: it did not finish.
+        if outcome == 'requested':
+            outcome = 'failed: the update helper did not start'
+        elif outcome == 'started':
+            outcome = 'failed: the update helper stopped before it finished'
         for leftover in (STAGE, BACKUP):
             shutil.rmtree(leftover, ignore_errors=True)
     return outcome
