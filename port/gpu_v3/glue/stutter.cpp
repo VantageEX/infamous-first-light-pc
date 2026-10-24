@@ -1,0 +1,95 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Renderer v3's stutter report (v3_stutter.h).
+#include <algorithm>
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <mutex>
+#include <string>
+#include <vector>
+
+#include "v3_stutter.h"
+
+namespace V3::Stutter {
+
+std::atomic<uint64_t> g_faults{0};
+
+namespace {
+std::mutex g_sites_mutex;
+std::vector<Site*> g_sites;
+
+bool Enabled() {
+    static const bool on = [] {
+        const char* v = std::getenv("TLG_V3_STUTTER");
+        return !(v && v[0] == '0');
+    }();
+    return on;
+}
+
+const char* BaseName(const char* path) {
+    const char* slash = std::strrchr(path, '/');
+    const char* back = std::strrchr(path, '\\');
+    if (back > slash) slash = back;
+    return slash ? slash + 1 : path;
+}
+} // namespace
+
+void Site::Register(Site* site) {
+    std::scoped_lock lock{g_sites_mutex};
+    g_sites.push_back(site);
+}
+
+void OnPresent() {
+    if (!Enabled()) return;
+    using Clock = std::chrono::steady_clock;
+    static Clock::time_point last_present{};
+    static double average_ms = 0.0;
+    static uint64_t last_faults = 0, frames = 0, reported = 0;
+    const auto now = Clock::now();
+    const bool first = last_present == Clock::time_point{};
+    const double ms = first ? 0.0 : std::chrono::duration<double, std::milli>(now - last_present).count();
+    last_present = now;
+    ++frames;
+
+    // Every site's calls in this frame (the present thread is the only reader of `last`).
+    struct Delta {
+        uint64_t count;
+        Site* site;
+    };
+    std::vector<Delta> deltas;
+    {
+        std::scoped_lock lock{g_sites_mutex};
+        deltas.reserve(g_sites.size());
+        for (Site* site : g_sites) {
+            const uint64_t hits = site->hits.load(std::memory_order_relaxed);
+            if (hits != site->last) deltas.push_back({hits - site->last, site});
+            site->last = hits;
+        }
+    }
+    const uint64_t faults = g_faults.load(std::memory_order_relaxed);
+    const uint64_t frame_faults = faults - last_faults;
+    last_faults = faults;
+    if (first) return;
+
+    const bool stutter = frames > 120 && ms > 33.0 && ms > 2.0 * average_ms;
+    // The average follows the frame rate (about a second), not the stutters themselves.
+    average_ms = average_ms == 0.0 ? ms : average_ms + (std::min(ms, 3.0 * average_ms) - average_ms) * 0.05;
+    if (!stutter) return;
+    // Bursts (a loading zone) stay readable: at most 400 reports a run.
+    if (++reported > 400) return;
+    std::sort(deltas.begin(), deltas.end(), [](const Delta& a, const Delta& b) { return a.count > b.count; });
+    std::string sites;
+    for (size_t i = 0; i < deltas.size() && i < 6; ++i) {
+        char part[220];
+        std::snprintf(part, sizeof(part), " | %s:%d x%llu \"%.60s\"", BaseName(deltas[i].site->file),
+                      deltas[i].site->line, static_cast<unsigned long long>(deltas[i].count),
+                      deltas[i].site->format ? deltas[i].site->format : "");
+        sites += part;
+    }
+    std::fprintf(stderr, "V3 stutter: frame %.1f ms (avg %.1f) at frame %llu, %llu write faults%s\n", ms,
+                 average_ms, static_cast<unsigned long long>(frames),
+                 static_cast<unsigned long long>(frame_faults), sites.c_str());
+}
+
+} // namespace V3::Stutter

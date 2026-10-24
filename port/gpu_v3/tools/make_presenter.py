@@ -83,6 +83,13 @@ rep('''    ClearToBlack(cmdbuf, swapchain.ImageView(), swapchain.GetExtent());
     ClearToBlack(cmdbuf, swapchain.ImageView(), swapchain.GetExtent());
     TlgOverlay::Render(cmdbuf, swapchain.ImageView(), swapchain.GetExtent());''')
 
+# The stutter report (glue/v3_stutter.h): once per presented game frame.
+rep('''        DebugState.IncFlipFrameNum();
+''', '''        DebugState.IncFlipFrameNum();
+        V3::Stutter::OnPresent();
+''')
+rep('#include "tlg_overlay.h"\n', '#include "tlg_overlay.h"\n#include "v3_stutter.h"\n')
+
 # Constructor and destructor: this port's overlay instead of the fork's layers.
 rep('''    ImGui::Layer::AddLayer(Common::Singleton<Core::Devtools::Layer>::Instance());
     ImGui::Friends::Register();

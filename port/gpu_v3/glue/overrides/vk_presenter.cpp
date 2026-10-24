@@ -32,6 +32,7 @@
 #include "video_core/renderer_vulkan/vk_platform.h"
 #include "video_core/renderer_vulkan/vk_presenter.h"
 #include "tlg_overlay.h"
+#include "v3_stutter.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/texture_cache/image.h"
 
@@ -1545,6 +1546,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool hold_frame) {
         VideoCore::OnFrameBoundary();
         Common::FaultMonitor::CountPresentedFrame();
         DebugState.IncFlipFrameNum();
+        V3::Stutter::OnPresent();
     }
 }
 

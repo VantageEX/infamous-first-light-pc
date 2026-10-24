@@ -39,6 +39,7 @@
 #include "tlg_png.h"
 #include "tlg_settings.h"
 #include "v3_glue.h"
+#include "v3_stutter.h"
 
 extern "C" {
 // runtime_memory.c
@@ -273,6 +274,7 @@ bool HistogramEnabled() {
 } // namespace
 
 extern "C" int tlggpu_handle_fault(void* ucontext, void* address) {
+    V3::Stutter::g_faults.fetch_add(1, std::memory_order_relaxed);
     if (HistogramEnabled() && Common::IsWriteError(ucontext)) {
         std::scoped_lock lock{g_histogram_mutex};
         ++g_histogram[reinterpret_cast<uintptr_t>(address) >> 20];

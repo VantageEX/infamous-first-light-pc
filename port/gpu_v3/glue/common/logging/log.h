@@ -9,6 +9,7 @@
 #include <fmt/format.h>
 
 #include "common/logging/classes.h"
+#include "v3_stutter.h"
 
 namespace spdlog {
 enum class level { trace, debug, info, warn, err, critical, off };
@@ -26,8 +27,11 @@ void Setup(std::string_view);
 void Flush();
 } // namespace Common::Log
 
+// Each site counts its calls, logged or not, for the stutter report (v3_stutter.h).
 #define LOG_GENERIC(log_class, log_level, log_format, ...)                                         \
     do {                                                                                           \
+        static V3::Stutter::Site v3_log_site{__FILE__, __LINE__, log_format};                      \
+        v3_log_site.Hit();                                                                         \
         if (Common::Log::ShouldLog(log_level)) {                                                   \
             Common::Log::Write(log_class, log_level, __FILE__, __LINE__, __func__,                 \
                                fmt::format(log_format, ##__VA_ARGS__));                            \
