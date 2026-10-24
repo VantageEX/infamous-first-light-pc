@@ -10,6 +10,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <memory>
@@ -426,6 +427,18 @@ std::shared_ptr<EmulatorSettingsImpl> EmulatorSettingsImpl::GetInstance() {
     std::scoped_lock lock{s_mutex};
     if (!s_instance) {
         s_instance = std::make_shared<EmulatorSettingsImpl>();
+        // The fork's tested set (its release's user/config.json): GPU readbacks on. Without them
+        // the game reads zeros where the GPU wrote its exposure and particles (a dark city, no
+        // neon effects). TLG_READBACKS (scripts/game_defaults.py) picks the mode.
+        u32 readbacks = 2;
+        if (const char* v = std::getenv("TLG_READBACKS"); v && *v) {
+            readbacks = static_cast<u32>(std::strtoul(v, nullptr, 10));
+        }
+        s_instance->SetReadbacksMode(readbacks);
+        s_instance->SetReadbackLinearImagesEnabled(true);
+        s_instance->SetRcasEnabled(true);
+        s_instance->SetInternalScreenWidth(static_cast<u32>(V3::g_host.width));
+        s_instance->SetInternalScreenHeight(static_cast<u32>(V3::g_host.height));
     }
     return s_instance;
 }

@@ -85,8 +85,9 @@ struct ContextScope {
     ContextScope() {
         if (overlay_context) ImGui::SetCurrentContext(overlay_context);
     }
+    // Without another context (renderer v3 has none) the overlay's stays current.
     ~ContextScope() {
-        ImGui::SetCurrentContext(previous);
+        if (previous) ImGui::SetCurrentContext(previous);
     }
 };
 #else
@@ -2589,6 +2590,7 @@ bool HandleSaveEvent(const SDL_Event& event) {
 bool HandleEvent(const SDL_Event& event) {
     if (!overlay_context) return false; // before Init
     std::scoped_lock lock{imgui_mutex};
+    const ContextScope context_scope; // the input goes to the overlay's context
     if (!initialized) {
         return false;
     }

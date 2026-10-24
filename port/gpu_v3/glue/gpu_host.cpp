@@ -95,13 +95,18 @@ void MapForGpu(uint64_t address, uint64_t size, uint8_t*) {
 // port's, beside the saves (TLG_GPU_USER_DIR), so renderer v3's cache is its own.
 void SetPaths(const std::filesystem::path& user) {
     namespace FS = Common::FS;
+    // SetUserPath takes only folders that exist.
+    const auto set = [](FS::PathType type, const std::filesystem::path& path) {
+        std::error_code error;
+        std::filesystem::create_directories(path, error);
+        FS::SetUserPath(type, path);
+    };
     const auto v3 = user / "v3";
     for (int i = 0; i <= static_cast<int>(FS::PathType::CustomModulesDir); ++i) {
-        const auto type = static_cast<FS::PathType>(i);
-        FS::SetUserPath(type, v3 / std::to_string(i));
+        set(static_cast<FS::PathType>(i), v3 / std::to_string(i));
     }
-    FS::SetUserPath(FS::PathType::UserDir, v3);
-    FS::SetUserPath(FS::PathType::CacheDir, user / "cache" / "v3");
+    set(FS::PathType::UserDir, v3);
+    set(FS::PathType::CacheDir, user / "cache" / "v3");
 }
 
 // The window's thread: the window answers from its first instant while the libraries (the

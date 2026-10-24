@@ -50,6 +50,17 @@ MINGW*|MSYS*)
         cp out/gpu_v2/tlg-probe-v2.exe out/
         echo "Built $PWD/out/tlg-probe-v2.exe (renderer v2)"
     fi
+    # TLG_RENDERER_V3=1: renderer v3 (gpu_v3/README.md), linked into out/tlg-probe-v3.exe.
+    if [[ ${TLG_RENDERER_V3:-} == 1 ]]; then
+        cmake -S gpu_v3 -B out/gpu_v3 -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ >/dev/null
+        if ! ninja -C out/gpu_v3 tlg-probe-v3 > out/gpu_v3-build.log 2>&1; then
+            grep -v '^\[' out/gpu_v3-build.log | tail -60 >&2
+            echo 'Renderer v3 build failed (full log: out/gpu_v3-build.log)' >&2; exit 1
+        fi
+        cp out/gpu_v3/tlg-probe-v3.exe out/
+        echo "Built $PWD/out/tlg-probe-v3.exe (renderer v3)"
+    fi
     exit 0
     ;;
 esac
