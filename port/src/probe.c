@@ -25,6 +25,7 @@
 #include <malloc.h>
 #include <unistd.h>
 #include <signal.h>
+#include <sched.h>
 #include <ucontext.h>
 #include <fcntl.h>
 #include <dlfcn.h>
@@ -893,6 +894,25 @@ static void verbose_default(const char *name, const char *value, char *list, siz
     size_t used = strlen(list);
     snprintf(list + used, size - used, "%s%s=%s", used ? ", " : "", name, value);
 }
+/* TLG_CPU_CORES=n: the process keeps the first n cores' logical processors (two per core,
+ * as Windows and Linux number SMT siblings on Ryzen), e.g. 4 for a Steam Deck's 4 cores / 8
+ * threads. Threads made later inherit it. For measurements on a faster PC only. */
+static void apply_cpu_limit(void) {
+    const char *env=getenv("TLG_CPU_CORES");
+    int cores=env ? atoi(env) : 0;
+    if (cores<=0 || cores>32) return;
+    int logical=cores*2;
+#ifdef _WIN32
+    DWORD_PTR mask=logical>=64 ? ~(DWORD_PTR)0 : (((DWORD_PTR)1<<logical)-1);
+    int ok=SetProcessAffinityMask(GetCurrentProcess(),mask) ? 1 : 0;
+#else
+    cpu_set_t set; CPU_ZERO(&set);
+    for (int i=0;i<logical;++i) CPU_SET(i,&set);
+    int ok=sched_setaffinity(0,sizeof set,&set)==0;
+#endif
+    printf("CPU limit: %d cores (%d logical processors)%s\n",cores,logical,ok ? "" : " - failed");
+}
+
 static void apply_verbose_log(void) {
     const char *mode = getenv("TLG_VERBOSE_LOG");
     const int level = mode ? atoi(mode) : 0;
@@ -930,6 +950,7 @@ int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     alias_port_environment();
     apply_verbose_log();
+    apply_cpu_limit();
     boot_step("start");
 #ifndef _WIN32
     /* Keep host heap objects handed to the guest (thread handles, TLS) in the
