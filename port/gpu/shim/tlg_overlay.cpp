@@ -1,5 +1,7 @@
-#ifdef TLG_RENDERER_V2
-// Renderer v2 build has no perf trace (gpu/shim/tlg_perf_trace.cpp).
+// TLG_RENDERER_HOSTED: built into renderer v2 or v3 (gpu_v2, gpu_v3), whose own presenters, fixes
+// and switches stand in for this port's renderer's.
+#ifdef TLG_RENDERER_HOSTED
+// Those builds have no perf trace (gpu/shim/tlg_perf_trace.cpp).
 namespace TlgPerf {
 inline bool Enabled() { return false; }
 inline bool Mark(unsigned) { return false; }
@@ -34,7 +36,7 @@ inline bool Mark(unsigned) { return false; }
 extern TlgActorSlot tlg_actor_slots[2];
 extern "C" void runtime_restart(void); // src/probe.c: starts run.py again, ends this process
 #include "common/elf_info.h"
-#ifndef TLG_RENDERER_V2
+#ifndef TLG_RENDERER_HOSTED
 #include "common/backports.h"
 #include "shader_recompiler/recompiler_toggles.h"
 #endif
@@ -43,7 +45,7 @@ extern "C" void runtime_restart(void); // src/probe.c: starts run.py again, ends
 #include "imgui_impl_vulkan.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
-#ifndef TLG_RENDERER_V2
+#ifndef TLG_RENDERER_HOSTED
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
 #endif
 
@@ -77,7 +79,7 @@ namespace {
 // This overlay's own ImGui context: renderer v2's presenter composes the game image with ImGui
 // in its own context, so each entry point here makes this one current and restores the other.
 ImGuiContext* overlay_context = nullptr;
-#ifdef TLG_RENDERER_V2
+#ifdef TLG_RENDERER_HOSTED
 struct ContextScope {
     ImGuiContext* previous = ImGui::GetCurrentContext();
     ContextScope() {
@@ -885,11 +887,15 @@ void PerformanceTab() {
 // are only recorded in tlg.ini (bpNN=0/1, wqm=0/1, ...) and apply on the next start, when the
 // launcher turns the keys into TLG_BPnn / TLG_<NAME>. The table is iterated, so a reordered
 // backports.h still lists every entry.
-#ifdef TLG_RENDERER_V2
-// Renderer v2 has its own fixes and switches (ISS_* variables): none of this port's.
+#ifdef TLG_RENDERER_HOSTED
+// Renderers v2 and v3 have their own fixes and switches (ISS_* / SHADPS4_* variables): none of this port's.
 void FixesSection() {
     SectionTitle(TL("Fixes", "Исправления"));
+#ifdef TLG_RENDERER_V3
+    InfoRow(TL("Renderer v3", "Рендер v3"), TL("its own fixes apply", "действуют его собственные исправления"));
+#else
     InfoRow(TL("Renderer v2", "Рендер v2"), TL("its own fixes apply", "действуют его собственные исправления"));
+#endif
 }
 #else
 void FixesSection() {
@@ -2232,7 +2238,7 @@ void Init(const Vulkan::Instance& instance, vk::Format format, u32 image_count) 
     ImGuiContext* const previous_context = ImGui::GetCurrentContext();
     overlay_context = ImGui::CreateContext();
     ImGui::SetCurrentContext(overlay_context);
-#ifdef TLG_RENDERER_V2
+#ifdef TLG_RENDERER_HOSTED
     // The renderer's own context stays current for its presenter.
     struct Restore { ImGuiContext* c; ~Restore() { ImGui::SetCurrentContext(c); } } restore{previous_context};
 #else
@@ -2603,7 +2609,7 @@ bool HandleEvent(const SDL_Event& event) {
             return env && *env == '1';
         }();
         if (down && !event.key.repeat && capture_key && event.key.key == SDLK_F11) {
-#ifndef TLG_RENDERER_V2
+#ifndef TLG_RENDERER_HOSTED
             Vulkan::FrameCapture::Request();
 #endif
             return true;

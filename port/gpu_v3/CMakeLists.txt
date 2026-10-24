@@ -54,9 +54,22 @@ list(APPEND ALL ${SRC}/core/libraries/gnmdriver/gnmdriver.cpp ${SRC}/core/librar
     ${GLUE}/logging.cpp ${GLUE}/dlss_off.cpp ${GLUE}/assert.cpp)
 file(GLOB VIDEOOUT ${SRC}/core/libraries/videoout/*.cpp)
 list(APPEND ALL ${VIDEOOUT})
+# The fork's files this port replaces (glue/overrides/, each says what it changes).
+foreach(original video_core/renderer_vulkan/vk_presenter.cpp)
+    get_filename_component(name ${original} NAME)
+    list(REMOVE_ITEM ALL ${SRC}/${original})
+    list(APPEND ALL ${GLUE}/overrides/${name})
+endforeach()
+# This port's own interface (its look): the overlay, menu, settings, save dialogs, game hooks.
+set(OURS_SOURCES ${PORT}/shim/tlg_overlay.cpp ${PORT}/shim/tlg_settings.cpp
+    ${PORT}/shim/tlg_perf_stats.cpp ${PORT}/shim/tlg_png.cpp ${PORT}/shim/tlg_orbs.cpp
+    ${PORT}/shim/tlg_actors.cpp ${PORT}/shim/tlg_view.cpp)
+set(IMGUI_SOURCES ${PORT}/third_party/imgui/backends/imgui_impl_vulkan.cpp
+    ${PORT}/third_party/imgui/imgui.cpp ${PORT}/third_party/imgui/imgui_draw.cpp
+    ${PORT}/third_party/imgui/imgui_tables.cpp ${PORT}/third_party/imgui/imgui_widgets.cpp)
 
 # Windows: a static library linked into tlg-probe-v3.exe (as renderer v2's).
-add_library(issgpu3 STATIC ${ALL})
+add_library(issgpu3 STATIC ${ALL} ${OURS_SOURCES} ${IMGUI_SOURCES})
 add_dependencies(issgpu3 host_shaders)
 # glue/ first: its headers (common/logging/log.h) stand in for the fork's.
 target_include_directories(issgpu3 PRIVATE ${GLUE} ${SRC} ${HOST_SHADERS_INCLUDE}
@@ -66,7 +79,10 @@ target_include_directories(issgpu3 PRIVATE ${GLUE} ${SRC} ${HOST_SHADERS_INCLUDE
     ${PORT}/third_party/imgui ${PORT}/third_party/imgui/backends ${PORT}/third_party/xbyak
     ${PORT}/third_party/vulkan-headers/include ${PORT}/shim ${PORT}/..)
 target_compile_definitions(issgpu3 PRIVATE BOOST_ASIO_STANDALONE NDEBUG IMGUI_USER_CONFIG="imgui/imgui_config.h"
-    TLG_RENDERER_V3)
+    TLG_RENDERER_V3 TLG_RENDERER_HOSTED TLG_FONT_PATH="${PORT}/third_party/fonts/DejaVuSans.ttf")
+# Our overlay's ImGui Vulkan backend loads its functions itself (as in this port's own build).
+set_source_files_properties(${OURS_SOURCES} ${PORT}/third_party/imgui/backends/imgui_impl_vulkan.cpp
+    PROPERTIES COMPILE_DEFINITIONS "IMGUI_IMPL_VULKAN_NO_PROTOTYPES")
 # As the fork builds: AVX2 (x86-64-v3).
 target_compile_options(issgpu3 PRIVATE -O2 -g1 -march=x86-64-v3 -fdeclspec -Wno-deprecated-declarations)
 target_link_libraries(issgpu3 PUBLIC Vulkan::Vulkan fmt::fmt Boost::headers tsl::robin_map PkgConfig::XXHASH

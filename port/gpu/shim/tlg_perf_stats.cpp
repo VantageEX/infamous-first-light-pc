@@ -113,7 +113,7 @@ void Run(const Vulkan::Instance* instance) {
         }
         if (instance->CanReportMemoryUsage()) {
             s.vram_used_gb = double(instance->GetDeviceMemoryUsage()) / GiB;
-            #ifdef TLG_RENDERER_V2
+            #ifdef TLG_RENDERER_HOSTED
             s.vram_total_gb = double(instance->GetTotalMemoryBudget()) / GiB;
 #else
             s.vram_total_gb = double(instance->GetDeviceMemoryBudgetNow()) / GiB;
@@ -208,7 +208,7 @@ void Run(const Vulkan::Instance* instance) {
         if (sysinfo(&info) == 0) s.ram_total_gb = double(info.totalram) * double(info.mem_unit) / GiB;
         if (instance->CanReportMemoryUsage()) {
             s.vram_used_gb = double(instance->GetDeviceMemoryUsage()) / GiB;
-#ifdef TLG_RENDERER_V2
+#ifdef TLG_RENDERER_HOSTED
             s.vram_total_gb = double(instance->GetTotalMemoryBudget()) / GiB;
 #else
             s.vram_total_gb = double(instance->GetDeviceMemoryBudgetNow()) / GiB;

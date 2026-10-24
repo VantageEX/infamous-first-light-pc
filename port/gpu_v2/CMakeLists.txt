@@ -178,7 +178,7 @@ endif()
 # Our overlay's ImGui Vulkan backend loads its functions itself (as in this port's own build).
 set_source_files_properties(${OURS_SOURCES} ${PORT}/third_party/imgui/backends/imgui_impl_vulkan.cpp
     PROPERTIES COMPILE_DEFINITIONS "IMGUI_IMPL_VULKAN_NO_PROTOTYPES")
-target_compile_definitions(issgpu PRIVATE TLG_RENDERER_V2
+target_compile_definitions(issgpu PRIVATE TLG_RENDERER_V2 TLG_RENDERER_HOSTED
     TLG_FONT_PATH="${PORT}/third_party/fonts/DejaVuSans.ttf")
 
 # Windows: tlg-probe-v2.exe, this port's loader and runtime (as port/gpu/CMakeLists.txt builds
