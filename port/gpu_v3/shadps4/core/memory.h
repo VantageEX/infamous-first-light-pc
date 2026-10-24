@@ -176,6 +176,10 @@ public:
     void SetRasterizer(Vulkan::Rasterizer* rasterizer_) {
         rasterizer = rasterizer_;
     }
+    // This port (renderer v3): the runtime's mapping hooks reach the rasterizer (glue/gpu_host.cpp).
+    Vulkan::Rasterizer* GetRasterizer() const {
+        return rasterizer;
+    }
 
     AddressSpace& GetAddressSpace() {
         return impl;

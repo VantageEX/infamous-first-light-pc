@@ -77,7 +77,7 @@ target_include_directories(issgpu3 PRIVATE ${GLUE} ${SRC} ${HOST_SHADERS_INCLUDE
     ${PORT}/third_party/gcn/include ${PORT}/third_party/half/include
     ${PORT}/third_party/magic_enum/include ${PORT}/third_party/magic_enum/include/magic_enum
     ${PORT}/third_party/imgui ${PORT}/third_party/imgui/backends ${PORT}/third_party/xbyak
-    ${PORT}/third_party/vulkan-headers/include ${PORT}/shim ${PORT}/..)
+    ${PORT}/third_party/vulkan-headers/include ${PORT}/shim ${PORT} ${PORT}/..)
 target_compile_definitions(issgpu3 PRIVATE BOOST_ASIO_STANDALONE NDEBUG IMGUI_USER_CONFIG="imgui/imgui_config.h"
     TLG_RENDERER_V3 TLG_RENDERER_HOSTED TLG_FONT_PATH="${PORT}/third_party/fonts/DejaVuSans.ttf")
 # Our overlay's ImGui Vulkan backend loads its functions itself (as in this port's own build).
@@ -91,4 +91,31 @@ if (WIN32)
     target_compile_definitions(issgpu3 PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0A00 WINVER=0x0A00
         NTDDI_VERSION=0x0A000006)
     target_compile_options(issgpu3 PRIVATE -include ${CMAKE_CURRENT_SOURCE_DIR}/../gpu_v2/compat/mingw.h)
+endif()
+target_sources(issgpu3 PRIVATE ${GLUE}/gpu_host.cpp ${GLUE}/window.cpp)
+
+# Windows: tlg-probe-v3.exe, this port's loader and runtime (as port/gpu/CMakeLists.txt builds
+# tlg-probe.exe) linked with this renderer.
+if (WIN32)
+    enable_language(RC)
+    set(RT ${PORT}/..)
+    file(GLOB V3_RUNTIME CONFIGURE_DEPENDS ${RT}/src/runtime*.c)
+    file(GLOB V3_ATRAC9 CONFIGURE_DEPENDS ${RT}/third_party/LibAtrac9/C/src/*.c)
+    add_library(atrac9_v3 STATIC ${V3_ATRAC9})
+    target_compile_options(atrac9_v3 PRIVATE -w)
+    set_target_properties(atrac9_v3 PROPERTIES C_STANDARD 99 INTERPROCEDURAL_OPTIMIZATION OFF)
+    add_executable(tlg-probe-v3 ${RT}/src/probe.c ${V3_RUNTIME} ${RT}/src/compat_win.c ${RT}/src/cpu_check.c
+        ${RT}/src/vulkan_smoke.c ${RT}/src/isa_rewrite.c ${RT}/src/isa_emulate.c
+        ${RT}/packaging/windows/tlg-probe.rc)
+    set_source_files_properties(${RT}/src/isa_emulate.c PROPERTIES COMPILE_OPTIONS "-mgeneral-regs-only")
+    set_target_properties(tlg-probe-v3 PROPERTIES C_STANDARD 11 C_EXTENSIONS OFF)
+    if (DEFINED ENV{TLG_BUILD_COMMIT})
+        target_compile_definitions(tlg-probe-v3 PRIVATE TLG_BUILD_COMMIT="$ENV{TLG_BUILD_COMMIT}")
+    endif()
+    target_include_directories(tlg-probe-v3 PRIVATE ${RT} ${RT}/src)
+    pkg_check_modules(FREETYPE REQUIRED IMPORTED_TARGET freetype2)
+    pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET libavformat libavcodec libavutil libswscale libswresample)
+    target_link_libraries(tlg-probe-v3 PRIVATE issgpu3 atrac9_v3 PkgConfig::FREETYPE PkgConfig::FFMPEG
+        onecore bcrypt ws2_32 ntdll synchronization winmm pdh psapi ole32 dbghelp -pthread)
+    target_link_options(tlg-probe-v3 PRIVATE -Wl,--error-limit=0 -Wl,--disable-high-entropy-va "SHELL:-Xlinker --stack -Xlinker 16777216,16777216")
 endif()
