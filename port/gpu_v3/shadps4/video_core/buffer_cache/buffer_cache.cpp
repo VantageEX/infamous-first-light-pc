@@ -1297,11 +1297,17 @@ void BufferCache::InvalidateMemory(VAddr device_addr, u64 size, InvalidateOrigin
     u64 block_bytes = 0;
     VAddr settle_addr = device_addr;
     u64 settle_size = size;
-    if (heap_block.bytes != 0 && origin == InvalidateOrigin::GuestWriteFault &&
-        ((device_addr >= heap_block.lo && device_addr + size <= heap_block.hi) ||
-         (device_addr >= heap_block.lo2 && device_addr + size <= heap_block.hi2) ||
-         (g_arena_block && device_addr >= g_arena_lo.load(std::memory_order_relaxed) &&
-          device_addr + size <= g_arena_hi.load(std::memory_order_relaxed)))) {
+    // This port: the second span widens the CP's own write faults too. First Light's DMA copies
+    // into its particle arena are small and many (~4,000 pages a frame, one fault each); the
+    // block is only widened with no GPU-modified page in it, and the CP's write faults skip
+    // the settle (SHADPS4_FAULT_WRITE_SKIP_SETTLE=1, defaults.env), as the guest's do.
+    const bool in_second_span = device_addr >= heap_block.lo2 && device_addr + size <= heap_block.hi2;
+    if (heap_block.bytes != 0 &&
+        ((origin == InvalidateOrigin::GuestWriteFault &&
+          ((device_addr >= heap_block.lo && device_addr + size <= heap_block.hi) || in_second_span ||
+           (g_arena_block && device_addr >= g_arena_lo.load(std::memory_order_relaxed) &&
+            device_addr + size <= g_arena_hi.load(std::memory_order_relaxed)))) ||
+         (origin == InvalidateOrigin::CpWriteFault && g_fault_write_skip_settle && in_second_span))) {
         const VAddr block = Common::AlignDown(device_addr, heap_block.bytes);
         const bool in_heap = device_addr >= heap_block.lo && device_addr + size <= heap_block.hi;
         const bool in_second = device_addr >= heap_block.lo2 && device_addr + size <= heap_block.hi2;
