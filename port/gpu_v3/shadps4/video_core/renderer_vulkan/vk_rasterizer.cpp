@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "video_core/texture_cache/tex_table.h"
+#include "video_core/guest_layout.h"
 #include "common/memory_patcher.h"
 #include "common/thread.h"
 #include "common/debug.h"
@@ -271,8 +272,8 @@ const bool g_repeat_heap = [] {
     const char* v = std::getenv("SHADPS4_DRAW_REPEAT_HEAP");
     return v && v[0] == '1';
 }();
-constexpr VAddr RepeatHeapLo = 0x248000000ULL;
-constexpr VAddr RepeatHeapHi = 0x24c000000ULL;
+constexpr VAddr RepeatHeapLo = VideoCore::GuestAddr(0x248000000ULL);
+constexpr VAddr RepeatHeapHi = VideoCore::GuestAddr(0x24c000000ULL);
 // DRAW_REPEAT=2 diagnostic: which binding of the full path recorded commands (a skip omits them).
 thread_local std::string g_rp_seq_who;
 
@@ -300,8 +301,8 @@ const bool g_static_key_census = [] {
     const char* v = std::getenv("SHADPS4_STATIC_KEY_CENSUS");
     return v && v[0] == '1';
 }();
-constexpr VAddr HeapLo = 0x248000000ULL;
-constexpr VAddr HeapHi = 0x24c000000ULL;
+constexpr VAddr HeapLo = VideoCore::GuestAddr(0x248000000ULL);
+constexpr VAddr HeapHi = VideoCore::GuestAddr(0x24c000000ULL);
 struct StaticKeyRec {
     u64 frame = 0;
     u64 clock = 0; // granule clock when stored (before this draw's resolution)

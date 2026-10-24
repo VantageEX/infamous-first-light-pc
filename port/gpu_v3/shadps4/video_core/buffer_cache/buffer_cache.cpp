@@ -14,6 +14,7 @@
 #include <immintrin.h>
 #include <unordered_map>
 #include "common/alignment.h"
+#include "video_core/guest_layout.h"
 #include "common/buffer_sample_probe.h"
 #include "common/debug.h"
 #include "common/fault_monitor.h"
@@ -1169,8 +1170,8 @@ void PS4_SYSV_ABI ParticleArenaDiscardHook() {
     if (g_lane_frame_scope) {
         // q60: the end-of-frame label's value the frame fence has seen (>= F-2 for this chain F).
         u32 label = 0;
-        if (!Core::Memory::Instance()->TryReadBacking(0x248000000ULL, reinterpret_cast<u8*>(&label), sizeof(label))) {
-            label = *reinterpret_cast<const volatile u32*>(0x248000000ULL);
+        if (!Core::Memory::Instance()->TryReadBacking(VideoCore::GuestAddr(0x248000000ULL), reinterpret_cast<u8*>(&label), sizeof(label))) {
+            label = *reinterpret_cast<const volatile u32*>(VideoCore::GuestAddr(0x248000000ULL));
         }
         g_lane_frame_label.store(u64{label} + 1, std::memory_order_release);
     }
@@ -1252,7 +1253,7 @@ void BufferCache::InvalidateMemory(VAddr device_addr, u64 size, InvalidateOrigin
     // fault must never start a download for bytes it did not touch).
     struct HeapBlock {
         u64 bytes = 0;
-        VAddr lo = 0x248000000ULL, hi = 0x269e00000ULL;
+        VAddr lo = VideoCore::GuestAddr(0x248000000ULL), hi = VideoCore::GuestAddr(0x269e00000ULL);
     };
     static const HeapBlock heap_block = [] {
         HeapBlock c{};
@@ -3414,8 +3415,8 @@ std::pair<u8, u64> BufferCache::NewestMainWriterTag(std::span<const FaultCopy> c
 /// unfinished and blocked by an unfinished main writer (by kind and pipeline), or ASC path taken.
 void BufferCache::CensusCtrlJob(std::span<const FaultCopy> copies, u64 tick, u64 asc_producer,
                                 bool asc_done) {
-    if (copies.empty() || copies.front().addr < 0x270000000ULL ||
-        copies.front().addr >= 0x270200000ULL) {
+    if (copies.empty() || copies.front().addr < VideoCore::GuestAddr(0x270000000ULL) ||
+        copies.front().addr >= VideoCore::GuestAddr(0x270200000ULL)) {
         return;
     }
     struct Census {
@@ -3470,8 +3471,8 @@ void BufferCache::CensusAscBinding(BufferId buffer_id, VAddr addr, u64 size, boo
     static std::unordered_map<u32, Entry> by_buffer;
     static u64 bindings = 0, in_texel_span = 0, written_in_texel_span = 0;
     ++bindings;
-    constexpr VAddr TexelLo = 0x248002000ULL;
-    constexpr VAddr TexelHi = 0x248002000ULL + 0x21dfe000ULL;
+    constexpr VAddr TexelLo = VideoCore::GuestAddr(0x248002000ULL);
+    constexpr VAddr TexelHi = VideoCore::GuestAddr(0x248002000ULL) + 0x21dfe000ULL;
     if (addr < TexelHi && TexelLo < addr + size) {
         ++in_texel_span;
         written_in_texel_span += written;

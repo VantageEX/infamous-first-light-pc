@@ -3,7 +3,9 @@
 // (src/runtime_*.c) calls the tlggpu_* functions; they start the fork's video core as its
 // emulator would (the GnmDriver/VideoOut libraries make the presenter and the rasterizer) over the
 // runtime's memory (bridge.cpp), and hand it this port's window, overlay and save dialogs.
+#include <algorithm>
 #include <atomic>
+#include <unordered_map>
 #include <chrono>
 #include <condition_variable>
 #include <cstdio>
@@ -23,6 +25,7 @@
 #include "common/fault_monitor.h"
 #include "common/memory_patcher.h"
 #include "common/path_util.h"
+#include "common/signal_context.h"
 #include "common/thread.h"
 #include "common/types.h"
 #include "core/debug_state.h"
@@ -236,7 +239,43 @@ extern "C" uintptr_t tlggpu_resolve(const char* scoped_nid) {
     return 0;
 }
 
+// TLG_V3_FAULT_HISTOGRAM=1: the guest's write faults counted per 1 MiB of address space, the
+// busiest printed every 15 s (where the game's per-frame heap lies in this runtime's layout).
+namespace {
+std::mutex g_histogram_mutex;
+std::unordered_map<uint64_t, uint64_t> g_histogram;
+bool HistogramEnabled() {
+    static const bool on = [] {
+        const char* v = std::getenv("TLG_V3_FAULT_HISTOGRAM");
+        if (!(v && v[0] == '1')) return false;
+        std::thread([] {
+            for (;;) {
+                std::this_thread::sleep_for(std::chrono::seconds(15));
+                std::vector<std::pair<uint64_t, uint64_t>> top;
+                {
+                    std::scoped_lock lock{g_histogram_mutex};
+                    top.assign(g_histogram.begin(), g_histogram.end());
+                    g_histogram.clear();
+                }
+                std::sort(top.begin(), top.end(), [](auto& a, auto& b) { return a.second > b.second; });
+                std::string line;
+                for (size_t i = 0; i < top.size() && i < 16; ++i) {
+                    line += fmt::format(" {:#x}:{}", top[i].first << 20, top[i].second);
+                }
+                std::fprintf(stderr, "V3 write faults per MiB (15 s):%s\n", line.c_str());
+            }
+        }).detach();
+        return true;
+    }();
+    return on;
+}
+} // namespace
+
 extern "C" int tlggpu_handle_fault(void* ucontext, void* address) {
+    if (HistogramEnabled() && Common::IsWriteError(ucontext)) {
+        std::scoped_lock lock{g_histogram_mutex};
+        ++g_histogram[reinterpret_cast<uintptr_t>(address) >> 20];
+    }
     return Core::Signals::Instance()->DispatchAccessViolation(ucontext, address) ? 1 : 0;
 }
 

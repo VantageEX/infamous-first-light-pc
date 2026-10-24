@@ -18,6 +18,7 @@
 #include <boost/preprocessor/stringize.hpp>
 
 #include "video_core/texture_cache/tex_table.h"
+#include "video_core/guest_layout.h"
 #include "common/assert.h"
 #include "common/debug.h"
 #include "common/decoder.h"
@@ -5878,7 +5879,7 @@ void Liverpool::ExecuteRecordImpl(const CpSplit::RecordHeader& record) {
                     if (VideoCore::g_lane_frame_scope && op == PM4ItOpcode::EventWriteEop) {
                         // q60: the end-of-frame label's value -> its main tick.
                         const auto* eop = reinterpret_cast<const PM4CmdEventWriteEop*>(h);
-                        if (reinterpret_cast<u64>(eop->Address<u32>()) == 0x248000000ULL) {
+                        if (reinterpret_cast<u64>(eop->Address<u32>()) == VideoCore::GuestAddr(0x248000000ULL)) {
                             VideoCore::NoteFrameEndLabel(eop->DataDWord(), sch.CurrentTick());
                         }
                     }
