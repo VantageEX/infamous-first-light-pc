@@ -20,6 +20,7 @@
 #include <SDL3/SDL.h>
 #include "tlggpu.h"
 #include "common/elf_info.h"
+#include "common/fault_monitor.h"
 #include "common/memory_patcher.h"
 #include "common/path_util.h"
 #include "common/thread.h"
@@ -129,6 +130,9 @@ void WindowThread() {
                 Libraries::VideoOut::RegisterLib(&g_resolver);
                 // The mappings made before the rasterizer existed.
                 runtime_memory_visit(MapForGpu);
+                // The fork's warm-up screen is over (its steps fed the loading screen).
+                TlgOverlay::SetLoadingCompile(false);
+                TlgOverlay::SetLoading(false, 0, 0);
                 // This port's first-start shader compilation (the job file), before the game.
                 V3::PrecompileJobs();
                 init_state.store(1, std::memory_order_release);
@@ -194,6 +198,8 @@ extern "C" int tlggpu_init(const TlgGpuConfig* config) {
     MemoryPatcher::g_game_serial = host.serial;
     Core::Emulator::Configure();
     SetPaths(std::filesystem::u8path(host.user_dir));
+    // The fork's frame and fault statistics, every 15 s to the log and a CSV (its LogDir).
+    Common::FaultMonitor::Start();
     // Mappings made from now on reach the rasterizer once it exists (WindowThread replays the
     // earlier ones).
     runtime_memory_set_gpu_hooks(

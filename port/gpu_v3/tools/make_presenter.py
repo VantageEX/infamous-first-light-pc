@@ -66,6 +66,23 @@ rep('''    ImGui::Core::Render(cmdbuf, swapchain.ImageView(), swapchain.GetExten
     const vk::ImageMemoryBarrier to_present{''')
 rep('    ImGui::Core::TextureManager::NotePresented();\n', '', 2)
 
+# The boot screen shows the fork's warm-up (its pipeline cache, read while the rasterizer is
+# built) through this port's loading screen: the overlay starts before the rasterizer, and each
+# boot frame hands it the step's progress (one_time: the first-start preparation).
+rep('''      rasterizer{(g_booting_presenter = this,
+                  std::make_unique<Rasterizer>(instance, draw_scheduler, liverpool))},''',
+    '''      rasterizer{(g_booting_presenter = this,
+                  TlgOverlay::Init(instance, swapchain.GetSurfaceFormat().format, 8),
+                  std::make_unique<Rasterizer>(instance, draw_scheduler, liverpool))},''')
+rep('''    ClearToBlack(cmdbuf, swapchain.ImageView(), swapchain.GetExtent());
+    TlgOverlay::Render(cmdbuf, swapchain.ImageView(), swapchain.GetExtent());''',
+    '''    if (!headline.empty()) {
+        TlgOverlay::SetLoadingCompile(one_time);
+        TlgOverlay::SetLoading(true, static_cast<u32>(std::clamp(fraction, 0.0f, 1.0f) * 100.0f), 100);
+    }
+    ClearToBlack(cmdbuf, swapchain.ImageView(), swapchain.GetExtent());
+    TlgOverlay::Render(cmdbuf, swapchain.ImageView(), swapchain.GetExtent());''')
+
 # Constructor and destructor: this port's overlay instead of the fork's layers.
 rep('''    ImGui::Layer::AddLayer(Common::Singleton<Core::Devtools::Layer>::Instance());
     ImGui::Friends::Register();

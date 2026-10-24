@@ -670,6 +670,10 @@ void Presenter::DrawBootScreen(std::string_view headline, std::string_view detai
     cmdbuf.pipelineBarrier(vk::PipelineStageFlagBits::eColorAttachmentOutput,
                            vk::PipelineStageFlagBits::eColorAttachmentOutput,
                            vk::DependencyFlagBits::eByRegion, {}, {}, to_attachment);
+    if (!headline.empty()) {
+        TlgOverlay::SetLoadingCompile(one_time);
+        TlgOverlay::SetLoading(true, static_cast<u32>(std::clamp(fraction, 0.0f, 1.0f) * 100.0f), 100);
+    }
     ClearToBlack(cmdbuf, swapchain.ImageView(), swapchain.GetExtent());
     TlgOverlay::Render(cmdbuf, swapchain.ImageView(), swapchain.GetExtent());
     const vk::ImageMemoryBarrier to_present{
@@ -710,6 +714,7 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
       swapchain{instance, window},
       // SHADPS4_BOOT_SCREEN: WarmUp (inside the Rasterizer) may draw boot frames through `this`.
       rasterizer{(g_booting_presenter = this,
+                  TlgOverlay::Init(instance, swapchain.GetSurfaceFormat().format, 8),
                   std::make_unique<Rasterizer>(instance, draw_scheduler, liverpool))},
       texture_cache{rasterizer->GetTextureCache()} {
     g_booting_presenter = nullptr;
