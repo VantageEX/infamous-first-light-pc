@@ -37,6 +37,7 @@
 #include "video_core/renderer_vulkan/vk_graphics_pipeline.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_memory_budget.h"
+#include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/texture_cache/texture_cache.h"
 
@@ -5923,12 +5924,32 @@ void BufferCache::BindIndexBuffer(
     });
 }
 
+// This port (renderer v3): the CPU paths of FillBuffer and CopyBuffer write guest memory on the
+// CP thread, and each protected 4 KB page took its own write fault there (CpWriteFault: no heap
+// widening). First Light's particle arena half is ~16 MB of DMA a frame, ~4,000 faults, a 50-100 ms
+// frame. A large write invalidates its range in one call first, as its faults would, page by page,
+// at the same point (no page of it is GPU-modified here). TLG_V3_CP_BULK_WRITE=0: off.
+static void InvalidateBeforeCpWrite(VAddr address, u64 size) {
+    static const bool on = [] {
+        const char* v = std::getenv("TLG_V3_CP_BULK_WRITE");
+        return !(v && v[0] == '0');
+    }();
+    constexpr u64 MinBytes = 16 * 1024;
+    if (!on || size < MinBytes) {
+        return;
+    }
+    if (auto* rasterizer = Core::Memory::Instance()->GetRasterizer()) {
+        rasterizer->InvalidateMemory(address, size, InvalidateOrigin::CpWriteFault);
+    }
+}
+
 void BufferCache::FillBuffer(VAddr address, u32 num_bytes, u32 value, bool is_gds) {
     WriterTagScope census_tag{*this, 8};
     ASSERT_MSG(address % 4 == 0, "GDS offset must be dword aligned");
     if (!is_gds) {
         texture_cache.ClearMeta(address);
         if (!IsRegionGpuModified(address, num_bytes)) {
+            InvalidateBeforeCpWrite(address, num_bytes);
             u32* buffer = std::bit_cast<u32*>(address);
             std::fill(buffer, buffer + num_bytes / sizeof(u32), value);
             memory_tracker->ClearRecent(address, num_bytes);
@@ -5965,6 +5986,7 @@ void BufferCache::CopyBuffer(VAddr dst, VAddr src, u32 num_bytes, bool dst_gds, 
         if (!src_gds && !IsRegionGpuModified(src, num_bytes) &&
             !texture_cache.FindImageFromRange(src, num_bytes)) {
             // Both buffers were not transferred to GPU yet. Can safely copy in host memory.
+            InvalidateBeforeCpWrite(dst, num_bytes);
             memcpy(std::bit_cast<void*>(dst), std::bit_cast<void*>(src), num_bytes);
             memory_tracker->ClearRecent(dst, num_bytes);
             CoherentCpWrite(dst, num_bytes); // SHADPS4_NATIVE_COHERENT: as FillBuffer's CPU path.
