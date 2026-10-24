@@ -440,8 +440,19 @@ std::shared_ptr<EmulatorSettingsImpl> EmulatorSettingsImpl::GetInstance() {
         // The on-disk pipeline cache (off by default in the fork's code, on in its config):
         // without it every start compiles every pipeline again while the game plays.
         s_instance->SetPipelineCacheEnabled(true);
-        s_instance->SetInternalScreenWidth(static_cast<u32>(V3::g_host.width));
-        s_instance->SetInternalScreenHeight(static_cast<u32>(V3::g_host.height));
+        // The resolution the game is told (sceVideoOut) and renders at; the presenter scales
+        // the frame to the window. TLG_V3_INTERNAL_RES=WxH overrides the output resolution
+        // (the fork's config: 1280x720, upscaled by DLSS).
+        u32 width = static_cast<u32>(V3::g_host.width), height = static_cast<u32>(V3::g_host.height);
+        if (const char* res = std::getenv("TLG_V3_INTERNAL_RES")) {
+            unsigned w = 0, h = 0;
+            if (std::sscanf(res, "%ux%u", &w, &h) == 2 && w >= 640 && h >= 360) {
+                width = w;
+                height = h;
+            }
+        }
+        s_instance->SetInternalScreenWidth(width);
+        s_instance->SetInternalScreenHeight(height);
     }
     return s_instance;
 }
