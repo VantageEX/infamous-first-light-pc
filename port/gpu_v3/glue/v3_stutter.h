@@ -29,6 +29,9 @@ extern std::atomic<uint64_t> g_faults;
 /// A guest fault's address, for the report's busiest MiB of the frame (tlggpu_handle_fault): a read
 /// or a write, and whether the command processor's own thread took it.
 void RecordFault(uintptr_t address, bool write, bool cp_thread);
+/// Every 16th write fault on the command processor's thread: its call stack, the frame's most
+/// common one printed with the report (module+offset, for llvm-symbolizer).
+void RecordCpWriteStack();
 
 /// The presenter, once per presented game frame (glue/overrides/vk_presenter.cpp).
 void OnPresent();

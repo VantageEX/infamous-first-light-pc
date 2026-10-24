@@ -277,6 +277,7 @@ extern "C" int tlggpu_handle_fault(void* ucontext, void* address) {
     V3::Stutter::g_faults.fetch_add(1, std::memory_order_relaxed);
     const bool write = Common::IsWriteError(ucontext);
     V3::Stutter::RecordFault(reinterpret_cast<uintptr_t>(address), write, Common::FaultMonitor::t_is_cp_thread);
+    if (write && Common::FaultMonitor::t_is_cp_thread) V3::Stutter::RecordCpWriteStack();
     if (HistogramEnabled() && write) {
         std::scoped_lock lock{g_histogram_mutex};
         ++g_histogram[reinterpret_cast<uintptr_t>(address) >> 20];

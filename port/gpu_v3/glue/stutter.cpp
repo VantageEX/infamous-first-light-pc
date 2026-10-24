@@ -10,6 +10,11 @@
 #include <unordered_map>
 #include <vector>
 
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
 #include "common/fault_monitor.h"
 
 #include "v3_stutter.h"
@@ -26,6 +31,29 @@ struct RegionFaults {
 std::unordered_map<uint64_t, RegionFaults> g_frame_faults; // MiB -> faults this frame
 std::mutex g_sites_mutex;
 std::vector<Site*> g_sites;
+struct Stack {
+    uint32_t count;
+    uint16_t depth;
+    void* frames[20];
+};
+std::unordered_map<ULONG, Stack> g_frame_stacks; // under g_faults_mutex; key: the frames' hash
+
+const char* BaseName(const char* path);
+
+// "module+0xoffset", the module's file name only.
+std::string FrameName(void* address) {
+    HMODULE module = nullptr;
+    char path[MAX_PATH] = "?";
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           static_cast<LPCSTR>(address), &module)) {
+        GetModuleFileNameA(module, path, sizeof(path));
+    }
+    char out[MAX_PATH + 32];
+    std::snprintf(out, sizeof(out), "%s+%#llx", BaseName(path),
+                  static_cast<unsigned long long>(reinterpret_cast<uintptr_t>(address) -
+                                                  reinterpret_cast<uintptr_t>(module)));
+    return out;
+}
 
 bool Enabled() {
     static const bool on = [] {
@@ -49,6 +77,18 @@ void RecordFault(uintptr_t address, bool write, bool cp_thread) {
     RegionFaults& region = g_frame_faults[address >> 20];
     ++(write ? region.writes : region.reads);
     region.cp += cp_thread;
+}
+
+void RecordCpWriteStack() {
+    if (!Enabled()) return;
+    static std::atomic<uint32_t> calls{0};
+    if (calls.fetch_add(1, std::memory_order_relaxed) % 16 != 0) return;
+    Stack stack{};
+    ULONG hash = 0;
+    stack.depth = RtlCaptureStackBackTrace(0, 20, stack.frames, &hash);
+    std::scoped_lock lock{g_faults_mutex};
+    auto [it, inserted] = g_frame_stacks.try_emplace(hash, stack);
+    ++it->second.count;
 }
 
 void Site::Register(Site* site) {
@@ -87,9 +127,11 @@ void OnPresent() {
     const uint64_t frame_faults = faults - last_faults;
     last_faults = faults;
     std::unordered_map<uint64_t, RegionFaults> regions;
+    std::unordered_map<ULONG, Stack> stacks;
     {
         std::scoped_lock lock{g_faults_mutex};
         regions.swap(g_frame_faults);
+        stacks.swap(g_frame_stacks);
     }
     // The heap's write faults widened to their block or kept to one page (GPU-modified block).
     static uint64_t last_widened = 0, last_kept = 0;
@@ -135,6 +177,17 @@ void OnPresent() {
                  ms, average_ms, static_cast<unsigned long long>(frames), static_cast<unsigned long long>(frame_faults),
                  static_cast<unsigned long long>(frame_widened), static_cast<unsigned long long>(frame_kept),
                  where.c_str(), sites.c_str());
+    // The command processor's most common write-fault stack this frame (sampled 1 in 16).
+    const Stack* top = nullptr;
+    for (const auto& [hash, stack] : stacks) {
+        if (!top || stack.count > top->count) top = &stack;
+    }
+    if (top && top->count >= 4) {
+        std::string frames;
+        for (uint16_t i = 0; i < top->depth; ++i) frames += " " + FrameName(top->frames[i]);
+        std::fprintf(stderr, "V3 stutter: CP write-fault stack x%u of %zu:%s\n", top->count * 16, stacks.size(),
+                     frames.c_str());
+    }
 }
 
 } // namespace V3::Stutter
