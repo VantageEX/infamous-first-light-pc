@@ -2590,7 +2590,12 @@ bool HandleSaveEvent(const SDL_Event& event) {
 bool HandleEvent(const SDL_Event& event) {
     if (!overlay_context) return false; // before Init
     std::scoped_lock lock{imgui_mutex};
-    const ContextScope context_scope; // the input goes to the overlay's context
+#ifdef TLG_RENDERER_V3
+    // Renderer v3 has no ImGui context of its own: the input goes to the overlay's. Not in v2:
+    // ImGui's current context is one for the process, and v2's present thread draws its own
+    // context's frame meanwhile (switching it here broke v2's NewFrame: the font atlas assert).
+    const ContextScope context_scope;
+#endif
     if (!initialized) {
         return false;
     }
