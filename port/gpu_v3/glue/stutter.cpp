@@ -7,7 +7,10 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
+
+#include "common/fault_monitor.h"
 
 #include "v3_stutter.h"
 
@@ -16,6 +19,8 @@ namespace V3::Stutter {
 std::atomic<uint64_t> g_faults{0};
 
 namespace {
+std::mutex g_faults_mutex;
+std::unordered_map<uint64_t, uint32_t> g_frame_faults; // MiB -> faults this frame
 std::mutex g_sites_mutex;
 std::vector<Site*> g_sites;
 
@@ -34,6 +39,12 @@ const char* BaseName(const char* path) {
     return slash ? slash + 1 : path;
 }
 } // namespace
+
+void RecordFault(uintptr_t address) {
+    if (!Enabled()) return;
+    std::scoped_lock lock{g_faults_mutex};
+    ++g_frame_faults[address >> 20];
+}
 
 void Site::Register(Site* site) {
     std::scoped_lock lock{g_sites_mutex};
@@ -70,6 +81,18 @@ void OnPresent() {
     const uint64_t faults = g_faults.load(std::memory_order_relaxed);
     const uint64_t frame_faults = faults - last_faults;
     last_faults = faults;
+    std::unordered_map<uint64_t, uint32_t> regions;
+    {
+        std::scoped_lock lock{g_faults_mutex};
+        regions.swap(g_frame_faults);
+    }
+    // The heap's write faults widened to their block or kept to one page (GPU-modified block).
+    static uint64_t last_widened = 0, last_kept = 0;
+    const uint64_t widened = Common::FaultMonitor::heap_block_widened.load(std::memory_order_relaxed);
+    const uint64_t kept = Common::FaultMonitor::heap_block_kept.load(std::memory_order_relaxed);
+    const uint64_t frame_widened = widened - last_widened, frame_kept = kept - last_kept;
+    last_widened = widened;
+    last_kept = kept;
     if (first) return;
 
     const bool stutter = frames > 120 && ms > 33.0 && ms > 2.0 * average_ms;
@@ -87,9 +110,21 @@ void OnPresent() {
                       deltas[i].site->format ? deltas[i].site->format : "");
         sites += part;
     }
-    std::fprintf(stderr, "V3 stutter: frame %.1f ms (avg %.1f) at frame %llu, %llu write faults%s\n", ms,
-                 average_ms, static_cast<unsigned long long>(frames),
-                 static_cast<unsigned long long>(frame_faults), sites.c_str());
+    std::vector<std::pair<uint64_t, uint32_t>> busiest(regions.begin(), regions.end());
+    std::sort(busiest.begin(), busiest.end(), [](const auto& a, const auto& b) { return a.second > b.second; });
+    std::string where;
+    for (size_t i = 0; i < busiest.size() && i < 5; ++i) {
+        char part[48];
+        std::snprintf(part, sizeof(part), " %#llx:%u", static_cast<unsigned long long>(busiest[i].first << 20),
+                      busiest[i].second);
+        where += part;
+    }
+    std::fprintf(stderr,
+                 "V3 stutter: frame %.1f ms (avg %.1f) at frame %llu, %llu faults (heap widened %llu, kept %llu;"
+                 " MiB:%s)%s\n",
+                 ms, average_ms, static_cast<unsigned long long>(frames), static_cast<unsigned long long>(frame_faults),
+                 static_cast<unsigned long long>(frame_widened), static_cast<unsigned long long>(frame_kept),
+                 where.c_str(), sites.c_str());
 }
 
 } // namespace V3::Stutter

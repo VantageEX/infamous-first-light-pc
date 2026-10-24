@@ -275,6 +275,7 @@ bool HistogramEnabled() {
 
 extern "C" int tlggpu_handle_fault(void* ucontext, void* address) {
     V3::Stutter::g_faults.fetch_add(1, std::memory_order_relaxed);
+    V3::Stutter::RecordFault(reinterpret_cast<uintptr_t>(address));
     if (HistogramEnabled() && Common::IsWriteError(ucontext)) {
         std::scoped_lock lock{g_histogram_mutex};
         ++g_histogram[reinterpret_cast<uintptr_t>(address) >> 20];
