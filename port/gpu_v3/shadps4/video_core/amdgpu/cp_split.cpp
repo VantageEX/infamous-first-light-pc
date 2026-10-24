@@ -826,6 +826,7 @@ void Channel::WakeBack() {
 }
 
 void Channel::MaybeLog() {
+    // This port: the window and its drains are warnings, shown at renderer v3's log level.
     if ((++log_calls & 1023) != 0 || quiet) {
         return;
     }
@@ -850,7 +851,7 @@ void Channel::MaybeLog() {
         }
     }
     const u64 idle = back_idle_ticks.exchange(0, std::memory_order_relaxed);
-    LOG_INFO(Render,
+    LOG_WARNING(Render,
              "CpSplit: window_s={:.1f} mode={} depth={} records={} bytes={} posted_draws={} "
              "posted_pkts={} drains={} drain_waits={} front_wait_ms={:.1f} drain_ms={:.1f} "
              "depth_wait_ms={:.1f} depth_waits={} max_lead={} max_lead_records={} "
@@ -890,7 +891,7 @@ void Channel::MaybeLog() {
         guard_checks = fmt::format(" | guard_checks:{} write_log_max={} write_log_overflows={}",
                                    guard_checks, c.write_log_max, c.write_log_overflows);
     }
-    LOG_INFO(Render, "CpSplit drains (n/waited/ms):{}{}", per_reason, guard_checks);
+    LOG_WARNING(Render, "CpSplit drains (n/waited/ms):{}{}", per_reason, guard_checks);
     counters = {};
     log_window_start_ns = now;
     log_window_start_ticks = ticks_now;
