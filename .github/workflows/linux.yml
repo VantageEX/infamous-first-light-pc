@@ -44,15 +44,17 @@ jobs:
       - name: System packages
         run: |
           sudo apt-get update -q
-          # libxcb-cursor0: Qt's xcb platform plugin needs it, and PyInstaller bundles it with the
-          # launcher (Game Mode on the Steam Deck runs X11 apps through Xwayland).
+          # libxcb-cursor0, -keysyms1, -shape0, -icccm4: Qt's xcb platform plugin needs them, and
+          # PyInstaller bundles them with the launcher (Game Mode on the Steam Deck runs X11 apps
+          # through Xwayland).
           sudo apt-get install -y -q --no-install-recommends gcc-14 g++-14 cmake ninja-build pkg-config nasm \
             curl git python3-venv libvulkan-dev glslang-tools libboost-dev \
             libxxhash-dev zlib1g-dev libx11-dev libxcb1-dev libxext-dev libxrandr-dev libxcursor-dev \
             libxi-dev libxss-dev libxtst-dev libxkbcommon-dev libwayland-dev wayland-protocols \
             libdecor-0-dev libegl-dev libgl-dev libdrm-dev libgbm-dev libpulse-dev libasound2-dev \
             libpipewire-0.3-dev libudev-dev libdbus-1-dev libusb-1.0-0-dev libfreetype-dev \
-            clang libssl-dev libxcb-cursor0 libxkbcommon-x11-0 libfontconfig1 libegl1
+            clang libssl-dev libxcb-cursor0 libxcb-keysyms1 libxcb-shape0 libxcb-icccm4 \
+            libxkbcommon-x11-0 libfontconfig1 libegl1
       - name: Cache built libraries
         id: deps
         uses: actions/cache@v4
