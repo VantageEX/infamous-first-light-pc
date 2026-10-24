@@ -23,5 +23,7 @@ extern HostConfig g_host;
 extern thread_local bool g_assert_throws;
 /// The job file's records compiled before the game starts (precompile_jobs.cpp).
 void PrecompileJobs();
+/// TLG_V3_THREAD_CPU=1: the busiest threads every 15 s (thread_cpu.cpp).
+void StartThreadCpuReport();
 
 } // namespace V3

@@ -93,7 +93,7 @@ if (WIN32)
     target_compile_options(issgpu3 PRIVATE -include ${CMAKE_CURRENT_SOURCE_DIR}/../gpu_v2/compat/mingw.h)
 endif()
 target_sources(issgpu3 PRIVATE ${GLUE}/gpu_host.cpp ${GLUE}/window.cpp ${GLUE}/bridge.cpp
-    ${GLUE}/precompile_jobs.cpp)
+    ${GLUE}/precompile_jobs.cpp ${GLUE}/thread_cpu.cpp)
 pkg_check_modules(PNG REQUIRED IMPORTED_TARGET libpng)
 find_package(Zydis QUIET)
 if (NOT Zydis_FOUND)
