@@ -205,6 +205,7 @@ extern "C" int tlggpu_init(const TlgGpuConfig* config) {
     // The fork's frame and fault statistics, every 15 s to the log and a CSV (its LogDir).
     Common::FaultMonitor::Start();
     V3::StartThreadCpuReport(); // TLG_V3_THREAD_CPU=1
+    V3::StartProfiler();        // TLG_V3_PROFILE=1
     // Mappings made from now on reach the rasterizer once it exists (WindowThread replays the
     // earlier ones).
     runtime_memory_set_gpu_hooks(

@@ -25,5 +25,7 @@ extern thread_local bool g_assert_throws;
 void PrecompileJobs();
 /// TLG_V3_THREAD_CPU=1: the busiest threads every 15 s (thread_cpu.cpp).
 void StartThreadCpuReport();
+/// TLG_V3_PROFILE=1: a sampling profile of the busiest threads every 10 s (glue/profiler.cpp).
+void StartProfiler();
 
 } // namespace V3
