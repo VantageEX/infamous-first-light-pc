@@ -337,6 +337,11 @@ class Updater(QObject):
             self._error = error
         self.changed.emit()
 
+    @Property(str, constant=True)
+    def installed(self):
+        """This package's release tag ('' for a source tree or a package before v0.3.2)."""
+        return installed_tag()
+
     @Slot()
     def check(self):
         """Once the interface is up: the last install's outcome, then a newer release than this
@@ -346,18 +351,31 @@ class Updater(QObject):
             self.notice.emit(self.t()('update_done_title'), self.t()('update_done', version=installed_tag()), 'done')
         elif outcome.startswith('failed'):
             self.notice.emit(self.t()('update_failed_title'), outcome, 'warning')
-        mine = parse_version(installed_tag())
-        if mine is None or os.environ.get('FL_UPDATE_CHECK') == '0':
+        if parse_version(installed_tag()) is None or os.environ.get('FL_UPDATE_CHECK') == '0':
             return
+        self._check(manual=False)
+
+    @Slot()
+    def checkNow(self):
+        """The Log page's button: the same look, and its result told in any case (up to date,
+        offline, a build that cannot update itself)."""
+        if self._state in ('downloading', 'installing'):
+            return
+        self._check(manual=True)
+
+    def _check(self, manual):
+        mine = parse_version(installed_tag())
 
         def work():
             try:
                 release = fetch_latest()
             except UpdateError as error:
-                self._result.emit('check_failed', str(error))
+                self._result.emit('check_failed_manual' if manual else 'check_failed', str(error))
                 return
-            newer = (parse_version(release['tag']) or ()) > mine
-            self._result.emit('checked', release if newer else None)
+            # A build without a release tag (a source tree) cannot update itself: any release is
+            # offered, as a page to download it from.
+            newer = mine is None or (parse_version(release['tag']) or ()) > mine
+            self._result.emit('checked' if newer or not manual else 'up_to_date', release if newer else None)
         threading.Thread(target=work, daemon=True).start()
 
     @Slot()
@@ -423,4 +441,8 @@ class Updater(QObject):
             QGuiApplication.quit()
         elif kind == 'failed':
             self._set('error', error=value)
+        elif kind == 'up_to_date':
+            self.notice.emit(self.t()('update_none_title'), self.t()('update_none', version=installed_tag()), 'done')
+        elif kind == 'check_failed_manual':
+            self.notice.emit(self.t()('update_check_failed'), value, 'warning')
         # 'check_failed': offline or rate-limited; the card stays hidden

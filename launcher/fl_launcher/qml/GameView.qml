@@ -637,6 +637,14 @@ Item {
                         tip: launcher.tr.open_saves
                         onClicked: launcher.openSaves()
                     }
+                    CircleButton {
+                        width: 58
+                        height: 58
+                        glyph: 'download'
+                        // with the launcher's own version
+                        tip: launcher.tr.update_check + ' · ' + (updater.installed !== '' ? updater.installed : launcher.tr.launcher_dev)
+                        onClicked: updater.checkNow()
+                    }
                 }
             }
         }
