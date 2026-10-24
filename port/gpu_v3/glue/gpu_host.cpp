@@ -283,8 +283,16 @@ extern "C" int tlggpu_handle_fault(void* ucontext, void* address) {
     return Core::Signals::Instance()->DispatchAccessViolation(ucontext, address) ? 1 : 0;
 }
 
-extern "C" int tlggpu_cpu_write(void*, const void*, int, uint64_t) {
-    return 0; // the runtime writes normally (faults reach tlggpu_handle_fault)
+// The runtime's large host writes into guest memory (file reads, the game's memcpy/memset): the
+// range is invalidated in one call (CPU-modified, its pages unprotected), so the caller's copy that
+// follows takes no page fault per 4 KB (texture streaming: whole MiB, 256 faults each, a frame's
+// worth in a 50 ms stutter). Smaller writes take their faults as before. The runtime still writes.
+extern "C" int tlggpu_cpu_write(void* dst, const void*, int, uint64_t size) {
+    constexpr uint64_t MinBytes = 16 * 1024;
+    if (size >= MinBytes) {
+        if (auto* r = Rasterizer()) r->InvalidateMemory(reinterpret_cast<uintptr_t>(dst), size);
+    }
+    return 0;
 }
 
 extern "C" void tlggpu_frame_counters(TlgGpuFrameCounters* out) {

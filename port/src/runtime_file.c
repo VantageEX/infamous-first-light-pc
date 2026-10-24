@@ -383,7 +383,9 @@ static ssize_t bounce_read(int h,unsigned char *at,uint64_t size,int64_t offset)
     __atomic_add_fetch(&bounce_reads,1,__ATOMIC_RELAXED);
     uint64_t want=size<BOUNCE_BYTES ? size : BOUNCE_BYTES;
     ssize_t n=offset<0 ? host_read(h,bounce,want) : pread(h,bounce,want,offset);
-    if (n>0) memcpy(at,bounce,(size_t)n);
+    /* The GPU library may write it itself or prepare the range (renderer v3: one invalidation
+       instead of a fault per page); else the copy below. */
+    if (n>0 && !tlggpu_cpu_write(at,bounce,-1,(uint64_t)n)) memcpy(at,bounce,(size_t)n);
     return n;
 }
 static ssize_t full_io(int h,void *buffer,uint64_t size,int64_t offset) {
