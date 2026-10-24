@@ -150,5 +150,45 @@ class GameProfileTests(unittest.TestCase):
         self.assertEqual(patch_requirements(TLG, [], '01.02'), (None, None))
 
 
+
+class EngineResolutionTest(unittest.TestCase):
+    """The First Light render size patch (patches.engine_resolution_writes): found by its code."""
+
+    @staticmethod
+    def elf(code):
+        import struct
+        # One PT_LOAD segment: file offset 0x1000 -> vaddr 0x0.
+        header = bytearray(0x1000)
+        header[:4] = b'\x7fELF'
+        struct.pack_into('<Q', header, 0x20, 0x40)
+        struct.pack_into('<HH', header, 0x36, 56, 1)
+        struct.pack_into('<IIQQQQQQ', header, 0x40, 1, 5, 0x1000, 0, 0, len(code), len(code), 0x1000)
+        return bytes(header) + code
+
+    def code(self, copies=1):
+        from patches import MODE_TOGGLE, SIZE_SETUP
+        return (b'\x90' * 0x20 + SIZE_SETUP + b'\x90' * 0x40 + MODE_TOGGLE) * copies + b'\xc3'
+
+    def test_writes_the_size(self):
+        from patches import engine_resolution_writes, render_size
+        writes = engine_resolution_writes(self.elf(self.code()), '720p')
+        self.assertEqual(render_size('720p'), (1280, 720))
+        self.assertEqual(render_size('800p'), (1424, 800))
+        setup = 0x20
+        toggle = setup + 27 + 0x40
+        self.assertEqual([offset for offset, _ in writes],
+                         [setup + 3, setup + 10, setup + 16, setup + 23, toggle + 1, toggle + 16])
+        self.assertEqual([int.from_bytes(data, 'little') for _, data in writes], [1280, 720] * 3)
+
+    def test_refuses_other_code(self):
+        from patches import engine_resolution_writes
+        with self.assertRaises(ValueError):
+            engine_resolution_writes(self.elf(self.code(copies=2)), '720p')
+        with self.assertRaises(ValueError):
+            engine_resolution_writes(self.elf(b'\xc3' * 64), '720p')
+        with self.assertRaises(ValueError):
+            engine_resolution_writes(self.elf(self.code()), '900p')
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -282,6 +282,7 @@ def main():
                     env[key] = str(value)
                     derived.append(key)
         run_script('patches.py', '--out', out, '--extra', env.get('TLG_PATCHES', ''), '--game-dir', game,
+                   '--render-resolution', graphics['render_resolution'],
                    '--patches-dir', env.get('TLG_PATCHES_DIR', data / 'patches'),
                    '--patches-config', env.get('TLG_PATCHES_CONFIG', data / 'patches.json'))
         if 'TLG_VBLANK_HZ' not in env:

@@ -376,7 +376,7 @@ void Save() {
                  TlgGraphics::DisplayModeKeys[std::clamp(v.display_mode.load(), 0, 2)].data(),
                  int(v.vsync.load()), v.fps_limit.load(), int(v.async_shaders.load()),
                  int(v.fsr1.load()), int(v.rcas.load()), v.rcas_strength.load(), v.frames_queued.load(),
-                 TlgGraphics::Resolutions[std::clamp(v.render_resolution.load(), 0, 5)].data(),
+                 TlgGraphics::Resolutions[std::clamp(v.render_resolution.load(), 0, int(TlgGraphics::Resolutions.size()) - 1)].data(),
                  v.engine_fps.load(), int(v.deferred_readback.load()), int(v.stale_readback.load()),
                  int(v.restart_unconfirmed.load()));
     std::fprintf(file, "sensor_aim=%d\ngraffiti_guide_seen=%d\n", v.sensor_aim.load(),

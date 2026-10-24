@@ -35,6 +35,63 @@ def eboot_segments(elf):
     return segments
 
 
+def eboot_file_segments(elf):
+    """[(file offset, vaddr, file size)] of the ELF's PT_LOAD segments."""
+    phoff,=struct.unpack_from('<Q',elf,0x20)
+    phentsize,phnum=struct.unpack_from('<HH',elf,0x36)
+    segments=[]
+    for i in range(phnum):
+        kind,_,offset,vaddr,_,filesz,_,_=struct.unpack_from('<IIQQQQQQ',elf,phoff+i*phentsize)
+        if kind==1: segments.append((offset,vaddr,filesz))
+    return segments
+
+
+# The game's render resolution (tlg.ini render_resolution) for inFAMOUS First Light, whose engine
+# is Second Son's: its renderer's size setup stores the render size (+0xc / +0x10) and the output
+# size ([0] / [4]) as 1920 / 1080 immediates, and the mode toggle loads the normal mode's 1920 / 1080
+# (beside the Pro mode's 3200 / 2160) - the same code axylpup's shadPS4 patches in Second Son 1.07
+# (common/memory_patcher.cpp ApplyAspectRatio; First Light 1.00 holds it 0x46a90 bytes later). The
+# buffers, video-out buffers and camera follow the new size; the 2D screen space (HUD layout) stays
+# at 1920 x 1080, which a 16:9 size keeps; the renderer scales the picture to the window. Found by
+# these bytes, not by address, so another build with the same code works too; else none applied.
+SIZE_SETUP=bytes.fromhex('c7430c80070000' 'c7431038040000' 'c70380070000' 'c7430438040000')
+SIZE_SETUP_IMMS=((3,'w'),(10,'h'),(16,'w'),(23,'h'))
+MODE_TOGGLE=bytes.fromhex('be80070000' 'b8800c0000' 'b970080000' 'bf38040000')
+MODE_TOGGLE_IMMS=((1,'w'),(16,'h'))
+RESOLUTION_HEIGHTS={'480p':480,'720p':720,'800p':800,'1440p':1440,'1800p':1800}
+
+
+def render_size(name):
+    """(width, height) of a 16:9 resolution name (multiples of 8: 800p = 1424 x 800), or None."""
+    h=RESOLUTION_HEIGHTS.get(name)
+    if not h: return None
+    w=int(round(h*16/9/8))*8
+    return w,h
+
+
+def engine_resolution_writes(elf, name):
+    """[(vaddr, bytes)] setting the engine's render size to `name`; ValueError when the code is
+    not the expected one (each pattern exactly once in an executable segment)."""
+    size=render_size(name)
+    if not size: raise ValueError(f'unknown render resolution {name!r}')
+    found={}
+    for pattern in (SIZE_SETUP,MODE_TOGGLE):
+        hits=[]
+        for offset,vaddr,filesz in eboot_file_segments(elf):
+            data=elf[offset:offset+filesz]
+            at=data.find(pattern)
+            while at!=-1:
+                hits.append(vaddr+at)
+                at=data.find(pattern,at+1)
+        if len(hits)!=1: raise ValueError(f'render size code found {len(hits)} times, not once')
+        found[pattern]=hits[0]
+    writes=[]
+    for pattern,imms in ((SIZE_SETUP,SIZE_SETUP_IMMS),(MODE_TOGGLE,MODE_TOGGLE_IMMS)):
+        for delta,axis in imms:
+            writes.append((found[pattern]+delta,struct.pack('<I',size[0] if axis=='w' else size[1])))
+    return writes
+
+
 def encode(line):
     kind,value=line.get('Type'),line.get('Value')
     if kind=='bytes': return bytes.fromhex(value.replace(' ',''))
@@ -215,12 +272,23 @@ def main():
     p.add_argument('--extra',default='',help='additional patch names, separated by ";"')
     p.add_argument('--out',type=Path,default=Path(__file__).resolve().parent.parent/'out')
     p.add_argument('--game-dir',type=Path,default=Path(os.environ.get('TLG_GAME_DIR','../CUSA01623')))
+    p.add_argument('--render-resolution',default='native',
+                   help="tlg.ini render_resolution for a game without a patch profile (First Light)")
     a=p.parse_args()
     title=game_title_id(a.game_dir)
     profile=game_profile(title)
     if not profile:
-        write_patches(a.out,[])
-        print(f'Patches: no patch profile for {title}: none applied')
+        writes=[]
+        if a.render_resolution not in ('','native'):
+            try:
+                writes=engine_resolution_writes((a.out/'eboot.elf').read_bytes(),a.render_resolution)
+                w,h=render_size(a.render_resolution)
+                print(f'Patches: render resolution {a.render_resolution} ({w}x{h}): {len(writes)} writes')
+            except (OSError,ValueError) as error:
+                print(f'Patches: render resolution {a.render_resolution} not applied: {error}')
+        write_patches(a.out,writes)
+        if not writes:
+            print(f'Patches: no patch profile for {title}: none applied')
         return
     ids,xml,needed,_sha=profile
     # The patches are byte writes at the addresses of one game build: on another they would
