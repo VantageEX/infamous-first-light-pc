@@ -25,6 +25,12 @@ STRINGS = {
     'renderer': {'ru': 'Рендер', 'en': 'Renderer'},
     'renderer_classic': {'ru': 'Обычный — запасной', 'en': 'Classic — fallback'},
     'renderer_v2': {'ru': 'v2 — быстрее (рекомендуется)', 'en': 'v2 — faster (recommended)'},
+    'renderer_v3': {'ru': 'v3 — экспериментальный', 'en': 'v3 — experimental'},
+    'v3_notice_title': {'ru': 'Экспериментальный рендер v3', 'en': 'Experimental renderer v3'},
+    'v3_notice': {'ru': 'Это ранняя версия: возможны артефакты, вылеты и просадки FPS, ничего не обещаем. '
+                        'Если что-то не так, вернитесь на рендер v2.',
+                  'en': 'This is an early version: expect artifacts, crashes and frame drops, no promises. '
+                        'If something is wrong, switch back to renderer v2.'},
     'windowed': {'ru': 'В окне', 'en': 'Windowed'},
     'borderless': {'ru': 'Окно без рамки', 'en': 'Borderless'},
     'fullscreen': {'ru': 'Полный экран', 'en': 'Fullscreen'},

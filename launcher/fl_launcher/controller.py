@@ -189,20 +189,29 @@ class Launcher(QObject):
 
     @Property('QVariantList', notify=textsChanged)
     def renderers(self):
-        """The renderers this build can start: renderer v2 only when tlg-probe-v2 is there."""
+        """The renderers this build can start: renderer v2 / v3 only when their probe is there."""
         options = [{'value': '1', 'text': self.t('renderer_classic')}]
         if game.renderer_v2_probe(PORT):
             options.append({'value': '2', 'text': self.t('renderer_v2')})
+        if game.renderer_v3_probe(PORT):
+            options.append({'value': '3', 'text': self.t('renderer_v3')})
         return options
 
     @Property(str, notify=settingsChanged)
     def renderer(self):
         value = self.settings.launcher.get('renderer', '1')
-        return value if value == '1' or game.renderer_v2_probe(PORT) else '1'
+        if value == '2' and game.renderer_v2_probe(PORT) or value == '3' and game.renderer_v3_probe(PORT):
+            return value
+        return '1'
+
+    @Property(bool, notify=settingsChanged)
+    def experimentalRenderer(self):
+        """Renderer v3 is picked: the launcher shows its experimental notice."""
+        return self.renderer == '3'
 
     @Slot(str)
     def setRenderer(self, value):
-        if value in ('1', '2') and value != self.settings.launcher.get('renderer'):
+        if value in ('1', '2', '3') and value != self.settings.launcher.get('renderer'):
             self.settings.launcher['renderer'] = value
             self.settings.save()
             self.settingsChanged.emit()

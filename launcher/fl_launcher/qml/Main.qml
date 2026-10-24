@@ -131,6 +131,48 @@ Window {
             stageScale: root.k
             onBrowse: root.browse()
         }
+        // Renderer v3 picked: its experimental notice across the whole launcher, in the free strip
+        // under the settings panel and the credits (both end 56 px above the bottom).
+        Rectangle {
+            id: experimentalBar
+            z: 5
+            readonly property bool shown: launcher.hasGame && launcher.experimentalRenderer
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.bottom: parent.bottom
+            height: 46
+            color: Qt.rgba(64 / 255, 44 / 255, 8 / 255, 0.94)
+            opacity: shown ? 1 : 0
+            visible: opacity > 0
+            Behavior on opacity { NumberAnimation { duration: 350 } }
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                height: 2
+                color: T.warn
+            }
+            Row {
+                anchors.centerIn: parent
+                spacing: 14
+                Glyph { name: 'warning'; size: 24; color: T.warn; anchors.verticalCenter: parent.verticalCenter }
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: launcher.tr.v3_notice_title
+                    font.family: T.font
+                    font.pixelSize: 21
+                    font.weight: Font.DemiBold
+                    color: T.warn
+                }
+                Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: launcher.tr.v3_notice
+                    font.family: T.font
+                    font.pixelSize: 19
+                    color: T.fg
+                }
+            }
+        }
         Picker {
             id: picker
             z: 10

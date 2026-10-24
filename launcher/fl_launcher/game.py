@@ -120,6 +120,29 @@ def renderer_v2_probe(port):
     return None
 
 
+def renderer_v3_probe(port):
+    """tlg-probe-v3(.exe) (renderer v3, port/gpu_v3: axylpup's shadPS4 fork) when this build has
+    it, as renderer_v2_probe. Windows only for now."""
+    for folder in ('bin', 'out'):
+        probe = Path(port) / folder / ('tlg-probe-v3.exe' if os.name == 'nt' else 'tlg-probe-v3')
+        if probe.is_file():
+            return probe
+    return None
+
+
+def defaults_env(path):
+    """KEY=value lines of a renderer's defaults file (comments and blank lines skipped)."""
+    env = {}
+    try:
+        for line in Path(path).read_text(encoding='utf-8').splitlines():
+            key, sep, value = line.strip().partition('=')
+            if sep and key and not key.startswith('#'):
+                env[key] = value
+    except OSError:
+        pass
+    return env
+
+
 def renderer_env(renderer, game_dir, port):
     """The environment renderer v2 starts with, as iss_pc's launcher passes it
     (infamous_run.renderer_v2_env): its defaults file, the game folder its shader index reads,
@@ -127,18 +150,19 @@ def renderer_env(renderer, game_dir, port):
     Linux, as iss_pc has them;
     TLG_PROBE picks the v2 probe. Nothing for the core's own renderer.
     Native passes off, unlike iss_pc: in First Light they gained ~2 FPS and crashed in NVIDIA's
-    driver (nvoglv64.dll) after 4 minutes, and their pause guard only knows Second Son's eboot."""
+    driver (nvoglv64.dll) after 4 minutes, and their pause guard only knows Second Son's eboot.
+    Renderer v3: its defaults file (the fork's release switches and this port's) and its probe."""
+    if renderer == '3':
+        probe = renderer_v3_probe(port)
+        if probe is None:
+            return {}
+        env = defaults_env(Path(port) / 'gpu_v3' / 'defaults.env')
+        env['TLG_PROBE'] = str(probe)
+        return env
     probe = renderer_v2_probe(port) if renderer == '2' else None
     if probe is None:
         return {}
-    env = {}
-    try:
-        for line in (Path(port) / 'gpu_v2' / 'defaults.env').read_text(encoding='utf-8').splitlines():
-            key, sep, value = line.strip().partition('=')
-            if sep and key and not key.startswith('#'):
-                env[key] = value
-    except OSError:
-        pass
+    env = defaults_env(Path(port) / 'gpu_v2' / 'defaults.env')
     env.update({'TLG_PROBE': str(probe), 'ISS_GAME_DIR': str(game_dir),
                 'ISS_NATIVE_PASSES': '0', 'ISS_UNIFIED_MEMORY': '0' if os.name == 'nt' else '1'})
     return env
