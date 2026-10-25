@@ -896,10 +896,14 @@ void PerformanceTab() {
     // offered: they do not apply to TLG, and the readback ones crash it (it needs precise readbacks).
     SectionTitle(TL("Live", "Действуют сразу"));
     if (BeginRows("##live")) {
-        static const char* const fps_labels[] = {"30", "120", "240", TL("Unlimited", "Без ограничения")};
+        // A label per value: the list draws one row per value (60 had none, the list read past
+        // the labels and crashed, and 60 showed as "120": issue #13).
+        static const char* const fps_labels[] = {"30", "60", "120", "240", TL("Unlimited", "Без ограничения")};
+        static_assert(std::size(fps_labels) == G::FpsLimits.size());
         ChoiceRow(TL("Frame rate limit", "Ограничение FPS"), s.fps_limit, fps_labels, G::FpsLimits.data(), int(G::FpsLimits.size()),
-                  TL("Caps the presented frames. The game runs at 30 FPS (as on PS4).", "Ограничивает число выводимых кадров. Сама игра идёт в 30 FPS (как на PS4)."));
+                  TL("Caps the presented frames; never above the game's own rate.", "Ограничивает число выводимых кадров; не выше скорости самой игры."));
         static const char* const queued_labels[] = {TL("1 (lowest latency)", "1 (меньше задержка)"), "2", TL("Unlimited", "Без ограничения")};
+        static_assert(std::size(queued_labels) == G::FramesQueued.size());
         ChoiceRow(TL("Frames queued", "Кадров в очереди"), s.frames_queued, queued_labels, G::FramesQueued.data(),
                   int(G::FramesQueued.size()), TL("More frames queued: steadier FPS, slower response to input.", "Больше кадров в очереди: ровнее FPS, но медленнее отклик."));
         CheckRow(TL("Compile new shaders in the background", "Компилировать новые шейдеры в фоне"), s.async_shaders,
@@ -1296,6 +1300,7 @@ void OverlayTab() {
         static const char* const styles[] = {TL("Card (earlier versions)", "Карточка (как раньше)"), TL("Compact", "Компактный"),
                                              TL("Strip", "Лента"), TL("Graph and histogram", "График и гистограмма"),
                                              TL("Telemetry", "Телеметрия"), TL("Mini", "Мини")};
+        static_assert(std::size(styles) == OverlayStyleCount);
         ChoiceRow(TL("Overlay style", "Стиль оверлея"), s.overlay_style, styles, nullptr, OverlayStyleCount,
                   TL("Colours: green within the frame rate limit (60 without one), amber up to twice its frame time, red beyond.",
                      "Цвета: зелёный — в пределах лимита FPS (без лимита — 60), жёлтый — кадр до двух раз дольше, красный — дольше."));
@@ -1342,6 +1347,7 @@ void OverlayTab() {
         static const char* const places[] = {TL("Top left", "Слева сверху"), TL("Top right", "Справа сверху"),
                                              TL("Bottom left", "Слева снизу"), TL("Bottom right", "Справа снизу"),
                                              TL("Top centre", "Сверху по центру"), TL("Bottom centre", "Снизу по центру")};
+        static_assert(std::size(places) == OverlayPositions);
         ChoiceRow(TL("Position", "Положение"), s.overlay_corner, places, nullptr, OverlayPositions, TL("Where the overlay sits.", "Где на экране оверлей."));
         SliderRow(TL("Distance from the side", "Отступ сбоку"), s.overlay_offset_x, 0, OverlayOffsetMaxX, "%d px",
                   TL("Pixels of a 1080-line screen from the left or right edge (not for the centre).",

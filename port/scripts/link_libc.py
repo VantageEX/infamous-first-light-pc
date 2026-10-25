@@ -111,7 +111,17 @@ def link(game, out):
     def imported(symbol):
         key = symbol['identity']
         if key is None:
-            raise ValueError(f'libc relocation to unlinkable symbol {symbol["name"]!r}')
+            # A plain-named function (no NID) the libc of some regions imports, such as
+            # compiler-rt's compilerrt_abort_impl in CUSA00575 / CUSA01064 (issues #11, #12):
+            # an import of its own, which the probe leaves to a trap (it only runs on an abort).
+            # Data cannot be left to a trap.
+            if symbol['type'] not in (0, 2) or not symbol['name']:
+                raise ValueError(f'libc relocation to unlinkable symbol {symbol["name"]!r}')
+            key = ('libc:' + symbol['name'], None, None)
+            if key not in identities:
+                identities[key] = len(names)
+                names.append('libc:' + symbol['name'])
+            return identities[key]
         if key not in identities:
             n,lib,mod = key
             name = (f'{n}#{main_libraries[lib]}#{main_modules[mod]}'
