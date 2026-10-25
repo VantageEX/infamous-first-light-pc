@@ -226,7 +226,11 @@ class Launcher(QObject):
 
     @Property('QVariantList', notify=textsChanged)
     def renderResolutions(self):
-        return [{'value': v, 'text': self.t('res_' + v)} for v in RENDER_RESOLUTIONS]
+        options = [{'value': v, 'text': self.t('res_' + v)} for v in RENDER_RESOLUTIONS]
+        current = self.settings.core['render_resolution']
+        if current not in RENDER_RESOLUTIONS:   # chosen elsewhere (tlg.ini): shown as it is
+            options.append({'value': current, 'text': current})
+        return options
 
     @Property('QVariantList', notify=gameChanged)
     def gameLanguages(self):

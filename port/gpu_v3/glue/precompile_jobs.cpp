@@ -322,10 +322,22 @@ void PrecompileJobs() {
     if (async_compute) {
         // The queued compute compiles finish behind the same screen (the game would otherwise
         // start while they run, and wait for each one it meets first).
+        // Two minutes without one finished compile (a driver compile that never returns): the
+        // game starts, and a pipeline still queued compiles at its first use.
+        size_t last_left = ~size_t{0};
+        auto last_progress = std::chrono::steady_clock::now();
         for (;;) {
             const size_t left = Vulkan::PipelineCompilePool::WaitIdleFor(std::chrono::milliseconds(250));
             TlgOverlay::SetLoading(true, total - std::min<u32>(static_cast<u32>(left), compute), total);
             if (left == 0) break;
+            const auto now = std::chrono::steady_clock::now();
+            if (left != last_left) {
+                last_left = left;
+                last_progress = now;
+            } else if (now - last_progress > std::chrono::minutes(2)) {
+                std::fprintf(stderr, "V3 precompile: %zu compute compiles stalled for 2 minutes, not waited for\n", left);
+                break;
+            }
         }
     }
     TlgOverlay::SetLoadingCompile(false);

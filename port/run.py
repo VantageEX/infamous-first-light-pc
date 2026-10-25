@@ -273,6 +273,14 @@ def main():
             names = selected_patches(profile[1], profile[2], env.get('TLG_PATCHES', ''), env.get('TLG_PATCHES_ONLY') == '1')
             # tlg.ini decides the resolution and frame rate patches (in-game menu, launcher).
             names = graphics_options.patch_names(names, graphics)
+            # A resolution or frame rate the game's patch file has no entry for (800p is First
+            # Light's engine patch, not a patch file's) is left out rather than failing the start.
+            import xml.etree.ElementTree as ET
+            known = {m.get('Name') for m in ET.parse(profile[1]).getroot().iter('Metadata')
+                     if m.get('AppVer') == profile[2]}
+            for name in [n for n in names if n not in known]:
+                print(f'Patches: {name!r} is not in {profile[1].name}: left out', flush=True)
+            names = [n for n in names if n in known]
             env['TLG_PATCHES'] = ';'.join(names)
             env['TLG_PATCHES_ONLY'] = '1'
             engine_fps = graphics_options.applied_engine_fps(names)

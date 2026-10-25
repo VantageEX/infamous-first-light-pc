@@ -59,8 +59,10 @@ CORE_DEFAULTS = {
 }
 DISPLAY_MODES = ('windowed', 'borderless', 'fullscreen')
 FPS_LIMITS = ('30', '60', '120', '240', '0')
-# Offered render resolutions (port/scripts/graphics_options.py RESOLUTIONS has the rest).
+# Offered render resolutions; tlg.ini may hold any of graphics_options.py RESOLUTIONS (kept as
+# they are, and shown while chosen).
 RENDER_RESOLUTIONS = ('native', '800p', '720p')
+ALL_RENDER_RESOLUTIONS = ('native', '480p', '720p', '800p', '1440p', '1800p', '4K')
 
 LAUNCHER_DEFAULTS = {
     'game_dir': '',
@@ -122,7 +124,7 @@ class Settings:
             self.core['display_mode'] = CORE_DEFAULTS['display_mode']
         if self.core['fps_limit'] not in FPS_LIMITS:
             self.core['fps_limit'] = CORE_DEFAULTS['fps_limit']
-        if self.core['render_resolution'] not in RENDER_RESOLUTIONS:
+        if self.core['render_resolution'] not in ALL_RENDER_RESOLUTIONS:
             self.core['render_resolution'] = CORE_DEFAULTS['render_resolution']
 
     def save(self):
