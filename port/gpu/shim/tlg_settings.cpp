@@ -68,7 +68,7 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         return;
     }
     if (key == "menu_tab") {
-        v.menu_tab = i >= 0 && i <= 3 ? i : 0;
+        v.menu_tab = i >= 0 && i <= 4 ? i : 0;
         return;
     }
     const char* cheat_keys[] = {"cheat_health", "cheat_magic", "cheat_item", "cheat_rage", "cheat_orbs",
@@ -139,6 +139,8 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.show_fps = i != 0;
     } else if (key == "mouse_enabled") {
         v.mouse_enabled = i != 0;
+    } else if (key == "trophy_sound") {
+        v.trophy_sound = value != "0";
     } else if (key == "mouse_direct") {
         v.mouse_direct = value != "0";
     } else if (key == "mouse_invert_y") {
@@ -389,6 +391,7 @@ void Save() {
                  int(v.cheats[3].load()), int(v.cheats[4].load()),
                  int(v.cheats[5].load()), int(v.cheats[6].load()));
     std::fprintf(file, "enemy_health_bar=%d\n", int(v.enemy_health_bar.load()));
+    std::fprintf(file, "trophy_sound=%d\n", int(v.trophy_sound.load()));
     std::fprintf(file,
                  "overlay_fps=%d\noverlay_frametime=%d\noverlay_upscaler=%d\noverlay_gpu=%d\n"
                  "overlay_cpu=%d\noverlay_ram=%d\noverlay_vram=%d\noverlay_graph=%d\noverlay_scale=%d\n"

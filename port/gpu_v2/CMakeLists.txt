@@ -131,7 +131,7 @@ list(APPEND ALL ${SRC}/core/libraries/videodec/video_utils.cpp)
 file(GLOB CS_SOURCES ${CS}/*.cpp)
 # This port's own interface (its look): the overlay, menu, settings, save dialogs, game hooks.
 set(OURS_SOURCES ${PORT}/shim/tlg_overlay.cpp ${PORT}/shim/tlg_settings.cpp
-    ${PORT}/shim/tlg_perf_stats.cpp ${PORT}/shim/tlg_png.cpp ${PORT}/shim/tlg_orbs.cpp
+    ${PORT}/shim/tlg_perf_stats.cpp ${PORT}/shim/tlg_png.cpp ${PORT}/shim/tlg_trophies.cpp ${PORT}/shim/tlg_sound.cpp ${PORT}/shim/tlg_orbs.cpp
     ${PORT}/shim/tlg_actors.cpp ${PORT}/shim/tlg_view.cpp)
 # The bridge to the Windows runtime, its window and save dialogs: replaced by this port's own.
 list(REMOVE_ITEM CS_SOURCES ${CS}/save_dialog_ui.cpp)

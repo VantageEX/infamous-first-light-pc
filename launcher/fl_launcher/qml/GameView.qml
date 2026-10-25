@@ -287,6 +287,114 @@ Item {
                             color: T.fg3
                         }
                     }
+                    // the trophies unlocked on this PC (trophies.py): a quiet line with the
+                    // newest icons; a click lists them all with their dates
+                    Item {
+                        id: trophyLine
+                        property var info: launcher.trophies
+                        property var rows: info.unlocked || []
+                        property bool open: false
+                        visible: (info.total || 0) > 0
+                        width: parent.width
+                        height: visible ? trophyBody.implicitHeight + 6 : 0
+                        function gradeColor(grade) {
+                            return grade === 'platinum' ? '#cfe0ff' : grade === 'gold' ? '#ffcc59'
+                                 : grade === 'silver' ? '#cdd1d8' : grade === 'bronze' ? '#dc8f5c' : T.fg3
+                        }
+                        Column {
+                            id: trophyBody
+                            y: 6
+                            width: parent.width
+                            spacing: 8
+                            Rectangle {
+                                width: parent.width
+                                height: 1
+                                color: Qt.rgba(1, 1, 1, 0.08)
+                            }
+                            Item {
+                                width: parent.width
+                                height: 34
+                                Text {
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: launcher.tr.trophies.toUpperCase() + '   ' + trophyLine.rows.length + ' / ' + (trophyLine.info.total || 0)
+                                    font.family: T.font
+                                    font.pixelSize: 16
+                                    font.letterSpacing: 1.6
+                                    color: trophyMouse.containsMouse && trophyLine.rows.length ? T.fg2 : T.fg3
+                                }
+                                Row {
+                                    anchors.right: parent.right
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    spacing: 6
+                                    Repeater {
+                                        model: trophyLine.open ? [] : trophyLine.rows.slice(0, 7)
+                                        Image {
+                                            width: 30
+                                            height: 30
+                                            source: modelData.icon
+                                            sourceSize: Qt.size(60, 60)
+                                            smooth: true
+                                            mipmap: true
+                                        }
+                                    }
+                                    Text {
+                                        visible: !trophyLine.rows.length
+                                        text: launcher.tr.trophies_none
+                                        font.family: T.font
+                                        font.pixelSize: 16
+                                        color: T.fg3
+                                    }
+                                }
+                                MouseArea {
+                                    id: trophyMouse
+                                    anchors.fill: parent
+                                    hoverEnabled: true
+                                    cursorShape: trophyLine.rows.length ? Qt.PointingHandCursor : Qt.ArrowCursor
+                                    onClicked: if (trophyLine.rows.length) trophyLine.open = !trophyLine.open
+                                }
+                            }
+                            ListView {
+                                visible: trophyLine.open
+                                width: parent.width
+                                height: visible ? Math.min(trophyLine.rows.length, 4) * 44 : 0
+                                clip: true
+                                model: trophyLine.rows
+                                boundsBehavior: Flickable.StopAtBounds
+                                delegate: Item {
+                                    width: ListView.view.width
+                                    height: 44
+                                    Image {
+                                        width: 34
+                                        height: 34
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        source: modelData.icon
+                                        sourceSize: Qt.size(68, 68)
+                                        smooth: true
+                                        mipmap: true
+                                    }
+                                    Text {
+                                        x: 48
+                                        width: parent.width - x - dateText.implicitWidth - 16
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: modelData.name
+                                        font.family: T.font
+                                        font.pixelSize: 20
+                                        color: trophyLine.gradeColor(modelData.grade)
+                                        elide: Text.ElideRight
+                                    }
+                                    Text {
+                                        id: dateText
+                                        anchors.right: parent.right
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: modelData.date
+                                        font.family: T.font
+                                        font.pixelSize: 17
+                                        color: T.fg3
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

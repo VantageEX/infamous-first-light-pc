@@ -70,7 +70,7 @@ while read -r soname path; do
 done
 echo "Packaged $(find "$dest/port/out/lib" -name '*.so*' | wc -l) libraries into port/out/lib"
 cp port/run.py "$dest/port/"
-cp -r port/scripts port/patches port/fonts "$dest/port/"
+cp -r port/scripts port/patches port/fonts port/sounds "$dest/port/"
 mkdir -p "$dest/port/tools"
 cp -r port/tools/xpps "$dest/port/tools/"
 find "$dest" -name __pycache__ -prune -exec rm -r {} +

@@ -23,6 +23,7 @@ inline bool Mark(unsigned) { return false; }
 #include <cstring>
 #include <ctime>
 #include <array>
+#include <map>
 #include <mutex>
 #include <vector>
 
@@ -32,6 +33,8 @@ inline bool Mark(unsigned) { return false; }
 #include "tlg_actors.h"
 #include "tlg_graphics.h"
 #include "tlg_perf_stats.h"
+#include "tlg_trophies.h"
+#include "tlg_sound.h"
 #include "../../src/actor_hook.h"
 
 extern TlgActorSlot tlg_actor_slots[2];
@@ -143,8 +146,20 @@ ImRect save_button_rects[2];
 // none). Closed dialogs' textures wait in choice_retired until the backend has destroyed them.
 std::vector<TlgPng::Image> choice_pictures;
 std::vector<ImTextureData*> choice_textures, choice_retired;
+// Trophy icons (tlg_trophies.cpp): pictures waiting to become textures, then the textures, kept
+// for the session (one per trophy, 25 small ones); the new trophies waiting for their toast.
+std::vector<std::pair<int, TlgPng::Image>> trophy_pictures;
+std::map<int, ImTextureData*> trophy_textures;
+std::vector<int> trophy_queue;
+int trophy_toast = -1;
+std::chrono::steady_clock::time_point trophy_toast_since;
+float trophy_toast_seconds = 6.0f;
 std::atomic<bool> choice_retiring{false};
 float base_scale = 1.0f;
+// The style at scale 1 (Init): each new scale starts from it. Scaling the scaled style again
+// truncated its sizes a little each time; after a few minimise / restore cycles (0.6 and back)
+// WindowBorderHoverPadding reached 0 and ImGui's assert closed the game.
+ImGuiStyle base_style;
 // Faces beside the default Segoe UI (Init): Semibold for titles and buttons, Light for the menu's
 // labels (the launcher's Font.Light), and Windows' icon font for the menu's glyphs (none: no icons).
 // Without Segoe (Linux, the Steam Deck) they are the port's Open Sans and its subset of Fluent UI
@@ -1265,6 +1280,7 @@ void ControlsTab() {
 }
 
 ImVec2 DrawOverlay(ImDrawList* dl, ImVec2 at, float k); // the square styles (below, with the overlay)
+void TrophiesTab(); // below, with the save dialogs' painter
 
 void OverlayTab() {
     namespace P = TlgPerfStats;
@@ -1428,7 +1444,7 @@ void Menu() {
     }
     bool keep_open = true;
     footer_help = nullptr;
-    constexpr int TabCount = 4;
+    constexpr int TabCount = 5;
     const ImGuiIO& io = ImGui::GetIO();
     if (!io.WantTextInput) {
         const int step = ImGui::IsKeyPressed(ImGuiKey_GamepadR1, false) || ImGui::IsKeyPressed(ImGuiKey_E, false) ? 1
@@ -1473,8 +1489,9 @@ void Menu() {
         ImGui::PopClipRect();
         ImGui::Dummy(ImVec2(0.0f, L(74)));
         static const char* const tabs[TabCount] = {TL("Overlay", "Оверлей"), TL("Image", "Изображение"),
-                                                   TL("Performance", "Производительность"), TL("Controls", "Управление")};
-        static const unsigned icons[TabCount] = {Icon::Chart, Icon::Display, Icon::Speed, Icon::Gamepad};
+                                                   TL("Performance", "Производительность"), TL("Controls", "Управление"),
+                                                   TL("Trophies", "Трофеи")};
+        static const unsigned icons[TabCount] = {Icon::Chart, Icon::Display, Icon::Speed, Icon::Gamepad, Icon::Check};
         for (int tab = 0; tab < TabCount; ++tab) {
             if (SectionButton(tabs[tab], icons[tab], s.menu_tab == tab) && s.menu_tab != tab) {
                 requested_tab = tab;
@@ -1509,6 +1526,7 @@ void Menu() {
     case 1: ImageTab(); break;
     case 2: PerformanceTab(); break;
     case 3: ControlsTab(); break;
+    case 4: TrophiesTab(); break;
     default: OverlayTab(); break;
     }
     ImGui::Dummy(ImVec2(0.0f, L(12)));
@@ -2265,6 +2283,151 @@ void SaveDialogs() {
 
 // "Compiling shaders" in the launcher's look (renderer v2's own loading screen too): a centred
 // block, 40% of the width, with the step in Light, the blue bar, the count, the time left and a note.
+// A trophy's icon as a texture; its picture is decoded now (imgui_mutex held) and becomes a
+// texture before the next frame, so the first call returns null.
+ImTextureData* TrophyTexture(int id, int* decode_budget) {
+    if (const auto it = trophy_textures.find(id); it != trophy_textures.end()) return it->second;
+    for (const auto& pending : trophy_pictures) {
+        if (pending.first == id) return nullptr;
+    }
+    if (decode_budget && (*decode_budget)-- <= 0) return nullptr;
+    TlgPng::Image picture;
+    TlgTrophies::Icon(id, picture); // a failed one stays empty and is not tried again
+    trophy_pictures.emplace_back(id, std::move(picture));
+    return nullptr;
+}
+
+std::string TrophyDate(int64_t time) {
+    const std::time_t t = std::time_t(time);
+    char text[32] = "";
+    if (const std::tm* local = std::localtime(&t)) std::strftime(text, sizeof(text), "%d.%m.%Y", local);
+    return text;
+}
+
+ImVec4 GradeColor(TlgTrophies::Grade grade) {
+    switch (grade) {
+    case TlgTrophies::Platinum: return ImVec4(0.80f, 0.88f, 1.0f, 1.0f);
+    case TlgTrophies::Gold: return ImVec4(1.0f, 0.80f, 0.35f, 1.0f);
+    case TlgTrophies::Silver: return ImVec4(0.80f, 0.82f, 0.86f, 1.0f);
+    default: return ImVec4(0.86f, 0.56f, 0.36f, 1.0f);
+    }
+}
+
+const char* GradeName(TlgTrophies::Grade grade) {
+    switch (grade) {
+    case TlgTrophies::Platinum: return TL("Platinum", "Платиновый");
+    case TlgTrophies::Gold: return TL("Gold", "Золотой");
+    case TlgTrophies::Silver: return TL("Silver", "Серебряный");
+    default: return TL("Bronze", "Бронзовый");
+    }
+}
+
+// A trophy's name: the game's, or its number where this game is not described.
+std::string TrophyName(int id) {
+    if (const TlgTrophies::Info* info = TlgTrophies::Describe(id)) return info->name;
+    char text[32];
+    std::snprintf(text, sizeof(text), "%s %d", TL("Trophy No.", "Трофей №"), id);
+    return text;
+}
+
+// The trophies of the pack, a row each: the icon (dimmed until unlocked), the name, the grade
+// and how to get it, the unlock date on the right.
+void TrophiesTab() {
+    const int count = TlgTrophies::Count();
+    const std::vector<TlgTrophies::Unlocked> unlocked = TlgTrophies::List();
+    SectionTitle(TL("Trophies", "Трофеи"));
+    if (BeginRows("##trophies")) {
+        char text[64];
+        std::snprintf(text, sizeof(text), "%zu / %d", unlocked.size(), count);
+        InfoRow(TL("Unlocked on this PC", "Получено на этом ПК"),
+                count ? text : TL("no trophy data in the game files", "в файлах игры нет данных о трофеях"));
+        CheckRow(TL("Trophy sound", "Звук трофея"), TlgSettings::Get().trophy_sound,
+                 TL("Your own sounds: data/sounds/trophy.mp3 and trophy-platinum.mp3 (or .wav).",
+                    "Свои звуки: data/sounds/trophy.mp3 и trophy-platinum.mp3 (или .wav)."));
+        EndRows();
+    }
+    if (!count) return;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const float icon = L(76), row_h = L(100), inset = L(20);
+    const float width = ImGui::GetContentRegionAvail().x - inset * 2;
+    const ImVec2 origin(ImGui::GetCursorScreenPos().x + inset, ImGui::GetCursorScreenPos().y + L(8));
+    int budget = 3; // icons decoded per frame
+    for (int id = 0; id < count; ++id) {
+        const float x = origin.x, y = origin.y + float(id) * row_h;
+        const TlgTrophies::Unlocked* got = nullptr;
+        for (const auto& u : unlocked) {
+            if (u.id == id) got = &u;
+        }
+        const TlgTrophies::Info* info = TlgTrophies::Describe(id);
+        if (ImTextureData* tex = TrophyTexture(id, &budget)) {
+            dl->AddImageRounded(tex->GetTexRef(), ImVec2(x, y), ImVec2(x + icon, y + icon), ImVec2(0, 0), ImVec2(1, 1),
+                                IM_COL32(255, 255, 255, got ? 255 : 70), L(8));
+        } else {
+            dl->AddRectFilled(ImVec2(x, y), ImVec2(x + icon, y + icon), ImGui::GetColorU32(Theme::White(0.06f)), L(8));
+        }
+        const float tx = x + icon + L(18), date_w = L(150);
+        const float text_w = width - icon - L(18) - date_w;
+        ImGui::PushClipRect(ImVec2(tx, y), ImVec2(tx + text_w, y + row_h), true);
+        dl->AddText(LightFont(), L(25), ImVec2(tx, y + L(2)), ImGui::GetColorU32(got ? Theme::Text : Theme::White(0.75f)),
+                    TrophyName(id).c_str());
+        if (info) {
+            const char* grade = GradeName(info->grade);
+            dl->AddText(ImGui::GetFont(), L(16), ImVec2(tx, y + L(34)), ImGui::GetColorU32(GradeColor(info->grade)), grade);
+            dl->AddText(ImGui::GetFont(), L(18), ImVec2(tx, y + L(54)), ImGui::GetColorU32(Theme::Muted), TL(info->en, info->ru));
+        }
+        ImGui::PopClipRect();
+        const std::string when = got ? TrophyDate(got->time) : std::string(TL("locked", "не получен"));
+        const ImVec2 ws = TextSize(ImGui::GetFont(), 17, when.c_str());
+        if (got) DrawIcon(dl, Icon::Check, ImVec2(x + width - ws.x - L(16), y + L(16)), 16, ImGui::GetColorU32(Theme::Good));
+        dl->AddText(ImGui::GetFont(), L(17), ImVec2(x + width - ws.x, y + L(6)), ImGui::GetColorU32(got ? Theme::Text : Theme::Faint),
+                    when.c_str());
+        if (id + 1 < count) {
+            dl->AddLine(ImVec2(tx, y + row_h - L(10)), ImVec2(x + width, y + row_h - L(10)), ImGui::GetColorU32(Theme::Line));
+        }
+    }
+    ImGui::Dummy(ImVec2(0.0f, L(8) + float(count) * row_h));
+}
+
+// "Trophy unlocked": the new trophy's icon and number in the top-left corner for 6 seconds, one
+// after another when several come at once, 2.5 seconds each while more wait (a save loaded
+// after this update: the game unlocks the ones it already gave again, new to this PC).
+void TrophyToast() {
+    const auto now = std::chrono::steady_clock::now();
+    const float t = std::chrono::duration<float>(now - trophy_toast_since).count();
+    if (trophy_toast >= 0 && t >= trophy_toast_seconds) trophy_toast = -1;
+    if (trophy_toast < 0 && !trophy_queue.empty()) {
+        trophy_toast = trophy_queue.front();
+        trophy_queue.erase(trophy_queue.begin());
+        trophy_toast_since = now;
+        trophy_toast_seconds = trophy_queue.empty() ? 6.0f : 2.5f;
+        if (TlgSettings::Get().trophy_sound) {
+            const TlgTrophies::Info* info = TlgTrophies::Describe(trophy_toast);
+            TlgSound::PlayTrophy(info && info->grade == TlgTrophies::Platinum);
+        }
+    }
+    if (trophy_toast < 0) return;
+    const float shown = std::chrono::duration<float>(now - trophy_toast_since).count();
+    const float alpha = std::clamp(std::min(shown / 0.25f, (trophy_toast_seconds - shown) / 0.5f), 0.0f, 1.0f);
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    SavePainter p{ImGui::GetForegroundDrawList(), ImGui::GetFont(), base_scale,
+                  ImVec2(viewport->WorkPos.x + 40 * base_scale, viewport->WorkPos.y + 36 * base_scale)};
+    const float w = 420, h = 104;
+    p.Box(0, 0, w, h, Theme::Popover, 14.0f, Theme::PopoverAlpha * alpha);
+    p.Frame(0, 0, w, h, Theme::White(0.08f), 14.0f, 1.0f, alpha);
+    if (ImTextureData* tex = TrophyTexture(trophy_toast, nullptr)) {
+        p.dl->AddImageRounded(tex->GetTexRef(), p.P(16, 16), p.P(88, 88), ImVec2(0, 0), ImVec2(1, 1),
+                              IM_COL32(255, 255, 255, int(255 * alpha)), 6.0f * p.k);
+    } else {
+        p.Box(16, 16, 88, 88, Theme::White(0.08f), 6.0f, alpha);
+    }
+    const TlgTrophies::Info* info = TlgTrophies::Describe(trophy_toast);
+    p.Text(106, 18, 17.0f, info ? GradeColor(info->grade) : Theme::Muted,
+           info ? std::string(TL("Trophy unlocked · ", "Трофей получен · ")) + GradeName(info->grade)
+                : std::string(TL("Trophy unlocked", "Трофей получен")),
+           false, alpha);
+    p.Text(106, 44, 22.0f, Theme::Text, p.Fit(22.0f, TrophyName(trophy_toast), w - 122), true, alpha);
+}
+
 void LoadingScreen() {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
     const float k = viewport->WorkSize.y / 1080.0f;
@@ -3294,6 +3457,7 @@ void Init(const Vulkan::Instance& instance, vk::Format format, u32 image_count) 
     c[ImGuiCol_TableHeaderBg] = white(0.05f);
     c[ImGuiCol_TableBorderStrong] = white(0.08f);
     c[ImGuiCol_TableBorderLight] = white(0.05f);
+    base_style = style;
 
     // The launcher's font (Segoe UI, every Windows has it; Cyrillic included), with the built-in
     // DejaVu Sans merged in for the glyphs it lacks (✕); else DejaVu alone. Semibold Segoe UI is
@@ -3424,6 +3588,15 @@ void RetireChoiceTextures() {
 
 // imgui_mutex held, before NewFrame: new pictures become textures, destroyed ones are freed.
 void UpdateChoiceTextures() {
+    for (auto& [id, picture] : trophy_pictures) {
+        if (picture.rgba.empty() || trophy_textures.count(id)) continue;
+        ImTextureData* tex = IM_NEW(ImTextureData)();
+        tex->Create(ImTextureFormat_RGBA32, picture.width, picture.height);
+        std::memcpy(tex->GetPixels(), picture.rgba.data(), picture.rgba.size());
+        ImGui::RegisterUserTexture(tex);
+        trophy_textures[id] = tex;
+    }
+    trophy_pictures.clear();
     if (!choice_pictures.empty()) {
         choice_textures.assign(choice_pictures.size(), nullptr);
         for (size_t i = 0; i < choice_pictures.size(); ++i) {
@@ -3776,7 +3949,7 @@ bool Visible() {
     const auto now = std::chrono::steady_clock::now();
     return initialized && (loading || background_total || menu_open || text_entry_active || choice_active ||
                            message_active || guide_active || progress_on || now < progress_until || now < toast_until ||
-                           NoticeActive() || mouse_pad_on ||
+                           NoticeActive() || mouse_pad_on || trophy_toast >= 0 || !trophy_queue.empty() ||
                            choice_retiring || s.show_fps ||
                            (s.actor_watch_supported && s.enemy_health_bar));
 }
@@ -3876,6 +4049,14 @@ void SaveProgress(int kind, int active, int percent, const char* text) {
     }
 }
 
+void ShowTrophy(int id) {
+    TlgPng::Image picture;
+    TlgTrophies::Icon(id, picture); // decoded on the caller's thread, outside the lock
+    std::scoped_lock lock{imgui_mutex};
+    if (!trophy_textures.count(id)) trophy_pictures.emplace_back(id, std::move(picture));
+    trophy_queue.push_back(id);
+}
+
 void SaveToast(int kind) {
     std::scoped_lock lock{imgui_mutex};
     const auto now = SaveClock::now();
@@ -3961,7 +4142,8 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
     const float scale = std::max(float(extent.height) / 1080.0f, 0.6f);
     if (std::abs(scale - base_scale) > 0.01f) {
         ImGuiStyle& style = ImGui::GetStyle();
-        style.ScaleAllSizes(scale / base_scale);
+        style = base_style;
+        style.ScaleAllSizes(scale);
         style.FontScaleMain = scale;
         base_scale = scale;
     }
@@ -3996,6 +4178,7 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
     if (text_entry_active) {
         TextEntryBox();
     }
+    TrophyToast();
     if (!menu_open) {
         SaveDialogs();
     }

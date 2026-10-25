@@ -90,5 +90,7 @@ void ShowGraffitiGuide(bool force);
 void SetMousePad(bool active, float x, float y, bool touching, bool clicking);
 /// "Game saved" in the bottom-right corner.
 void SaveToast(int kind);
+/// "Trophy unlocked" with its icon in the top-left corner (gpu/shim/tlg_trophies.cpp). Any thread.
+void ShowTrophy(int id);
 
 } // namespace TlgOverlay

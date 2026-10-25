@@ -64,6 +64,10 @@ void tlggpu_save_toast(int kind);
 int tlggpu_overlay_captures_input(void);
 /* A short message at the top of the screen (any thread). */
 void tlggpu_overlay_notice(const char *text, float seconds);
+/* Trophies (gpu/shim/tlg_trophies.cpp): the pack (sce_sys/trophy/trophy00.trp) and the file of
+ * the ones unlocked on this PC, once; an unlock is recorded and shown, 1 when it is new. */
+void tlggpu_trophy_attach(const char *pack_path, const char *store_path);
+int tlggpu_trophy_unlock(int id);
 /* Guest memcpy (src) / memset (src NULL, fill) into GPU-modified memory without a fault or a
  * GPU wait (TLG_WRITE_MERGE=1); 0: the caller writes normally. */
 int tlggpu_cpu_write(void *dst, const void *src, int fill, uint64_t size);

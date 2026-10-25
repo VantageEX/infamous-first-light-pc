@@ -538,10 +538,19 @@ static ABI int32_t trophy_context(int32_t *ctx,int32_t user,uint32_t label,uint6
     *ctx=new_id(); return 0;
 }
 static ABI int32_t trophy_handle(int32_t *handle) { if (!handle) return TROPHY_INVALID; *handle=new_id(); return 0; }
-static ABI int32_t trophy_register(int32_t ctx,int32_t handle,uint64_t options) { (void)ctx; (void)handle; (void)options; return 0; }
+/* The overlay keeps the trophies unlocked on this PC (<user>/trophies.txt) and shows them with
+ * the pack's icons (tlggpu_trophy_*). */
+static ABI int32_t trophy_register(int32_t ctx,int32_t handle,uint64_t options) {
+    (void)ctx; (void)handle; (void)options;
+    char pack[700], store[700];
+    if (runtime_file_translate("/app0/sce_sys/trophy/trophy00.trp",pack,sizeof(pack))) pack[0]=0;
+    snprintf(store,sizeof(store),"%s/trophies.txt",runtime_file_user_dir());
+    tlggpu_trophy_attach(pack,store);
+    return 0;
+}
 static ABI int32_t trophy_unlock(int32_t ctx,int32_t handle,int32_t id,int32_t *platinum) {
     (void)ctx; (void)handle;
-    printf("Runtime: trophy %d unlocked\n",id);
+    printf("Runtime: trophy %d unlocked%s\n",id,tlggpu_trophy_unlock(id) ? "" : " (again)");
     if (platinum) *platinum=-1;
     return 0;
 }

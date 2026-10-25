@@ -5,7 +5,7 @@ from pathlib import Path
 from PySide6.QtCore import Property, QLocale, QObject, QUrl, Signal, Slot
 from PySide6.QtGui import QTextCursor
 
-from . import game, report, saves
+from . import game, report, saves, trophies
 from .i18n import STRINGS, UI_LANGUAGES, Texts
 from .runner import GameRunner, open_folder, system_language_key
 from .settings import (CORE_DEFAULTS, DISPLAY_MODES, FPS_LIMITS, INI_SWITCHES, PORT, RENDER_RESOLUTIONS, TEST_BUILD, VERSION_FILE,
@@ -141,6 +141,21 @@ class Launcher(QObject):
         return {'mission': newest['mission'],
                 'percent': newest['percent'] if newest['percent'] is not None else -1,
                 'detail': ' · '.join(line), 'count': self.t('save_count', count=len(found))}
+
+    @Property('QVariantMap', notify=savesChanged)
+    def trophies(self):
+        """The trophies unlocked on this PC (trophies.py), newest first, for the trophy card:
+        total in the game's pack, and each one's name, grade, icon (a URL) and date; empty without
+        a game or without a trophy pack."""
+        if not self.info:
+            return {}
+        data = self.settings.folder
+        found = trophies.summary(self.info.folder, data / 'user', data / 'cache' / 'trophies', self.info.title_id)
+        if not found['total']:
+            return {}
+        for row in found['unlocked']:
+            row['icon'] = _url(row['icon'])
+        return found
 
     @Slot(str)
     def chooseFolder(self, url):

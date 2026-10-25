@@ -158,6 +158,8 @@ struct Values {
     std::atomic<bool> mouse_enabled{true}, mouse_invert_y{false};
     /// The mouse turns the camera itself (src/mouse_camera.h) where the game's code allows it.
     std::atomic<bool> mouse_direct{true};
+    /// A sound with the trophy toast (gpu/shim/tlg_sound.h).
+    std::atomic<bool> trophy_sound{true};
     std::atomic<float> mouse_sensitivity{1.0f}, mouse_smoothing{0.5f}, mouse_accel{0.0f}, mouse_deadzone{0.1f};
     /// Keyboard and mouse button remap (TLG_KEY_MAP syntax). The menu's Keys section writes it
     /// while the pad thread reads it: only through KeyMap / SetKeyMap.
