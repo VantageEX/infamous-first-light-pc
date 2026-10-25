@@ -579,6 +579,12 @@ Item {
                         onPicked: v => launcher.setCore('render_resolution', v)
                     }
                     ChoiceRow {
+                        label: launcher.tr.aspect
+                        options: launcher.aspects
+                        value: launcher.core.aspect
+                        onPicked: v => launcher.setCore('aspect', v)
+                    }
+                    ChoiceRow {
                         id: displayModeRow
                         label: launcher.tr.display_mode
                         options: launcher.displayModes

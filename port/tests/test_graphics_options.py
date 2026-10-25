@@ -17,11 +17,20 @@ class GraphicsOptionsTest(unittest.TestCase):
         self.temp.cleanup()
 
     def test_defaults_and_invalid_values(self):
-        self.ini.write_text('render_resolution=8K\nengine_fps=90\nstale_readback=yes\n', encoding='utf-8')
+        self.ini.write_text('render_resolution=8K\nengine_fps=90\nstale_readback=yes\naspect=5:4\n', encoding='utf-8')
         options, reverted = g.prepare(self.ini, self.state)
         self.assertFalse(reverted)
         self.assertEqual(options, {'render_resolution': 'native', 'engine_fps': '120', 'deferred_readback': '1',
-                                   'stale_readback': '1', 'async_shaders': '1'})
+                                   'stale_readback': '1', 'async_shaders': '1', 'aspect': '16:9'})
+
+    def test_render_size_of_a_shape(self):
+        # 16:9 keeps the resolution's name; wider shapes take its height; narrower screens stay 16:9.
+        self.assertEqual(g.render_size({'render_resolution': '800p', 'aspect': '16:9'}), '800p')
+        self.assertEqual(g.render_size({'render_resolution': 'native', 'aspect': '21:9'}), '2560x1080')
+        self.assertEqual(g.render_size({'render_resolution': '720p', 'aspect': '32:9'}), '2560x720')
+        self.assertEqual(g.render_size({'render_resolution': 'native', 'aspect': 'auto'}, '3440x1440'), '2576x1080')
+        self.assertEqual(g.render_size({'render_resolution': 'native', 'aspect': 'auto'}, '1280x800'), 'native')
+        self.assertEqual(g.render_size({'render_resolution': 'native', 'aspect': 'auto'}), 'native')
 
     def test_write_keys_keeps_other_lines(self):
         self.ini.write_text('# comment\nshow_fps=1\nengine_fps=60\n', encoding='utf-8')

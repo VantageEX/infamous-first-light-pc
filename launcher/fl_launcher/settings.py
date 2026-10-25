@@ -56,12 +56,14 @@ CORE_DEFAULTS = {
     'deferred_readback': '1',
     'stale_readback': '1',
     'render_resolution': 'native',   # the game's render size (run.py: the engine's size patch)
+    'aspect': '16:9',                 # the picture's shape: 16:9, 21:9, 32:9 or auto (the screen's)
 }
 DISPLAY_MODES = ('windowed', 'borderless', 'fullscreen')
 FPS_LIMITS = ('30', '60', '120', '240', '0')
 # Offered render resolutions; tlg.ini may hold any of graphics_options.py RESOLUTIONS (kept as
 # they are, and shown while chosen).
 RENDER_RESOLUTIONS = ('native', '800p', '720p')
+ASPECTS = ('16:9', '21:9', '32:9', 'auto')
 ALL_RENDER_RESOLUTIONS = ('native', '480p', '720p', '800p', '1440p', '1800p', '4K')
 
 LAUNCHER_DEFAULTS = {
@@ -126,6 +128,8 @@ class Settings:
             self.core['fps_limit'] = CORE_DEFAULTS['fps_limit']
         if self.core['render_resolution'] not in ALL_RENDER_RESOLUTIONS:
             self.core['render_resolution'] = CORE_DEFAULTS['render_resolution']
+        if self.core['aspect'] not in ASPECTS:
+            self.core['aspect'] = CORE_DEFAULTS['aspect']
 
     def save(self):
         self.folder.mkdir(parents=True, exist_ok=True)

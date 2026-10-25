@@ -32,6 +32,11 @@ STRINGS = {
                   'en': 'This is an early version: expect artifacts, crashes and frame drops, no promises. '
                         'If something is wrong, switch back to renderer v2.'},
     'render_resolution': {'ru': 'Разрешение рендера', 'en': 'Render resolution'},
+    'aspect': {'ru': 'Форма кадра (ultrawide)', 'en': 'Picture shape (ultrawide)'},
+    'aspect_16_9': {'ru': '16:9 — как в игре', 'en': '16:9 — as the game'},
+    'aspect_21_9': {'ru': '21:9 — шире обзор', 'en': '21:9 — a wider view'},
+    'aspect_32_9': {'ru': '32:9 — ещё шире (тяжелее)', 'en': '32:9 — wider still (heavier)'},
+    'aspect_auto': {'ru': 'Как у экрана', 'en': 'As the screen'},
     'res_native': {'ru': '1080p — как в игре', 'en': "1080p — the game's own"},
     'res_800p': {'ru': '800p — для Steam Deck', 'en': '800p — for Steam Deck'},
     'res_720p': {'ru': '720p — для слабых видеокарт', 'en': '720p — for weaker graphics cards'},

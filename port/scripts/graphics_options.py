@@ -11,9 +11,14 @@ import json
 from pathlib import Path
 
 RESOLUTIONS = ('native', '480p', '720p', '800p', '1440p', '1800p', '4K')
+# The picture's shape (issue #7): 16:9, a wider one (the view widens at the sides, the HUD moves to
+# the edges), or the screen's (auto: the launcher passes TLG_SCREEN_SIZE; not wider than 16:9 stays
+# 16:9).
+ASPECTS = ('16:9', '21:9', '32:9', 'auto')
+RESOLUTION_HEIGHTS = {'native': 1080, '480p': 480, '720p': 720, '800p': 800, '1440p': 1440, '1800p': 1800, '4K': 2160}
 ENGINE_FPS = (60, 120, 240)
 DEFAULTS = {'render_resolution': 'native', 'engine_fps': '120', 'deferred_readback': '1',
-            'stale_readback': '1', 'async_shaders': '1'}
+            'stale_readback': '1', 'async_shaders': '1', 'aspect': '16:9'}
 RESOLUTION_PREFIX = 'Resolution Patch'
 FPS_PREFIX = 'Frame Rate Patch'
 TEXTURE_FIX = 'Bug Fix - Texture Corruption Fix'
@@ -56,11 +61,36 @@ def startup_options(ini):
     options = {key: ini.get(key, value) for key, value in DEFAULTS.items()}
     if options['render_resolution'] not in RESOLUTIONS:
         options['render_resolution'] = 'native'
+    if options['aspect'] not in ASPECTS:
+        options['aspect'] = '16:9'
     if options['engine_fps'] not in {str(f) for f in ENGINE_FPS}:
         options['engine_fps'] = '120'
     for key in ('deferred_readback', 'stale_readback', 'async_shaders'):
         options[key] = '0' if options[key] == '0' else '1'
     return options
+
+
+def shape_ratio(text):
+    """Width / height of "W:H" or "WxH", or None."""
+    for sep in (':', 'x'):
+        w, found, h = text.partition(sep)
+        if found and w.strip().isdigit() and h.strip().isdigit() and int(h) > 0:
+            return int(w) / int(h)
+    return None
+
+
+def render_size(options, screen_size=None):
+    """patches.py's --render-resolution: the resolution's name for a 16:9 picture, else
+    "<width>x<height>": the resolution's height, the shape's width (multiples of 8, at most 32:9).
+    A shape narrower than 16:9 keeps 16:9 (the game's view would be cut at the sides)."""
+    aspect = options.get('aspect', '16:9')
+    # "21:9" as the monitors sold so: 2560 x 1080 (64:27).
+    ratio = shape_ratio(screen_size or '') if aspect == 'auto' else shape_ratio('64:27' if aspect == '21:9' else aspect)
+    if not ratio or ratio < 16 / 9 * 1.03:
+        return options['render_resolution']
+    height = RESOLUTION_HEIGHTS.get(options['render_resolution'], 1080)
+    width = min(int(round(height * ratio / 8)) * 8, height * 32 // 9 // 8 * 8)
+    return f'{width}x{height}'
 
 
 def prepare(config, state_path):

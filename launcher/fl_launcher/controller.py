@@ -8,7 +8,7 @@ from PySide6.QtGui import QTextCursor
 from . import game, report, saves, symbols, trophies
 from .i18n import STRINGS, UI_LANGUAGES, Texts
 from .runner import GameRunner, open_folder, system_language_key
-from .settings import (CORE_DEFAULTS, DISPLAY_MODES, FPS_LIMITS, INI_SWITCHES, PORT, RENDER_RESOLUTIONS, TEST_BUILD, VERSION_FILE,
+from .settings import (ASPECTS, CORE_DEFAULTS, DISPLAY_MODES, FPS_LIMITS, INI_SWITCHES, PORT, RENDER_RESOLUTIONS, TEST_BUILD, VERSION_FILE,
                        Settings, parse_env)
 
 LOG_LINES = 5000
@@ -32,6 +32,16 @@ EXIT_MEANINGS = {
     0x80000003: 'breakpoint: a failed assert',
     0xE06D7363: 'unhandled C++ exception',
 }
+
+
+def _screen_size():
+    """'<width>x<height>' of the primary screen in pixels (the "auto" picture shape), '' unknown."""
+    from PySide6.QtGui import QGuiApplication
+    screen = QGuiApplication.primaryScreen()
+    if not screen:
+        return ''
+    size, ratio = screen.size(), screen.devicePixelRatio()
+    return f'{round(size.width() * ratio)}x{round(size.height() * ratio)}'
 
 
 def _log_tail(path, size=4 << 20):
@@ -277,6 +287,10 @@ class Launcher(QObject):
             options.append({'value': current, 'text': current})
         return options
 
+    @Property('QVariantList', notify=textsChanged)
+    def aspects(self):
+        return [{'value': v, 'text': self.t('aspect_' + v.replace(':', '_'))} for v in ASPECTS]
+
     @Property('QVariantList', notify=gameChanged)
     def gameLanguages(self):
         keys = self.info.languages if self.info and self.info.languages else list(game.LANGUAGES)
@@ -362,6 +376,8 @@ class Launcher(QObject):
         self._log_line(self.t('starting'))
         for key, value in extra.items():
             self._log_line(f'{key}={value}')
+        if self.settings.core.get('aspect') == 'auto':
+            extra['TLG_SCREEN_SIZE'] = _screen_size()
         version = VERSION_FILE.read_text(encoding='utf-8').strip() if VERSION_FILE.is_file() else ''
         user_env = parse_env(self.settings.launcher['extra_env']) if self._advanced else {}
         header = report.session_header(version, self.info, self.settings.core, self.renderer, user_env)

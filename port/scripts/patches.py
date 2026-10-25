@@ -58,11 +58,22 @@ SIZE_SETUP=bytes.fromhex('c7430c80070000' 'c7431038040000' 'c70380070000' 'c7430
 SIZE_SETUP_IMMS=((3,'w'),(10,'h'),(16,'w'),(23,'h'))
 MODE_TOGGLE=bytes.fromhex('be80070000' 'b8800c0000' 'b970080000' 'bf38040000')
 MODE_TOGGLE_IMMS=((1,'w'),(16,'h'))
+# The 2D screen space beside them (globals 0x...ccc0 / ccc4): the HUD's layout and the camera's
+# aspect (ccc0 / ccc4 when a camera is made). A 16:9 size keeps it at 1920 x 1080; another shape
+# gets 1080 lines and the render size's shape (axylpup's ApplyAspectRatio: Hor+, the view widens
+# at the sides). Left at 1920 x 1080 with a wider render size the picture was stretched, and at
+# 2560 x 1080 a game job read past its buffer (issue #7).
+SCREEN_SPACE=bytes.fromhex('41c70738040000' '41c7042480070000')
+SCREEN_SPACE_IMMS=((3,'h'),(11,'w'))
 RESOLUTION_HEIGHTS={'480p':480,'720p':720,'800p':800,'1440p':1440,'1800p':1800}
 
 
 def render_size(name):
-    """(width, height) of a 16:9 resolution name (multiples of 8: 800p = 1424 x 800), or None."""
+    """(width, height) of a 16:9 resolution name (multiples of 8: 800p = 1424 x 800), or of
+    "<width>x<height>" (any shape, e.g. 2560x1080 for 21:9), or None."""
+    w,sep,h=name.partition('x')
+    if sep and w.isdigit() and h.isdigit() and 320<=int(w)<=8192 and 240<=int(h)<=4320:
+        return int(w)&~7,int(h)&~7
     h=RESOLUTION_HEIGHTS.get(name)
     if not h: return None
     w=int(round(h*16/9/8))*8
@@ -89,7 +100,25 @@ def engine_resolution_writes(elf, name):
     for pattern,imms in ((SIZE_SETUP,SIZE_SETUP_IMMS),(MODE_TOGGLE,MODE_TOGGLE_IMMS)):
         for delta,axis in imms:
             writes.append((found[pattern]+delta,struct.pack('<I',size[0] if axis=='w' else size[1])))
+    if abs(size[0]/size[1]-16/9)>0.01*16/9:
+        space=screen_space(elf)
+        shape=(round(size[0]*1080/size[1]),1080)
+        for delta,axis in SCREEN_SPACE_IMMS:
+            writes.append((space+delta,struct.pack('<I',shape[0] if axis=='w' else shape[1])))
     return writes
+
+
+def screen_space(elf):
+    """The vaddr of the 2D screen space's 1080 / 1920 stores; ValueError unless found once."""
+    hits=[]
+    for offset,vaddr,filesz in eboot_file_segments(elf):
+        data=elf[offset:offset+filesz]
+        at=data.find(SCREEN_SPACE)
+        while at!=-1:
+            hits.append(vaddr+at)
+            at=data.find(SCREEN_SPACE,at+1)
+    if len(hits)!=1: raise ValueError(f'screen space code found {len(hits)} times, not once')
+    return hits[0]
 
 
 def encode(line):
@@ -275,6 +304,9 @@ def main():
     p.add_argument('--render-resolution',default='native',
                    help="tlg.ini render_resolution for a game without a patch profile (First Light)")
     a=p.parse_args()
+    # TLG_RENDER_SIZE=<width>x<height> (ultrawide experiments, issue #7) overrides tlg.ini's.
+    if os.environ.get('TLG_RENDER_SIZE'):
+        a.render_resolution=os.environ['TLG_RENDER_SIZE']
     title=game_title_id(a.game_dir)
     profile=game_profile(title)
     if not profile:

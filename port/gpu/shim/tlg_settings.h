@@ -101,6 +101,9 @@ struct Values {
     std::atomic<int> frames_queued{1};
     // Startup: run.py turns them into patches and environment variables; "Apply and restart".
     std::atomic<int> render_resolution{0};
+    /// The picture's shape for run.py (scripts/graphics_options.py ASPECTS): read and written back
+    /// only, the launcher sets it. Load and Save only, on their thread.
+    std::string aspect{"16:9"};
     std::atomic<int> engine_fps{120};
     std::atomic<bool> deferred_readback{true};
     std::atomic<bool> stale_readback{false};

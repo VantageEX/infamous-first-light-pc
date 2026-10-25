@@ -139,6 +139,8 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.show_fps = i != 0;
     } else if (key == "mouse_enabled") {
         v.mouse_enabled = i != 0;
+    } else if (key == "aspect") {
+        if (value == "16:9" || value == "21:9" || value == "32:9" || value == "auto") v.aspect = value;
     } else if (key == "trophy_sound") {
         v.trophy_sound = value != "0";
     } else if (key == "mouse_direct") {
@@ -392,6 +394,7 @@ void Save() {
                  int(v.cheats[5].load()), int(v.cheats[6].load()));
     std::fprintf(file, "enemy_health_bar=%d\n", int(v.enemy_health_bar.load()));
     std::fprintf(file, "trophy_sound=%d\n", int(v.trophy_sound.load()));
+    std::fprintf(file, "aspect=%s\n", v.aspect.c_str());
     std::fprintf(file,
                  "overlay_fps=%d\noverlay_frametime=%d\noverlay_upscaler=%d\noverlay_gpu=%d\n"
                  "overlay_cpu=%d\noverlay_ram=%d\noverlay_vram=%d\noverlay_graph=%d\noverlay_scale=%d\n"
