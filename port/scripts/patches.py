@@ -65,6 +65,15 @@ MODE_TOGGLE_IMMS=((1,'w'),(16,'h'))
 # 2560 x 1080 a game job read past its buffer (issue #7).
 SCREEN_SPACE=bytes.fromhex('41c70738040000' '41c7042480070000')
 SCREEN_SPACE_IMMS=((3,'h'),(11,'w'))
+# The full-screen movie draw (First Light 1.00: the function at 0x4f9a80) computes
+# f = (screen height * 16) / (screen width * 9) from these 16.0 / 9.0 and samples the movie at
+# (1 - f) / 2 .. (1 + f) / 2 on the quad at (-1, -1, 1, 1) 0x180 bytes later; only it reads them.
+# On a wider screen space f < 1: the movie filled the width and lost its top and bottom. They
+# become the screen space's size (f = 1, the whole movie) and the quad the movie's shape in the
+# middle (bars at the sides), as axylpup's ApplyMovieFit does in Second Son.
+MOVIE_SHAPE=struct.pack('<2f',16.0,9.0)
+MOVIE_QUAD=struct.pack('<4f',-1.0,-1.0,1.0,1.0)
+MOVIE_QUAD_AFTER=0x180
 RESOLUTION_HEIGHTS={'480p':480,'720p':720,'800p':800,'1440p':1440,'1800p':1800}
 
 
@@ -105,7 +114,28 @@ def engine_resolution_writes(elf, name):
         shape=(round(size[0]*1080/size[1]),1080)
         for delta,axis in SCREEN_SPACE_IMMS:
             writes.append((space+delta,struct.pack('<I',shape[0] if axis=='w' else shape[1])))
+        if os.environ.get('TLG_MOVIE_FIT')!='0':   # 0: the movies fill the width (cut above and below)
+            writes+=movie_fit_writes(elf,*shape)
     return writes
+
+
+def movie_fit_writes(elf, width, height):
+    """[(vaddr, bytes)] fitting the movies inside a width x height screen space; [] when the
+    movie draw's constants are not found exactly once (the movies then fill the width)."""
+    found=[]
+    for offset,vaddr,filesz in eboot_file_segments(elf):
+        data=elf[offset:offset+filesz]
+        at=data.find(MOVIE_SHAPE)
+        while at!=-1:
+            if data[at+MOVIE_QUAD_AFTER:at+MOVIE_QUAD_AFTER+16]==MOVIE_QUAD:
+                found.append(vaddr+at)
+            at=data.find(MOVIE_SHAPE,at+1)
+    if len(found)!=1:
+        return []
+    f=height*16/(width*9)
+    x,y=(f,1.0) if f<1 else (1.0,1/f)
+    return [(found[0],struct.pack('<2f',float(width),float(height))),
+            (found[0]+MOVIE_QUAD_AFTER,struct.pack('<4f',-x,-y,x,y))]
 
 
 def screen_space(elf):
