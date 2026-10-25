@@ -221,11 +221,18 @@ inline ImU32 U32(const ImVec4& c, float alpha = 1.0f) {
 }
 } // namespace Theme
 
+// The overlay's own software cursor, on its own context: SetOpen and the dialogs run from the
+// input handler, where renderer v2's ImGui context is current (its present thread draws it), and
+// ImGui::GetIO() there reached v2's context - the menu opened without a cursor (issue #4).
+void SetDrawCursor(bool value) {
+    if (overlay_context) overlay_context->IO.MouseDrawCursor = value;
+}
+
 void SetOpen(bool value) {
     if (menu_open.exchange(value) == value) {
         return;
     }
-    ImGui::GetIO().MouseDrawCursor = value;
+    SetDrawCursor(value);
     if (value) {
         requested_tab = TlgSettings::Get().menu_tab;
     }
@@ -1961,12 +1968,12 @@ void TextEntryBox() {
 void OpenGuide() {
     guide_button_rect = ImRect();
     guide_active = true;
-    ImGui::GetIO().MouseDrawCursor = true;
+    SetDrawCursor(true);
 }
 
 void CloseGuide() {
     guide_active = false;
-    ImGui::GetIO().MouseDrawCursor = menu_open;
+    SetDrawCursor(menu_open);
     auto& s = TlgSettings::Get();
     if (!s.graffiti_guide_seen.exchange(true)) {
         TlgSettings::Save();
@@ -2503,7 +2510,7 @@ bool HandleGuideEvent(const SDL_Event& event) {
 
 void FinishSaveDialog() {
     RetireChoiceTextures();
-    ImGui::GetIO().MouseDrawCursor = menu_open;
+    SetDrawCursor(menu_open);
 }
 
 // The save list and messages take the keys, buttons and mouse that answer them; the rest stays
