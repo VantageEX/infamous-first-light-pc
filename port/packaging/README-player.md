@@ -49,7 +49,7 @@ O launcher tem 10 telas, incluindo **Mods / Cheats** e **Avançado**. O launcher
 No Linux, `./install_desktop.sh` adiciona o jogo ao menu de aplicativos.
 
 ### Durante o jogo
-- **F10**: contador de FPS · **Insert** (ou R3 + L2): menu do port
+- **F10**: contador de FPS · **F9**: teclas e botões do mouse pressionados · **Insert** (ou R3 + L2): menu do port
 - Controles de PS4/PS5, Xbox e 8BitDo via SDL3, por USB ou Bluetooth.
 
 ### Sensor de movimento e touchpad
@@ -111,7 +111,7 @@ The launcher has 10 screens, including **Mods / Cheats** and **Advanced**. The o
 On Linux, `./install_desktop.sh` adds the game to the applications menu.
 
 ### While playing
-- **F10**: FPS counter · **Insert** (or R3 + L2): the port's menu
+- **F10**: FPS counter · **F9**: keys and mouse buttons held · **Insert** (or R3 + L2): the port's menu
 - PS4/PS5, Xbox and 8BitDo controllers via SDL3, over USB or Bluetooth.
 
 ### Motion sensor and touchpad

@@ -47,6 +47,22 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.overlay_corner = i >= 0 && i < OverlayPositions ? i : 1;
         return;
     }
+    if (key == "input_display") {
+        v.input_display = i != 0;
+        return;
+    }
+    if (key == "input_display_corner") {
+        v.input_display_corner = i >= 0 && i < OverlayPositions ? i : 2;
+        return;
+    }
+    if (key == "input_display_scale") {
+        v.input_display_scale = std::clamp(i, 50, 300);
+        return;
+    }
+    if (key == "input_display_opacity") {
+        v.input_display_opacity = std::clamp(i, 0, 100);
+        return;
+    }
     if (key == "overlay_style") {
         v.overlay_style = i >= 0 && i < OverlayStyleCount ? i : int(OverlayHistogram);
         return;
@@ -279,6 +295,7 @@ void Load() {
         {"TLG_STALE_READBACK", "stale_readback"},     {"TLG_FSR1", "fsr1"},
         {"TLG_RCAS", "rcas"},                        {"TLG_FRAMES_AHEAD", "frames_queued"},
         {"TLG_SHOW_FPS", "show_fps"},             {"TLG_SENSOR_AIM", "sensor_aim"},
+        {"TLG_INPUT_DISPLAY", "input_display"},
         {"TLG_MOUSE", "mouse_enabled"},           {"TLG_MOUSE_SENS", "mouse_sensitivity"},
         {"TLG_MOUSE_INVERT_Y", "mouse_invert_y"}, {"TLG_MOUSE_SMOOTHING", "mouse_smoothing"},
         {"TLG_MOUSE_ACCEL", "mouse_accel"},       {"TLG_MOUSE_DEADZONE", "mouse_deadzone"},
@@ -394,6 +411,9 @@ void Save() {
                  int(v.cheats[5].load()), int(v.cheats[6].load()));
     std::fprintf(file, "enemy_health_bar=%d\n", int(v.enemy_health_bar.load()));
     std::fprintf(file, "trophy_sound=%d\n", int(v.trophy_sound.load()));
+    std::fprintf(file, "input_display=%d\ninput_display_corner=%d\ninput_display_scale=%d\ninput_display_opacity=%d\n",
+                 int(v.input_display.load()), v.input_display_corner.load(), v.input_display_scale.load(),
+                 v.input_display_opacity.load());
     std::fprintf(file, "aspect=%s\n", v.aspect.c_str());
     std::fprintf(file,
                  "overlay_fps=%d\noverlay_frametime=%d\noverlay_upscaler=%d\noverlay_gpu=%d\n"

@@ -1157,7 +1157,7 @@ bool CaptureKey(const SDL_Event& event) {
             key_capture = -1;
             return true;
         }
-        if (event.key.key == SDLK_INSERT || event.key.key == SDLK_F10) return true;
+        if (event.key.key == SDLK_INSERT || event.key.key == SDLK_F10 || event.key.key == SDLK_F9) return true;
         const char* text = SDL_GetScancodeName(event.key.scancode);
         name = text ? text : "";
         if (name.find_first_of(",=|") != std::string::npos) return true;
@@ -1267,6 +1267,25 @@ void ControlsTab() {
         EndRows();
     }
     KeysSection();
+    SectionTitle(TL("Input display", "Отображение нажатий"));
+    if (BeginRows("##input_display")) {
+        CheckRow(TL("Show keys and mouse (F9)", "Показывать клавиши и мышь (F9)"), s.input_display,
+                 TL("A small keyboard and mouse on screen that light up with the keys and buttons you hold, for recordings and streams.",
+                    "Небольшие клавиатура и мышь на экране, подсвечивающие нажатые клавиши и кнопки, для записи и стримов."));
+        ImGui::BeginDisabled(!s.input_display);
+        static const char* const places[] = {TL("Top left", "Слева сверху"), TL("Top right", "Справа сверху"),
+                                             TL("Bottom left", "Слева снизу"), TL("Bottom right", "Справа снизу"),
+                                             TL("Top centre", "Сверху по центру"), TL("Bottom centre", "Снизу по центру")};
+        static_assert(std::size(places) == TlgSettings::OverlayPositions);
+        ChoiceRow(TL("Position", "Положение"), s.input_display_corner, places, nullptr, TlgSettings::OverlayPositions,
+                  TL("Where the input display sits.", "Где на экране отображение нажатий."));
+        SliderRow(TL("Size", "Размер"), s.input_display_scale, 50, 300, "%d%%",
+                  TL("Size of the input display.", "Размер отображения нажатий."));
+        SliderRow(TL("Background opacity", "Непрозрачность фона"), s.input_display_opacity, 0, 100, "%d%%",
+                  TL("0% is no background.", "0% — без фона."));
+        ImGui::EndDisabled();
+        EndRows();
+    }
     SectionTitle(TL("Sensor mode (graffiti)", "Режим сенсора (граффити)"));
     if (BeginRows("##sensor")) {
         SliderRow(TL("Graffiti aiming speed", "Скорость прицела граффити"), s.sensor_aim, 25, 200, "%d%%",
@@ -3371,6 +3390,244 @@ void MousePadBox() {
     ImGui::End();
 }
 
+// ---- Input display (F9): the keys and mouse buttons the player holds, drawn as a small keyboard
+// and mouse for recordings, streams and tutorials. The window thread records every key and button
+// event (RecordInput, before the menu or the game sees them); the present thread draws the state.
+// The physical keys are shown, whatever action the key map gives them. ----
+std::array<std::atomic<bool>, SDL_SCANCODE_COUNT> input_keys{};
+std::atomic<u32> input_buttons{0}; // bit n: SDL mouse button n
+std::atomic<s64> input_wheel_up{0}, input_wheel_down{0}; // steady clock ticks until which it shows
+std::atomic<float> input_motion_x{0.0f}, input_motion_y{0.0f}; // relative motion since the last frame
+float input_vel_x = 0.0f, input_vel_y = 0.0f; // present thread: the smoothed motion
+
+void AddFloat(std::atomic<float>& target, float value) {
+    float old = target.load(std::memory_order_relaxed);
+    while (!target.compare_exchange_weak(old, old + value, std::memory_order_relaxed)) {
+    }
+}
+
+void ClearInput() {
+    for (auto& key : input_keys) key.store(false, std::memory_order_relaxed);
+    input_buttons = 0;
+}
+
+void RecordInput(const SDL_Event& event) {
+    switch (event.type) {
+    case SDL_EVENT_KEY_DOWN:
+    case SDL_EVENT_KEY_UP:
+        if (event.key.scancode > SDL_SCANCODE_UNKNOWN && event.key.scancode < SDL_SCANCODE_COUNT) {
+            input_keys[event.key.scancode].store(event.type == SDL_EVENT_KEY_DOWN, std::memory_order_relaxed);
+        }
+        break;
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+        if (event.button.button < 32) {
+            const u32 bit = 1u << event.button.button;
+            if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+                input_buttons.fetch_or(bit, std::memory_order_relaxed);
+            } else {
+                input_buttons.fetch_and(~bit, std::memory_order_relaxed);
+            }
+        }
+        break;
+    case SDL_EVENT_MOUSE_WHEEL: {
+        const s64 until = (std::chrono::steady_clock::now() + std::chrono::milliseconds(180)).time_since_epoch().count();
+        const float y = event.wheel.direction == SDL_MOUSEWHEEL_FLIPPED ? -event.wheel.y : event.wheel.y;
+        if (y > 0.0f) input_wheel_up = until;
+        if (y < 0.0f) input_wheel_down = until;
+        break;
+    }
+    case SDL_EVENT_MOUSE_MOTION:
+        input_motion_x.fetch_add(event.motion.xrel, std::memory_order_relaxed);
+        input_motion_y.fetch_add(event.motion.yrel, std::memory_order_relaxed);
+        break;
+    case SDL_EVENT_WINDOW_FOCUS_LOST:
+        ClearInput(); // the key-up events go to another window
+        break;
+    default:
+        break;
+    }
+}
+
+bool KeyHeld(SDL_Scancode code) {
+    return input_keys[code].load(std::memory_order_relaxed);
+}
+
+struct InputKey {
+    const char* label;
+    SDL_Scancode code;
+    SDL_Scancode alt; // the right-hand twin (Shift, Ctrl), or UNKNOWN
+    float width;      // in keys
+};
+
+// The left of the keyboard the game uses by default (Controls → Keys): numbers (L1 / R1), WASD,
+// the actions around it, Shift (Circle), Ctrl (touchpad mode), Space (Cross). Rows start at
+// `offset` keys from the left, as on a real keyboard.
+struct InputRow {
+    float offset;
+    std::vector<InputKey> keys;
+};
+
+const std::vector<InputRow>& InputRows() {
+    static const std::vector<InputRow> rows = {
+        {1.0f, {{"1", SDL_SCANCODE_1, SDL_SCANCODE_UNKNOWN, 1}, {"2", SDL_SCANCODE_2, SDL_SCANCODE_UNKNOWN, 1},
+                {"3", SDL_SCANCODE_3, SDL_SCANCODE_UNKNOWN, 1}, {"4", SDL_SCANCODE_4, SDL_SCANCODE_UNKNOWN, 1},
+                {"5", SDL_SCANCODE_5, SDL_SCANCODE_UNKNOWN, 1}}},
+        {0.0f, {{"Tab", SDL_SCANCODE_TAB, SDL_SCANCODE_UNKNOWN, 1.5f}, {"Q", SDL_SCANCODE_Q, SDL_SCANCODE_UNKNOWN, 1},
+                {"W", SDL_SCANCODE_W, SDL_SCANCODE_UNKNOWN, 1}, {"E", SDL_SCANCODE_E, SDL_SCANCODE_UNKNOWN, 1},
+                {"R", SDL_SCANCODE_R, SDL_SCANCODE_UNKNOWN, 1}, {"T", SDL_SCANCODE_T, SDL_SCANCODE_UNKNOWN, 1}}},
+        {0.0f, {{"Shift", SDL_SCANCODE_LSHIFT, SDL_SCANCODE_RSHIFT, 1.75f}, {"A", SDL_SCANCODE_A, SDL_SCANCODE_UNKNOWN, 1},
+                {"S", SDL_SCANCODE_S, SDL_SCANCODE_UNKNOWN, 1}, {"D", SDL_SCANCODE_D, SDL_SCANCODE_UNKNOWN, 1},
+                {"F", SDL_SCANCODE_F, SDL_SCANCODE_UNKNOWN, 1}, {"G", SDL_SCANCODE_G, SDL_SCANCODE_UNKNOWN, 1}}},
+        {0.0f, {{"Ctrl", SDL_SCANCODE_LCTRL, SDL_SCANCODE_RCTRL, 2.25f}, {"Z", SDL_SCANCODE_Z, SDL_SCANCODE_UNKNOWN, 1},
+                {"X", SDL_SCANCODE_X, SDL_SCANCODE_UNKNOWN, 1}, {"C", SDL_SCANCODE_C, SDL_SCANCODE_UNKNOWN, 1},
+                {"V", SDL_SCANCODE_V, SDL_SCANCODE_UNKNOWN, 1}, {"B", SDL_SCANCODE_B, SDL_SCANCODE_UNKNOWN, 1}}},
+        {2.25f, {{"Space", SDL_SCANCODE_SPACE, SDL_SCANCODE_UNKNOWN, 5.0f}}},
+    };
+    return rows;
+}
+
+// The keys held that the keyboard above does not show (Enter, the arrows, I J K L...), by name.
+std::vector<std::string> OtherHeldKeys() {
+    static const std::array<bool, SDL_SCANCODE_COUNT> shown = [] {
+        std::array<bool, SDL_SCANCODE_COUNT> s{};
+        for (const InputRow& row : InputRows()) {
+            for (const InputKey& key : row.keys) {
+                s[key.code] = true;
+                if (key.alt != SDL_SCANCODE_UNKNOWN) s[key.alt] = true;
+            }
+        }
+        return s;
+    }();
+    std::vector<std::string> names;
+    for (int code = SDL_SCANCODE_UNKNOWN + 1; code < SDL_SCANCODE_COUNT && names.size() < 8; ++code) {
+        if (shown[code] || !KeyHeld(SDL_Scancode(code))) continue;
+        const char* name = SDL_GetScancodeName(SDL_Scancode(code));
+        if (name && *name) names.emplace_back(name);
+    }
+    return names;
+}
+
+void InputDisplay() {
+    const auto& s = TlgSettings::Get();
+    const float k = base_scale * s.input_display_scale / 100.0f;
+    const float bg = s.input_display_opacity / 100.0f;
+    constexpr float unit = 38.0f, gap = 4.0f, pitch = unit + gap, pad = 10.0f, rows_h = 5 * pitch - gap;
+    constexpr float keyboard_w = 7.25f * pitch - gap, mouse_w = 92.0f, mouse_gap = 14.0f;
+    constexpr float chip_h = 28.0f;
+    SavePainter p{ImGui::GetForegroundDrawList(), ImGui::GetFont(), k, {}};
+
+    const std::vector<std::string> others = OtherHeldKeys();
+    const float w = pad * 2 + keyboard_w + mouse_gap + mouse_w;
+    const float h = pad * 2 + rows_h + (others.empty() ? 0.0f : gap * 2 + chip_h);
+
+    // The place: as the performance overlay's positions, at the default distance from the edges.
+    const ImGuiViewport* v = ImGui::GetMainViewport();
+    const int place = s.input_display_corner;
+    const bool centre = place >= 4, right = place == 1 || place == 3, bottom = place == 2 || place == 3 || place == 5;
+    const float mx = 40.0f * base_scale, my = 36.0f * base_scale;
+    float x = centre ? v->WorkPos.x + (v->WorkSize.x - w * k) / 2
+              : right ? v->WorkPos.x + v->WorkSize.x - mx - w * k
+                      : v->WorkPos.x + mx;
+    float y = bottom ? v->WorkPos.y + v->WorkSize.y - my - h * k : v->WorkPos.y + my;
+    p.at = ImVec2(std::round(x), std::round(y));
+
+    if (bg > 0.0f) {
+        const bool frosted = Frost(p.dl, p.P(0, 0), p.P(w, h), Theme::PanelRadius * 2 * k);
+        p.Box(0, 0, w, h, Theme::Glass, Theme::PanelRadius * 2, (frosted ? Theme::GlassAlpha : 0.9f) * bg);
+    }
+
+    auto key_cap = [&](float x0, float y0, float x1, float y1, const char* label, bool held, float size) {
+        if (held) {
+            p.Box(x0, y0, x1, y1, Theme::Accent, Theme::ItemRadius);
+        } else {
+            p.Box(x0, y0, x1, y1, Theme::White(0.08f), Theme::ItemRadius);
+            p.Frame(x0, y0, x1, y1, Theme::White(0.22f), Theme::ItemRadius, 1.0f);
+        }
+        if (label && *label) {
+            const ImVec2 ts = p.Face(true)->CalcTextSizeA(size * k, FLT_MAX, 0.0f, label);
+            p.Text((x0 + x1) / 2 - ts.x / k / 2, (y0 + y1) / 2 - ts.y / k / 2, size, held ? Theme::Text : Theme::Muted,
+                   label, true);
+        }
+    };
+
+    // The keyboard.
+    float ry = pad;
+    for (const InputRow& row : InputRows()) {
+        float kx = pad + row.offset * pitch;
+        for (const InputKey& key : row.keys) {
+            const float kw = key.width * pitch - gap;
+            const bool held = KeyHeld(key.code) || (key.alt != SDL_SCANCODE_UNKNOWN && KeyHeld(key.alt));
+            key_cap(kx, ry, kx + kw, ry + unit, key.label, held, key.width > 1.0f ? 14.0f : 16.0f);
+            kx += kw + gap;
+        }
+        ry += pitch;
+    }
+
+    // The mouse: left and right buttons, the wheel (lit while it turns), the side buttons, and a
+    // dot that follows the motion.
+    const u32 buttons = input_buttons.load(std::memory_order_relaxed);
+    auto button = [&](int b) { return (buttons >> b & 1u) != 0; };
+    const float m0 = pad + keyboard_w + mouse_gap, m1 = m0 + mouse_w, mt = pad, mb = pad + rows_h;
+    const float mid = (m0 + m1) / 2, split = mt + (mb - mt) * 0.42f, body_r = mouse_w / 2;
+    p.dl->AddRectFilled(p.P(m0, mt), p.P(m1, mb), Theme::U32(Theme::White(0.06f)), body_r * k);
+    p.dl->AddRect(p.P(m0, mt), p.P(m1, mb), Theme::U32(Theme::White(0.22f)), body_r * k, 0, 1.0f * k);
+    const ImU32 lit = Theme::U32(Theme::Accent);
+    if (button(SDL_BUTTON_LEFT)) {
+        p.dl->AddRectFilled(p.P(m0 + 1, mt + 1), p.P(mid - 1, split), lit, body_r * k, ImDrawFlags_RoundCornersTopLeft);
+    }
+    if (button(SDL_BUTTON_RIGHT)) {
+        p.dl->AddRectFilled(p.P(mid + 1, mt + 1), p.P(m1 - 1, split), lit, body_r * k, ImDrawFlags_RoundCornersTopRight);
+    }
+    p.Line(m0, split, m1, split, Theme::White(0.22f), 1.0f);
+    p.Line(mid, mt, mid, split, Theme::White(0.22f), 1.0f);
+    p.Text(m0 + 14, mt + 22, 14.0f, button(SDL_BUTTON_LEFT) ? Theme::Text : Theme::Faint, "L", true);
+    p.TextRight(m1 - 14, mt + 22, 14.0f, button(SDL_BUTTON_RIGHT) ? Theme::Text : Theme::Faint, "R", true);
+    // The wheel, with the arrows of a turn above and below it.
+    const s64 now = std::chrono::steady_clock::now().time_since_epoch().count();
+    const bool up = now < input_wheel_up.load(), down = now < input_wheel_down.load();
+    const float wx0 = mid - 7, wx1 = mid + 7, wy0 = mt + 18, wy1 = split - 12;
+    p.Box(wx0, wy0, wx1, wy1, button(SDL_BUTTON_MIDDLE) ? Theme::Accent : Theme::Glass, 7.0f);
+    p.Frame(wx0, wy0, wx1, wy1, Theme::White(0.35f), 7.0f, 1.0f);
+    auto arrow = [&](float cy, float dir, bool on) {
+        p.dl->AddTriangleFilled(p.P(mid, cy - 4 * dir), p.P(mid - 5, cy + 3 * dir), p.P(mid + 5, cy + 3 * dir),
+                                Theme::U32(on ? Theme::Accent : Theme::White(0.18f)));
+    };
+    arrow(wy0 - 7, 1.0f, up);
+    arrow(wy1 + 7, -1.0f, down);
+    // The side buttons (X1 back, X2 forward) on the left edge.
+    const float sy = split + 14;
+    p.Box(m0 - 3, sy, m0 + 5, sy + 20, button(SDL_BUTTON_X2) ? Theme::Accent : Theme::White(0.22f), 3.0f);
+    p.Box(m0 - 3, sy + 24, m0 + 5, sy + 44, button(SDL_BUTTON_X1) ? Theme::Accent : Theme::White(0.22f), 3.0f);
+    // The motion: smoothed, the dot moves out from the centre with the speed.
+    input_vel_x = input_vel_x * 0.75f + input_motion_x.exchange(0.0f, std::memory_order_relaxed) * 0.25f;
+    input_vel_y = input_vel_y * 0.75f + input_motion_y.exchange(0.0f, std::memory_order_relaxed) * 0.25f;
+    const float speed = std::sqrt(input_vel_x * input_vel_x + input_vel_y * input_vel_y);
+    const float cx = mid, cy = (split + mb) / 2 + 6, ring = 22.0f;
+    p.dl->AddCircle(p.P(cx, cy), ring * k, Theme::U32(Theme::White(0.18f)), 0, 1.0f * k);
+    float dx = 0.0f, dy = 0.0f;
+    if (speed > 0.05f) {
+        const float reach = ring * speed / (speed + 12.0f);
+        dx = input_vel_x / speed * reach;
+        dy = input_vel_y / speed * reach;
+        p.Line(cx, cy, cx + dx, cy + dy, Theme::Accent, 2.0f, 0.7f);
+    }
+    p.dl->AddCircleFilled(p.P(cx + dx, cy + dy), 4.5f * k, Theme::U32(speed > 0.5f ? Theme::Accent : Theme::White(0.5f)));
+
+    // Other keys held, as chips under the keyboard.
+    if (!others.empty()) {
+        float cxp = pad;
+        const float cy0 = pad + rows_h + gap * 2;
+        for (const std::string& name : others) {
+            const std::string text = p.Fit(13.0f, name, 120.0f, true);
+            const float cw = p.Width(13.0f, text, true) + 20;
+            if (cxp + cw > w - pad) break;
+            key_cap(cxp, cy0, cxp + cw, cy0 + chip_h, text.c_str(), true, 13.0f);
+            cxp += cw + gap;
+        }
+    }
+}
+
 void BackgroundLoading() {
     const u32 done = background_done, total = std::max(background_total.load(), 1u);
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
@@ -3761,6 +4018,7 @@ bool HandleSaveEvent(const SDL_Event& event) {
 
 bool HandleEvent(const SDL_Event& event) {
     if (!overlay_context) return false; // before Init
+    RecordInput(event); // the input display: every key and button, whoever consumes it
     std::scoped_lock lock{imgui_mutex};
 #ifdef TLG_RENDERER_V3
     // Renderer v3 has no ImGui context of its own: the input goes to the overlay's. Not in v2:
@@ -3813,6 +4071,17 @@ bool HandleEvent(const SDL_Event& event) {
         if (down && !event.key.repeat && event.key.key == SDLK_F10) {
             auto& settings = TlgSettings::Get();
             settings.show_fps = !settings.show_fps;
+            return true;
+        }
+        // F9 shows or hides the input display (the keys and mouse buttons held), kept in tlg.ini.
+        if (down && !event.key.repeat && event.key.key == SDLK_F9) {
+            auto& settings = TlgSettings::Get();
+            settings.input_display = !settings.input_display;
+            if (is_open) {
+                dirty = true;
+            } else {
+                TlgSettings::Save();
+            }
             return true;
         }
         if (down && !event.key.repeat &&
@@ -3961,7 +4230,7 @@ bool Visible() {
     return initialized && (loading || background_total || menu_open || text_entry_active || choice_active ||
                            message_active || guide_active || progress_on || now < progress_until || now < toast_until ||
                            NoticeActive() || mouse_pad_on || trophy_toast >= 0 || !trophy_queue.empty() ||
-                           choice_retiring || s.show_fps ||
+                           choice_retiring || s.show_fps || s.input_display ||
                            (s.actor_watch_supported && s.enemy_health_bar));
 }
 
@@ -4184,6 +4453,9 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
     }
     if (!loading && !menu_open) {
         HealthDisplay();
+    }
+    if (TlgSettings::Get().input_display && !loading && !menu_open) {
+        InputDisplay();
     }
     if (background_total && !loading && !menu_open) {
         BackgroundLoading();
