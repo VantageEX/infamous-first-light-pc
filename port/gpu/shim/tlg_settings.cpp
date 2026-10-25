@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <string_view>
 
@@ -93,7 +94,7 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         }
     }
     if (key == "key_map") {
-        v.key_map = value;
+        SetKeyMap(value);
         return;
     }
     if (key == "lod_bands") {
@@ -138,6 +139,8 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.show_fps = i != 0;
     } else if (key == "mouse_enabled") {
         v.mouse_enabled = i != 0;
+    } else if (key == "mouse_direct") {
+        v.mouse_direct = value != "0";
     } else if (key == "mouse_invert_y") {
         v.mouse_invert_y = i != 0;
     } else if (key == "mouse_sensitivity") {
@@ -221,6 +224,20 @@ void Set(Values& v, const std::string& key, const std::string& value) {
 
 } // namespace
 
+namespace {
+std::mutex key_map_mutex;
+}
+
+std::string KeyMap() {
+    std::scoped_lock lock{key_map_mutex};
+    return Get().key_map;
+}
+
+void SetKeyMap(const std::string& value) {
+    std::scoped_lock lock{key_map_mutex};
+    Get().key_map = value;
+}
+
 Values& Get() {
     static Values values;
     return values;
@@ -261,6 +278,7 @@ void Load() {
         {"TLG_MOUSE", "mouse_enabled"},           {"TLG_MOUSE_SENS", "mouse_sensitivity"},
         {"TLG_MOUSE_INVERT_Y", "mouse_invert_y"}, {"TLG_MOUSE_SMOOTHING", "mouse_smoothing"},
         {"TLG_MOUSE_ACCEL", "mouse_accel"},       {"TLG_MOUSE_DEADZONE", "mouse_deadzone"},
+        {"TLG_MOUSE_DIRECT", "mouse_direct"},
         {"TLG_LOD_SCALE", "lod_scale"},           {"TLG_LOD_BANDS", "lod_bands"},
         {"TLG_REGION_LOD", "region_lod"},         {"TLG_REGION_FADE", "region_fade"},
         {"TLG_NEAR_CLIP", "near_clip"},           {"TLG_FAR_CLIP", "far_clip"},
@@ -411,9 +429,10 @@ void Save() {
     }
     std::fprintf(file,
                  "mouse_enabled=%d\nmouse_sensitivity=%.2f\nmouse_invert_y=%d\nmouse_smoothing=%.2f\n"
-                 "mouse_accel=%.2f\nmouse_deadzone=%.2f\nkey_map=%s\n",
+                 "mouse_accel=%.2f\nmouse_deadzone=%.2f\nmouse_direct=%d\nkey_map=%s\n",
                  int(v.mouse_enabled.load()), v.mouse_sensitivity.load(), int(v.mouse_invert_y.load()),
-                 v.mouse_smoothing.load(), v.mouse_accel.load(), v.mouse_deadzone.load(), v.key_map.c_str());
+                 v.mouse_smoothing.load(), v.mouse_accel.load(), v.mouse_deadzone.load(), int(v.mouse_direct.load()),
+                 KeyMap().c_str());
     // Read by run.sh at start.
     std::fprintf(file, "live_resolution=%s\n", v.live_resolution < 0 ? "auto"
                                                   : v.live_resolution ? "1" : "0");

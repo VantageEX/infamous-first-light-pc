@@ -14,6 +14,7 @@
 #include "actor_hook.h"
 #include "damage_hook.h"
 #include "view_hook.h"
+#include "mouse_camera.h"
 #include "gpu/tlggpu.h"
 #if !defined(__x86_64__) || !defined(__GNUC__)
 #error This prototype requires x86-64 GCC or Clang (including MinGW).
@@ -756,6 +757,26 @@ static void install_view_tuning(Segment *segments, uint64_t count, uint64_t size
     printf("Draw distance: ready (LOD scale, LOD bands, region LOD_ADJUST and FADE_DISTANCE, near/far clip)\n");
 }
 
+/* The mouse turns First Light's camera directly (src/mouse_camera.h): the cave reads the
+ * mailbox the pad thread fills. Another game or build: silent, the mouse stays a right stick. */
+static void install_mouse_camera(Segment *segments, uint64_t count, uint64_t size) {
+    const uint64_t at = tlg_mouse_camera_find(image, size);
+    if (!at || !mapped(segments, count, at, TLG_MOUSE_CAMERA_SITE_LENGTH)) return;
+    TlgMouseCamera *mailbox = allocate(page_size);
+    unsigned char *cave = allocate(page_size);
+    memset(mailbox, 0, sizeof(*mailbox));
+    mailbox->tilt_low = -1.2f; /* until the game's own range is known (runtime_pad.c) */
+    mailbox->tilt_high = 1.2f;
+    tlg_mouse_camera_build(cave, (uintptr_t)mailbox, (uintptr_t)(image + at + TLG_MOUSE_CAMERA_SITE_LENGTH));
+    protect(cave, page_size, 5);
+    if (!install_jump(at, TLG_MOUSE_CAMERA_SITE_LENGTH, cave)) {
+        printf("Mouse camera: unavailable (hook outside relative-jump range)\n");
+        return;
+    }
+    tlg_mouse_camera = mailbox;
+    printf("Mouse camera: direct (camera store at %#" PRIx64 ")\n", at);
+}
+
 /* G3PATCH2 (patches.py): the patches' image base, then byte writes at image offsets, applied
  * after relocation. A write may replace a whole base-relative pointer slot (60/90 FPS++ swap
  * function pointers): the patch holds the address at the patches' base, rebased here. */
@@ -1321,6 +1342,7 @@ int main(int argc, char **argv) {
     if (gpu_enabled) install_actor_watch(app0, segments, ns, size);
     if (gpu_enabled) install_stat_multipliers(app0, segments, ns, size);
     if (gpu_enabled) install_view_tuning(segments, ns, size);
+    if (gpu_enabled) install_mouse_camera(segments, ns, size);
 #ifdef _WIN32
     printf("Guest TCB loads redirected to the TEB TLS slot: %" PRIu64 "\n", patch_tcb_loads(segments, ns));
 #endif

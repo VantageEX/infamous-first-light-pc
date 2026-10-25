@@ -94,13 +94,18 @@ typedef struct {
     int32_t captured;
 } TlgGpuMouse;
 void tlggpu_mouse_take(TlgGpuMouse *mouse);
-/* Mouse and keyboard settings (tlg.ini; the menu changes the mouse ones live). key_map: the
- * tlg.ini key_map value, the TLG_KEY_MAP syntax (runtime_pad.c), read once at start. */
+/* Mouse and keyboard settings (tlg.ini; the menu changes the mouse ones live). direct_camera:
+ * the mouse turns the camera itself where the game's camera hook is in (src/mouse_camera.h), not
+ * as a right stick. key_map: the tlg.ini key_map value, the TLG_KEY_MAP syntax (runtime_pad.c),
+ * read once at start. */
 typedef struct {
     int32_t mouse_enabled, invert_y;
     float sensitivity, smoothing, accel, deadzone;
+    int32_t direct_camera;
     char key_map[512];
 } TlgGpuInputSettings;
+/* The direct mouse camera's cave is in (runtime_pad.c; probe.c installs it). */
+int tlg_mouse_camera_ready(void);
 void tlggpu_input_settings(TlgGpuInputSettings *settings);
 /* Touchpad mode of the mouse (runtime_pad.c): while active, a small touchpad with the virtual
  * finger is drawn in the corner (x, y: 0..1 over the pad; touching: the game sees the finger;

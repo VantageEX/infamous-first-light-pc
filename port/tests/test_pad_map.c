@@ -24,9 +24,12 @@ static uint32_t pressed_by(const ButtonMap *map, int source) {
 }
 
 int main(void) {
-    ButtonMap keys=key_map;
+#ifdef _WIN32
+    _set_error_mode(_OUT_TO_STDERR); /* a failed assert prints instead of opening a dialog */
+#endif
+    ButtonMap keys=key_map_default;
     assert(apply_button_map(&keys,NULL,true)==0 && apply_button_map(&keys,"",true)==0);
-    assert(keys.count==key_map.count);
+    assert(keys.count==key_map_default.count);
 
     /* Swap: Q presses Cross, Space presses Triangle; Space no longer presses Cross. */
     assert(apply_button_map(&keys," cross = Q , triangle=Space",true)==2);
@@ -35,15 +38,15 @@ int main(void) {
     assert(pressed_by(&keys,SDL_SCANCODE_E)==BTN_SQUARE);
 
     /* Names with spaces, any case; the last entry for a button wins. */
-    ButtonMap again=key_map;
+    ButtonMap again=key_map_default;
     assert(apply_button_map(&again,"CIRCLE=left shift,circle=Left Ctrl",true)==2);
     assert(pressed_by(&again,SDL_SCANCODE_LCTRL)==BTN_CIRCLE);
     assert(pressed_by(&again,SDL_SCANCODE_LSHIFT)==0);
 
     /* Bad entries are skipped and leave the defaults alone. */
-    ButtonMap bad=key_map;
+    ButtonMap bad=key_map_default;
     assert(apply_button_map(&bad,"bogus=Q,cross=NotAKey,circle,=Q,square=,,",true)==0);
-    assert(bad.count==key_map.count && pressed_by(&bad,SDL_SCANCODE_SPACE)==BTN_CROSS);
+    assert(bad.count==key_map_default.count && pressed_by(&bad,SDL_SCANCODE_SPACE)==BTN_CROSS);
 
     /* Gamepad: Xbox layout swap; 'touchpad' is the left click, Back stays the right click and
      * the real touchpad click keeps its fingers. */
@@ -59,9 +62,15 @@ int main(void) {
     assert(pressed_by(&pad,SDL_GAMEPAD_BUTTON_MISC1)==0 && pressed_by(&pad,SDL_GAMEPAD_BUTTON_RIGHT_PADDLE1)==CLICK_LEFT);
     assert(apply_button_map(&pad,"cross=Space",false)==0); /* a key name is no gamepad button */
     /* Keyboard: each side has a key of its own. */
-    assert(pressed_by(&key_map,SDL_SCANCODE_TAB)==CLICK_LEFT && pressed_by(&key_map,SDL_SCANCODE_BACKSPACE)==CLICK_RIGHT);
-    ButtonMap sides=key_map;
+    assert(pressed_by(&key_map_default,SDL_SCANCODE_TAB)==CLICK_LEFT && pressed_by(&key_map_default,SDL_SCANCODE_BACKSPACE)==CLICK_RIGHT);
+    ButtonMap sides=key_map_default;
     assert(apply_button_map(&sides,"touchpad_right=Delete",true)==1);
     assert(pressed_by(&sides,SDL_SCANCODE_BACKSPACE)==0 && pressed_by(&sides,SDL_SCANCODE_DELETE)==CLICK_RIGHT);
+    /* The stick keys: WASD and the arrows by default, remapped like the buttons. */
+    assert(pressed_by(&key_map_default,SDL_SCANCODE_W)==MOVE_UP && pressed_by(&key_map_default,SDL_SCANCODE_RIGHT)==LOOK_RIGHT);
+    ButtonMap azerty=key_map_default;
+    assert(apply_button_map(&azerty,"move_up=Y,move_left=Q,triangle=A",true)==3);
+    assert(pressed_by(&azerty,SDL_SCANCODE_Y)==MOVE_UP && pressed_by(&azerty,SDL_SCANCODE_W)==0);
+    assert(pressed_by(&azerty,SDL_SCANCODE_Q)==MOVE_LEFT && pressed_by(&azerty,SDL_SCANCODE_A)==BTN_TRIANGLE);
     puts("PASS: pad and key maps");
 }

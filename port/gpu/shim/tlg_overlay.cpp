@@ -11,6 +11,7 @@ inline bool Mark(unsigned) { return false; }
 #endif
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "tlg_overlay.h"
+#include "../tlggpu.h" // tlg_mouse_camera_ready
 
 #include <algorithm>
 #include <atomic>
@@ -995,6 +996,218 @@ void FixesSection() {
 
 void OpenGuide(); // the graffiti guide (below, with the save dialogs)
 
+// ---- Keys (the Controls tab): every PS4 button and stick direction of the keyboard map
+// (src/runtime_pad.c, the TLG_KEY_MAP syntax) with its keys and mouse buttons. A row waits for
+// the next key or mouse button (Esc cancels) and gives it to that action alone. The result goes
+// to key_map, which the pad thread applies on its next sample; the menu saves it on close. ----
+struct KeyAction {
+    const char* id;
+    const char* en;
+    const char* ru;
+    const char* keys; ///< the defaults (runtime_pad.c key_map_default), '|' between keys
+};
+constexpr KeyAction key_actions[] = {
+    {"move_up", "Move forward", "Вперёд", "W"},
+    {"move_down", "Move back", "Назад", "S"},
+    {"move_left", "Move left", "Влево", "A"},
+    {"move_right", "Move right", "Вправо", "D"},
+    {"cross", "Cross", "Крестик", "Space"},
+    {"circle", "Circle", "Кружок", "Left Shift"},
+    {"square", "Square", "Квадрат", "E"},
+    {"triangle", "Triangle", "Треугольник", "Q"},
+    {"l1", "L1", "L1", "1"},
+    {"r1", "R1", "R1", "3"},
+    {"l2", "L2", "L2", "R|Mouse Right"},
+    {"r2", "R2", "R2", "F|Mouse Left"},
+    {"l3", "L3", "L3", "Z"},
+    {"r3", "R3", "R3", "C|Mouse Middle"},
+    {"options", "Options", "Options", "Return"},
+    {"touchpad_left", "Touchpad, left side", "Тачпад, левая сторона", "Tab"},
+    {"touchpad_right", "Touchpad, right side", "Тачпад, правая сторона", "Backspace"},
+    {"up", "D-pad up", "Крестовина вверх", "I"},
+    {"down", "D-pad down", "Крестовина вниз", "K"},
+    {"left", "D-pad left", "Крестовина влево", "J"},
+    {"right", "D-pad right", "Крестовина вправо", "L"},
+    {"look_up", "Look up", "Камера вверх", "Up"},
+    {"look_down", "Look down", "Камера вниз", "Down"},
+    {"look_left", "Look left", "Камера влево", "Left"},
+    {"look_right", "Look right", "Камера вправо", "Right"},
+};
+constexpr int key_action_count = int(sizeof(key_actions) / sizeof(key_actions[0]));
+int key_capture = -1; ///< the action waiting for a key, -1 none
+std::chrono::steady_clock::time_point key_capture_since;
+
+std::string Trimmed(std::string text) {
+    while (!text.empty() && (text.front() == ' ' || text.front() == '\t')) text.erase(text.begin());
+    while (!text.empty() && (text.back() == ' ' || text.back() == '\t' || text.back() == '\r')) text.pop_back();
+    return text;
+}
+
+bool SameName(const std::string& a, const std::string& b) {
+    return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](char x, char y) {
+               return std::tolower(static_cast<unsigned char>(x)) == std::tolower(static_cast<unsigned char>(y));
+           });
+}
+
+// Each action's keys ('|' between them, empty for none): the defaults, then key_map's entries.
+std::vector<std::string> CurrentKeys() {
+    std::vector<std::string> keys(key_action_count);
+    for (int i = 0; i < key_action_count; ++i) keys[i] = key_actions[i].keys;
+    const std::string map = TlgSettings::KeyMap();
+    for (size_t at = 0; at <= map.size();) {
+        const size_t end = std::min(map.find(',', at), map.size());
+        const std::string entry = map.substr(at, end - at);
+        at = end + 1;
+        const size_t eq = entry.find('=');
+        if (eq == std::string::npos) continue;
+        std::string id = Trimmed(entry.substr(0, eq));
+        const std::string value = Trimmed(entry.substr(eq + 1));
+        if (SameName(id, "touchpad")) id = "touchpad_left";
+        for (int i = 0; i < key_action_count; ++i) {
+            if (SameName(id, key_actions[i].id)) keys[i] = SameName(value, "none") ? "" : value;
+        }
+    }
+    return keys;
+}
+
+// key_map from `keys`: the actions whose keys differ from their defaults.
+void StoreKeys(const std::vector<std::string>& keys) {
+    std::string map;
+    for (int i = 0; i < key_action_count; ++i) {
+        if (keys[i] == key_actions[i].keys) continue;
+        map += (map.empty() ? "" : ",") + std::string(key_actions[i].id) + "=" + (keys[i].empty() ? "none" : keys[i]);
+    }
+    TlgSettings::SetKeyMap(map);
+    dirty = true;
+}
+
+// Gives action `index` the key `name` alone and takes it from the others.
+void AssignKey(int index, const std::string& name) {
+    std::vector<std::string> keys = CurrentKeys();
+    for (std::string& list : keys) {
+        std::string kept;
+        for (size_t at = 0; at <= list.size();) {
+            const size_t end = std::min(list.find('|', at), list.size());
+            const std::string key = Trimmed(list.substr(at, end - at));
+            at = end + 1;
+            if (!key.empty() && !SameName(key, name)) kept += (kept.empty() ? "" : "|") + key;
+        }
+        list = kept;
+    }
+    keys[index] = name;
+    StoreKeys(keys);
+}
+
+// A key's name as the menu shows it: the mouse in words, the rest as SDL names it.
+std::string KeyLabel(const std::string& keys) {
+    static const char* const mouse[][3] = {
+        {"Mouse Left", "Left mouse button", "Левая кнопка мыши"},
+        {"Mouse Right", "Right mouse button", "Правая кнопка мыши"},
+        {"Mouse Middle", "Middle mouse button", "Средняя кнопка мыши"},
+        {"Mouse X1", "Mouse button 4", "Кнопка мыши 4"},
+        {"Mouse X2", "Mouse button 5", "Кнопка мыши 5"},
+        {"Wheel Up", "Wheel up", "Колесо вверх"},
+        {"Wheel Down", "Wheel down", "Колесо вниз"},
+        {"Wheel Left", "Wheel left", "Колесо влево"},
+        {"Wheel Right", "Wheel right", "Колесо вправо"},
+    };
+    if (keys.empty()) return TL("none", "нет");
+    std::string out;
+    for (size_t at = 0; at <= keys.size();) {
+        const size_t end = std::min(keys.find('|', at), keys.size());
+        std::string key = Trimmed(keys.substr(at, end - at));
+        at = end + 1;
+        for (const auto& m : mouse) {
+            if (SameName(key, m[0])) key = TL(m[1], m[2]);
+        }
+        out += (out.empty() ? "" : " / ") + key;
+    }
+    return out;
+}
+
+// The key or mouse button an event gives the waiting action ("" for none); Esc and a gamepad
+// button cancel. Insert, F10 and Esc stay the overlay's; ',', '=' and '|' cannot be written to
+// key_map. Mouse presses count from a moment after the click that opened the wait.
+bool CaptureKey(const SDL_Event& event) {
+    if (key_capture < 0) return false;
+    std::string name;
+    switch (event.type) {
+    case SDL_EVENT_KEY_DOWN: {
+        if (event.key.repeat) return true;
+        if (event.key.key == SDLK_ESCAPE) {
+            key_capture = -1;
+            return true;
+        }
+        if (event.key.key == SDLK_INSERT || event.key.key == SDLK_F10) return true;
+        const char* text = SDL_GetScancodeName(event.key.scancode);
+        name = text ? text : "";
+        if (name.find_first_of(",=|") != std::string::npos) return true;
+        break;
+    }
+    case SDL_EVENT_KEY_UP:
+        return true;
+    case SDL_EVENT_MOUSE_BUTTON_DOWN: {
+        if (std::chrono::steady_clock::now() - key_capture_since < std::chrono::milliseconds(250)) return true;
+        static const char* const buttons[] = {"", "Mouse Left", "Mouse Middle", "Mouse Right", "Mouse X1", "Mouse X2"};
+        if (event.button.button < 1 || event.button.button > 5) return true;
+        name = buttons[event.button.button];
+        break;
+    }
+    case SDL_EVENT_MOUSE_BUTTON_UP:
+        return true;
+    case SDL_EVENT_MOUSE_WHEEL:
+        name = event.wheel.y > 0 ? "Wheel Up" : event.wheel.y < 0 ? "Wheel Down" : event.wheel.x > 0 ? "Wheel Right" : "Wheel Left";
+        break;
+    case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
+        key_capture = -1;
+        return true;
+    default:
+        return false;
+    }
+    if (!name.empty()) {
+        AssignKey(key_capture, name);
+        key_capture = -1;
+    }
+    return true;
+}
+
+void KeysSection() {
+    SectionTitle(TL("Keys", "Клавиши"));
+    const char* env = std::getenv("TLG_KEY_MAP");
+    if (env && env[0]) {
+        if (BeginRows("##keys_env")) {
+            InfoRow(TL("Set by TLG_KEY_MAP", "Задано через TLG_KEY_MAP"), env);
+            EndRows();
+        }
+        return;
+    }
+    const std::vector<std::string> keys = CurrentKeys();
+    if (BeginRows("##keys")) {
+        for (int i = 0; i < key_action_count; ++i) {
+            const bool waiting = key_capture == i;
+            const std::string value = waiting ? TL("Press a key...", "Нажмите клавишу...") : KeyLabel(keys[i]);
+            const float value_w = std::min(TextSize(LightFont(), 25, value.c_str()).x, L(420));
+            const RowState r = RowFrame(TL(key_actions[i].en, key_actions[i].ru),
+                                        waiting ? TL("Esc cancels.", "Esc — отмена.") : nullptr, value_w);
+            const ImVec2 size = TextSize(LightFont(), 25, value.c_str());
+            r.dl->AddText(LightFont(), L(25), ImVec2(r.control_x, r.mid - size.y / 2),
+                          ImGui::GetColorU32(waiting ? Theme::Accent : keys[i] == key_actions[i].keys ? Theme::White(0.9f) : Theme::Text),
+                          value.c_str());
+            if (r.activated) {
+                key_capture = i;
+                key_capture_since = std::chrono::steady_clock::now();
+            }
+        }
+        EndRows();
+    }
+    if (ButtonRow(TL("Default keys", "Клавиши по умолчанию"),
+                  TL("Every action gets its keys back.", "Возвращает всем действиям их клавиши."), TL("Reset", "Сбросить"))) {
+        TlgSettings::SetKeyMap("");
+        key_capture = -1;
+        dirty = true;
+    }
+}
+
 void ControlsTab() {
     auto& s = TlgSettings::Get();
     // Mouse (src/runtime_pad.c): the camera settings apply at once. The buttons and the touchpad
@@ -1005,10 +1218,19 @@ void ControlsTab() {
                  TL("The game window takes the mouse while it has focus. Esc releases it; a click in the window takes it back.",
                     "Окно игры захватывает мышь, пока оно в фокусе. Esc отпускает её, щелчок по окну захватывает снова."));
         ImGui::BeginDisabled(!s.mouse_enabled);
+        const bool direct_ready = tlg_mouse_camera_ready() != 0;
+        if (direct_ready) {
+            CheckRow(TL("Mouse turns the camera directly", "Мышь поворачивает камеру напрямую"), s.mouse_direct,
+                     TL("1:1, with no speed limit, as in PC games. Off: the mouse acts as the right stick (the game's own turn speed caps it).",
+                        "1:1, без ограничения скорости, как в играх для ПК. Выкл.: мышь работает как правый стик (скорость поворота ограничена игрой)."));
+        }
+        const bool direct = direct_ready && s.mouse_direct;
         FloatRow(TL("Sensitivity", "Чувствительность"), s.mouse_sensitivity, 0.1f, 5.0f, "%.2f",
                  TL("How far the camera turns for the same mouse movement.", "Насколько поворачивается камера при одном и том же движении мыши."));
         CheckRow(TL("Invert Y axis", "Инвертировать ось Y"), s.mouse_invert_y,
                  TL("Moving the mouse forward looks down.", "Движение мыши от себя опускает взгляд."));
+        // The stick's filters: the direct camera takes the motion as it is.
+        ImGui::BeginDisabled(direct);
         FloatRow(TL("Smoothing", "Сглаживание"), s.mouse_smoothing, 0.0f, 0.9f, "%.2f",
                  TL("Evens out the camera motion; higher values feel softer and a little slower.",
                     "Делает движение камеры ровнее; при больших значениях оно мягче и чуть медленнее."));
@@ -1018,18 +1240,14 @@ void ControlsTab() {
                  TL("Small mouse movements skip the game's stick dead zone. Raise it if slow movements do nothing.",
                     "Мелкие движения мыши перескакивают мёртвую зону стика в игре. Увеличьте, если медленные движения ничего не делают."));
         ImGui::EndDisabled();
-        InfoRow(TL("Left / right / middle", "Левая / правая / средняя"), "R2 / L2 / R3");
+        ImGui::EndDisabled();
         InfoRow(TL("Touchpad mode", "Режим тачпада"), TL("hold Left Ctrl or Mouse X1", "удерживайте левый Ctrl или кнопку мыши X1"));
         InfoRow(TL("In touchpad mode", "В режиме тачпада"),
                 TL("left touch/click/drag, middle touch, right two fingers", "левая — касание/нажатие/свайп, средняя — касание, правая — два пальца"));
         InfoRow(TL("Release the mouse", "Отпустить мышь"), "Esc");
-        const char* env = std::getenv("TLG_KEY_MAP");
-        const std::string remap = env && env[0] ? std::string(env) : s.key_map;
-        if (!remap.empty()) {
-            InfoRow(TL("Remapped", "Переназначено"), remap.c_str());
-        }
         EndRows();
     }
+    KeysSection();
     SectionTitle(TL("Sensor mode (graffiti)", "Режим сенсора (граффити)"));
     if (BeginRows("##sensor")) {
         SliderRow(TL("Graffiti aiming speed", "Скорость прицела граффити"), s.sensor_aim, 25, 200, "%d%%",
@@ -3377,6 +3595,11 @@ bool HandleEvent(const SDL_Event& event) {
     }
     ImGuiIO& io = overlay_context->IO; // not made current: other threads draw with ImGui
     const bool is_open = menu_open;
+    if (!is_open) {
+        key_capture = -1; // the menu closed while a key row waited
+    } else if (CaptureKey(event)) {
+        return true;
+    }
     switch (event.type) {
     case SDL_EVENT_KEY_DOWN:
     case SDL_EVENT_KEY_UP: {

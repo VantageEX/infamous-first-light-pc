@@ -22,6 +22,7 @@
 #include <SDL3/SDL.h>
 #include "mouse_stick.h"
 #include "mouse_touch.h"
+#include "mouse_camera.h"
 #include "rumble_gate.h"
 #include <sys/stat.h>
 
@@ -38,6 +39,11 @@ enum {
     /* Host-only sources, never shown to the game: a click on one side of the touchpad from a
      * button or key without a touch surface (play_click turns them into a touch and a click). */
     CLICK_LEFT=0x40000000, CLICK_RIGHT=0x80000000,
+    /* Keyboard map only, never shown to the game: keys that push a stick to its edge (the left
+     * stick moves, the right one looks). */
+    MOVE_UP=0x01000000, MOVE_DOWN=0x02000000, MOVE_LEFT=0x04000000, MOVE_RIGHT=0x08000000,
+    LOOK_UP=0x10000000, LOOK_DOWN=0x20000000, LOOK_LEFT=0x00400000, LOOK_RIGHT=0x00800000,
+    STICK_KEYS=MOVE_UP|MOVE_DOWN|MOVE_LEFT|MOVE_RIGHT|LOOK_UP|LOOK_DOWN|LOOK_LEFT|LOOK_RIGHT,
 };
 typedef struct { uint16_t x, y; uint8_t id, reserve[3]; } PadTouch;
 typedef struct {
@@ -203,13 +209,17 @@ static SDL_Gamepad *current_gamepad(void) {
  * map also takes the mouse: Mouse Left/Middle/Right/X1/X2, Wheel Up/Down/Left/Right.
  * touchpad_left (alias touchpad) and touchpad_right are the two sides of the touchpad click:
  * photo mode and the pause menu. Back/View (Share on a DualSense) is the right click, and with
- * L1 held the left one. Sticks, triggers, the real touchpad click and the overlay shortcuts are
- * not remapped. */
+ * L1 held the left one. move_up/down/left/right (W A S D) and look_up/down/left/right (the
+ * arrows) are the keys that push the sticks. The gamepad's sticks and triggers, the real
+ * touchpad click and the overlay shortcuts are not remapped. tlg.ini's key_map is read again
+ * when it changes (the menu's Keys section writes it). */
 static const struct { const char *name; uint32_t ps; } ps_names[]={
     {"cross",BTN_CROSS}, {"circle",BTN_CIRCLE}, {"square",BTN_SQUARE}, {"triangle",BTN_TRIANGLE},
     {"l1",BTN_L1}, {"r1",BTN_R1}, {"l2",BTN_L2}, {"r2",BTN_R2}, {"l3",BTN_L3}, {"r3",BTN_R3},
     {"options",BTN_OPTIONS}, {"touchpad",CLICK_LEFT}, {"touchpad_left",CLICK_LEFT}, {"touchpad_right",CLICK_RIGHT},
     {"up",BTN_UP}, {"down",BTN_DOWN}, {"left",BTN_LEFT}, {"right",BTN_RIGHT},
+    {"move_up",MOVE_UP}, {"move_down",MOVE_DOWN}, {"move_left",MOVE_LEFT}, {"move_right",MOVE_RIGHT},
+    {"look_up",LOOK_UP}, {"look_down",LOOK_DOWN}, {"look_left",LOOK_LEFT}, {"look_right",LOOK_RIGHT},
 };
 /* Mouse sources in the keyboard map: MOUSE_SOURCE + bit of TlgGpuMouse (SDL button - 1), then
  * the wheel directions (pulses, see sample_mouse). */
@@ -232,14 +242,17 @@ static ButtonMap pad_map={{
     {SDL_GAMEPAD_BUTTON_DPAD_UP,BTN_UP}, {SDL_GAMEPAD_BUTTON_DPAD_DOWN,BTN_DOWN},
     {SDL_GAMEPAD_BUTTON_DPAD_LEFT,BTN_LEFT}, {SDL_GAMEPAD_BUTTON_DPAD_RIGHT,BTN_RIGHT},
 },15};
-static ButtonMap key_map={{
+static const ButtonMap key_map_default={{
     {SDL_SCANCODE_SPACE,BTN_CROSS}, {SDL_SCANCODE_LSHIFT,BTN_CIRCLE}, {SDL_SCANCODE_E,BTN_SQUARE},
     {SDL_SCANCODE_Q,BTN_TRIANGLE}, {SDL_SCANCODE_1,BTN_L1}, {SDL_SCANCODE_3,BTN_R1},
     {SDL_SCANCODE_R,BTN_L2}, {SDL_SCANCODE_F,BTN_R2}, {SDL_SCANCODE_Z,BTN_L3}, {SDL_SCANCODE_C,BTN_R3},
     {SDL_SCANCODE_RETURN,BTN_OPTIONS}, {SDL_SCANCODE_TAB,CLICK_LEFT}, {SDL_SCANCODE_BACKSPACE,CLICK_RIGHT},
     {SDL_SCANCODE_I,BTN_UP}, {SDL_SCANCODE_K,BTN_DOWN}, {SDL_SCANCODE_J,BTN_LEFT}, {SDL_SCANCODE_L,BTN_RIGHT},
     {MOUSE_LEFT,BTN_R2}, {MOUSE_RIGHT,BTN_L2}, {MOUSE_MIDDLE,BTN_R3},
-},20};
+    {SDL_SCANCODE_W,MOVE_UP}, {SDL_SCANCODE_S,MOVE_DOWN}, {SDL_SCANCODE_A,MOVE_LEFT}, {SDL_SCANCODE_D,MOVE_RIGHT},
+    {SDL_SCANCODE_UP,LOOK_UP}, {SDL_SCANCODE_DOWN,LOOK_DOWN}, {SDL_SCANCODE_LEFT,LOOK_LEFT}, {SDL_SCANCODE_RIGHT,LOOK_RIGHT},
+},28};
+static ButtonMap key_map;
 
 static char *trim(char *text) {
     while (*text==' ' || *text=='\t') ++text;
@@ -304,17 +317,31 @@ static int apply_button_map(ButtonMap *map, const char *spec, bool keyboard) {
     return used;
 }
 
+/* The gamepad map once; the keyboard map again whenever tlg.ini's key_map changes (TLG_KEY_MAP
+ * wins over it and is read once). */
 static void load_button_maps(void) {
     static bool loaded;
-    if (loaded) return;
-    loaded=true;
-    const int pad=apply_button_map(&pad_map,getenv("TLG_PAD_MAP"),false);
-    /* TLG_KEY_MAP wins over tlg.ini's key_map. */
+    static char applied[sizeof(((TlgGpuInputSettings *)0)->key_map)];
     const char *env=getenv("TLG_KEY_MAP");
+    if (!loaded) {
+        loaded=true;
+        const int pad=apply_button_map(&pad_map,getenv("TLG_PAD_MAP"),false);
+        if (pad) printf("Runtime: pad map: %d gamepad buttons remapped\n",pad);
+        key_map=key_map_default;
+        if (env && *env) {
+            const int keys=apply_button_map(&key_map,env,true);
+            if (keys) printf("Runtime: pad map: %d keyboard buttons remapped (TLG_KEY_MAP)\n",keys);
+        }
+    }
+    if (env && *env) return;
     TlgGpuInputSettings in;
     tlggpu_input_settings(&in);
-    const int keys=apply_button_map(&key_map,env && *env ? env : in.key_map,true);
-    if (pad || keys) printf("Runtime: pad map: %d gamepad and %d keyboard buttons remapped\n",pad,keys);
+    static bool read;
+    if (read && !strcmp(in.key_map,applied)) return;
+    read=true;
+    snprintf(applied,sizeof(applied),"%s",in.key_map);
+    key_map=key_map_default;
+    if (in.key_map[0]) printf("Runtime: pad map: %d keyboard buttons remapped\n",apply_button_map(&key_map,in.key_map,true));
 }
 
 /* Motion (orientation quaternion, acceleration in g, angular velocity in rad/s; axes as SDL's:
@@ -558,6 +585,77 @@ static struct { bool active, two_fingers; MouseTouch finger; MouseTouchOut out; 
  * notch is one press (menus scroll one item per notch). TLG_MOUSE_LOG=1 (or TLG_MOUSE_TEST)
  * logs what the game gets. Called under lock. */
 enum { WHEEL_PULSE_US=80000, WHEEL_GAP_US=40000 };
+
+/* The direct mouse camera (src/mouse_camera.h): probe.c installs the cave and sets the mailbox. */
+TlgMouseCamera *volatile tlg_mouse_camera;
+int tlg_mouse_camera_ready(void) { return tlg_mouse_camera!=NULL; }
+
+/* Radians per mouse count at sensitivity 1: 5.12 degrees per 100 counts (axylpup's default). */
+#define MOUSE_CAMERA_RADIANS 0.000893609f
+/* The camera's update ran within this: in menus, cut-scenes and loads it does not, the motion is
+ * not parked for a jump afterwards and the mouse is a right stick again (menus that read it). */
+#define MOUSE_CAMERA_STALE_US 250000u
+
+/* The game turns the camera itself again (the mouse left the camera: released, off, touchpad). */
+static void mouse_camera_release(void) {
+    TlgMouseCamera *mc=tlg_mouse_camera;
+    if (mc) __atomic_store_n(&mc->hold,0u,__ATOMIC_RELAXED);
+}
+
+/* Adds the motion to the mailbox (the cave takes it on the camera's next update); false when the
+ * mouse should stay a right stick: no cave, the switch off, or the camera not updating. The
+ * range of tilts the camera had is logged when it grows (the limits the cave keeps the mouse
+ * to, mailbox tilt_low / tilt_high, are fixed for now). */
+static bool mouse_camera_add(float dx, float dy, const TlgGpuInputSettings *in, uint64_t now) {
+    TlgMouseCamera *mc=tlg_mouse_camera;
+    if (!mc || !in->direct_camera) {
+        mouse_camera_release();
+        return false;
+    }
+    static uint32_t last_updates;
+    static uint64_t last_change;
+    const uint32_t updates=__atomic_load_n(&mc->updates,__ATOMIC_RELAXED);
+    if (updates!=last_updates) {
+        last_updates=updates;
+        last_change=now;
+        static float low=1e9f, high=-1e9f;
+        const float tilt=mc->tilt;
+        if (tilt<low-0.02f || tilt>high+0.02f) {
+            low=fminf(low,tilt);
+            high=fmaxf(high,tilt);
+            printf("Mouse camera: tilt seen %.3f .. %.3f\n",low,high);
+        }
+    }
+    if (!last_change || now-last_change>MOUSE_CAMERA_STALE_US) {
+        __atomic_store_n(&mc->delta,0,__ATOMIC_RELAXED);
+        __atomic_store_n(&mc->hold,0u,__ATOMIC_RELAXED);
+        return false;
+    }
+    /* The game's own turn (it swings the camera behind the player) stays off this long after
+     * the last mouse motion, as the right stick keeps it off; TLG_MOUSE_FOLLOW_HOLD seconds (5,
+     * axylpup's default; 0 never). */
+    static uint64_t hold_us=UINT64_MAX, last_motion;
+    if (hold_us==UINT64_MAX) {
+        const char *e=getenv("TLG_MOUSE_FOLLOW_HOLD");
+        const double seconds=e && *e ? atof(e) : 5.0;
+        hold_us=(uint64_t)(fmin(fmax(seconds,0.0),100000.0)*1e6);
+    }
+    if (dx!=0.0f || dy!=0.0f) last_motion=now;
+    __atomic_store_n(&mc->hold,(uint32_t)(last_motion && now-last_motion<hold_us),__ATOMIC_RELAXED);
+    if (dx==0.0f && dy==0.0f) return true;
+    const float k=MOUSE_CAMERA_RADIANS*in->sensitivity;
+    const float pan=-dx*k, tilt=(in->invert_y ? -dy : dy)*k;
+    uint64_t old=__atomic_load_n(&mc->delta,__ATOMIC_RELAXED), next;
+    do {
+        float f[2];
+        memcpy(f,&old,sizeof(f));
+        f[0]=fminf(fmaxf(f[0]+pan,-0.75f),0.75f);
+        f[1]=fminf(fmaxf(f[1]+tilt,-0.75f),0.75f);
+        memcpy(&next,f,sizeof(next));
+    } while (!__atomic_compare_exchange_n(&mc->delta,&old,next,true,__ATOMIC_RELAXED,__ATOMIC_RELAXED));
+    return true;
+}
+
 static MouseStick mouse_stick;
 static uint64_t mouse_last_us;
 static struct { int pending; uint64_t until, next; } wheel[4];
@@ -572,6 +670,7 @@ static uint32_t sample_mouse(PadData *d, bool aiming_can, const bool *k) {
     mouse_last_us=now;
     static bool was_captured;
     if (!in.mouse_enabled || !m.captured) {
+        mouse_camera_release();
         memset(&mouse_stick,0,sizeof(mouse_stick));
         memset(wheel,0,sizeof(wheel));
         was_captured=false;
@@ -628,6 +727,7 @@ static uint32_t sample_mouse(PadData *d, bool aiming_can, const bool *k) {
     } else {
         tlggpu_mouse_pad_hud(0,0,0,0,0);
     }
+    if (pad_mode || aiming_can) mouse_camera_release();
     if (pad_mode) {
         /* nothing: the finger took the motion */
     } else if (aiming_can) {
@@ -639,6 +739,8 @@ static uint32_t sample_mouse(PadData *d, bool aiming_can, const bool *k) {
         motion.yaw=fminf(fmaxf(motion.yaw,-1.4f),1.4f);
         motion.aim_pitch=fminf(fmaxf(motion.aim_pitch,-1.2f),1.2f);
         memset(&mouse_stick,0,sizeof(mouse_stick));
+    } else if (mouse_camera_add(m.dx,m.dy,&in,now)) {
+        memset(&mouse_stick,0,sizeof(mouse_stick)); /* the camera took the motion */
     } else mouse_stick_update(&mouse_stick,&p,m.dx,m.dy,dt);
     const uint8_t base_x=d->right_x, base_y=d->right_y;
     d->right_x=mouse_stick_add(d->right_x,mouse_stick_axis(&mouse_stick,&p,0));
@@ -731,12 +833,14 @@ static void sample_host(PadData *d) {
                                              : source<SDL_SCANCODE_COUNT && k[source];
         if (down) d->buttons|=key_map.entries[i].ps;
     }
+    const uint32_t sticks=d->buttons & STICK_KEYS;
+    d->buttons&=~(uint32_t)STICK_KEYS;
     if (d->buttons & BTN_L2) d->l2=255;
     if (d->buttons & BTN_R2) d->r2=255;
-    key_axis(&d->left_x,k[SDL_SCANCODE_A],k[SDL_SCANCODE_D]);
-    key_axis(&d->left_y,k[SDL_SCANCODE_W],k[SDL_SCANCODE_S]);
-    key_axis(&d->right_x,k[SDL_SCANCODE_LEFT],k[SDL_SCANCODE_RIGHT]);
-    key_axis(&d->right_y,k[SDL_SCANCODE_UP],k[SDL_SCANCODE_DOWN]);
+    key_axis(&d->left_x,sticks & MOVE_LEFT,sticks & MOVE_RIGHT);
+    key_axis(&d->left_y,sticks & MOVE_UP,sticks & MOVE_DOWN);
+    key_axis(&d->right_x,sticks & LOOK_LEFT,sticks & LOOK_RIGHT);
+    key_axis(&d->right_y,sticks & LOOK_UP,sticks & LOOK_DOWN);
     if (k[SDL_SCANCODE_T] || k[SDL_SCANCODE_G]) d->right_x=d->right_y=128; /* the arrows point the can */
     apply_swipe(d,g,k);
     apply_mouse_touch(d);

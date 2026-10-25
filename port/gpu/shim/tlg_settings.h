@@ -156,12 +156,19 @@ struct Values {
     // Mouse and keyboard (src/runtime_pad.c through tlggpu_input_settings, src/mouse_stick.h):
     // the mouse turns the camera (right stick). Live from the menu.
     std::atomic<bool> mouse_enabled{true}, mouse_invert_y{false};
+    /// The mouse turns the camera itself (src/mouse_camera.h) where the game's code allows it.
+    std::atomic<bool> mouse_direct{true};
     std::atomic<float> mouse_sensitivity{1.0f}, mouse_smoothing{0.5f}, mouse_accel{0.0f}, mouse_deadzone{0.1f};
-    /// Keyboard and mouse button remap (TLG_KEY_MAP syntax); written by Load only, read once.
+    /// Keyboard and mouse button remap (TLG_KEY_MAP syntax). The menu's Keys section writes it
+    /// while the pad thread reads it: only through KeyMap / SetKeyMap.
     std::string key_map;
 };
 
 Values& Get();
+/// The key_map value (a copy, under the settings' lock).
+std::string KeyMap();
+/// Sets key_map; the pad thread applies it on its next sample, Save() keeps it.
+void SetKeyMap(const std::string& value);
 
 /// Reads the file, then the environment overrides. Called once at start.
 void Load();
