@@ -248,11 +248,14 @@ void PrecompileJobs() {
     u32 done = 0, graphics = 0, compute = 0, failed = 0, skipped = 0;
     std::unordered_set<u64> seen_compute;
     const auto started = std::chrono::steady_clock::now();
-    // SHADPS4_ASYNC_COMPUTE_PIPELINES=1: a compute record only queues its driver compile on the
+    // Async compute pipelines (on for this pass): a compute record only queues its driver compile on the
     // pool (SHADPS4_ASYNC_COMPUTE_THREADS workers), so the screen counts the compiled ones: the
     // records looked up less the compute jobs still queued. One by one, a fresh driver cache took
     // 55 ms per compute pipeline: 17,110 of First Light's in 16 minutes (Ryzen 5 5600X, issue #3).
-    const bool async_compute = Vulkan::AsyncComputePipelinesEnabled();
+    // Only this pass: in a normal start the cached compute pipelines compile at once from the
+    // driver's cache (15 s to the first frames), deferred they compiled again on the pool's 12
+    // threads at every start (68 s; the game waits for the ones it meets first).
+    Vulkan::SetAsyncComputePipelines(1);
     for (const auto& record : records) {
         ++done;
         if (done <= trace) {
@@ -260,7 +263,7 @@ void PrecompileJobs() {
                          record.stages.size());
             std::fflush(stderr);
         }
-        if ((done & 63) == 0) TlgOverlay::SetLoading(true, async_compute ? done - compute : done, total);
+        if ((done & 63) == 0) TlgOverlay::SetLoading(true, done - compute, total);
         if ((done % 2000) == 0) {
             std::fprintf(stderr, "V3 precompile: %u / %u, %u graphics, %u compute, %u skipped, %u failed, %.0f s\n",
                          done, total, graphics, compute, skipped, failed,
@@ -319,27 +322,26 @@ void PrecompileJobs() {
         Shader::g_synthetic_flats = nullptr;
     }
     cs = saved_cs;
-    if (async_compute) {
-        // The queued compute compiles finish behind the same screen (the game would otherwise
-        // start while they run, and wait for each one it meets first).
-        // Two minutes without one finished compile (a driver compile that never returns): the
-        // game starts, and a pipeline still queued compiles at its first use.
-        size_t last_left = ~size_t{0};
-        auto last_progress = std::chrono::steady_clock::now();
-        for (;;) {
-            const size_t left = Vulkan::PipelineCompilePool::WaitIdleFor(std::chrono::milliseconds(250));
-            TlgOverlay::SetLoading(true, total - std::min<u32>(static_cast<u32>(left), compute), total);
-            if (left == 0) break;
-            const auto now = std::chrono::steady_clock::now();
-            if (left != last_left) {
-                last_left = left;
-                last_progress = now;
-            } else if (now - last_progress > std::chrono::minutes(2)) {
-                std::fprintf(stderr, "V3 precompile: %zu compute compiles stalled for 2 minutes, not waited for\n", left);
-                break;
-            }
+    // The queued compute compiles finish behind the same screen (the game would otherwise start
+    // while they run, and wait for each one it meets first). Two minutes without one finished
+    // compile (a driver compile that never returns): the game starts, and a pipeline still queued
+    // compiles at its first use.
+    size_t last_left = ~size_t{0};
+    auto last_progress = std::chrono::steady_clock::now();
+    for (;;) {
+        const size_t left = Vulkan::PipelineCompilePool::WaitIdleFor(std::chrono::milliseconds(250));
+        TlgOverlay::SetLoading(true, total - std::min<u32>(static_cast<u32>(left), compute), total);
+        if (left == 0) break;
+        const auto now = std::chrono::steady_clock::now();
+        if (left != last_left) {
+            last_left = left;
+            last_progress = now;
+        } else if (now - last_progress > std::chrono::minutes(2)) {
+            std::fprintf(stderr, "V3 precompile: %zu compute compiles stalled for 2 minutes, not waited for\n", left);
+            break;
         }
     }
+    Vulkan::SetAsyncComputePipelines(-1);
     TlgOverlay::SetLoadingCompile(false);
     TlgOverlay::SetLoading(false, 0, 0);
     std::fprintf(stderr, "V3 precompile: %u records, %u graphics, %u compute, %u failed in %.0f s\n", total,

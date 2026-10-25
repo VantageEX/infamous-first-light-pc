@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <atomic>
 #include <algorithm>
 #include <condition_variable>
 #include <cstdlib>
@@ -204,7 +205,18 @@ Pool& GetPool() {
 
 } // Anonymous namespace
 
+// This port: SetAsyncComputePipelines overrides the variable while the first-start job file pass
+// runs (glue/precompile_jobs.cpp); -1 = the variable again.
+static std::atomic<int> g_async_override{-1};
+
+void SetAsyncComputePipelines(int mode) {
+    g_async_override.store(mode, std::memory_order_relaxed);
+}
+
 bool AsyncComputePipelinesEnabled() {
+    if (const int mode = g_async_override.load(std::memory_order_relaxed); mode >= 0) {
+        return mode != 0;
+    }
     static const bool enabled = [] {
         const char* value = std::getenv("SHADPS4_ASYNC_COMPUTE_PIPELINES");
         return value && value[0] == '1';
