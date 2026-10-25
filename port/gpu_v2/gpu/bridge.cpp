@@ -382,6 +382,18 @@ extern "C" void IssPreciseSleepUs(unsigned us){
     else SwitchToThread();
 #endif
 }
+#ifndef _WIN32
+#include <sys/uio.h>
+#endif
+bool iss::ImageRead(std::uint64_t address, void* out, std::size_t size){
+#ifdef _WIN32
+    SIZE_T got=0;
+    return ReadProcessMemory(GetCurrentProcess(),reinterpret_cast<const void*>(address),out,size,&got)&&got==size;
+#else
+    struct iovec local={out,size},remote={reinterpret_cast<void*>(address),size};
+    return process_vm_readv(getpid(),&local,1,&remote,1,0)==static_cast<ssize_t>(size);
+#endif
+}
 // The renderer's hooks in the game's code and the checked readback sites: once the image is
 // loaded and relocated, before the guest threads start.
 extern "C" void iss_gpu_install_image(uint64_t image_base){
@@ -391,21 +403,23 @@ extern "C" void iss_gpu_install_image(uint64_t image_base){
         iss::native_shadow::Install(host.image_base,reinterpret_cast<const unsigned char*>(host.image_base+0x43D590));
     iss::native_gbuffer::InstallCensus(host.image_base);
     iss::native_gbuffer::Install(host.image_base);
-    { const auto* c = reinterpret_cast<const unsigned char*>(host.image_base + 0x3f3eff);
-      std::fprintf(stderr, "V2_EBOOT us_1_07=%d (renderer v2 sites target CUSA00223 US 1.07)\n", c[0] == 0x8b && c[1] == 0x40 && c[2] == 0x04 && c[3] == 0x49); }
+    { unsigned char c[4]{};
+      const bool us_1_07 = iss::ImageRead(host.image_base + 0x3f3eff, c, sizeof(c)) &&
+                           c[0] == 0x8b && c[1] == 0x40 && c[2] == 0x04 && c[3] == 0x49;
+      std::fprintf(stderr, "V2_EBOOT us_1_07=%d (renderer v2 sites target CUSA00223 US 1.07)\n", us_1_07); }
     iss::pause_guard::Install(host.image_base);
     iss::heap_census::Install(host.image_base);
     iss::native_passes::Install(host.image_base);
     if(const char *p=std::getenv("ISS_FEEDBACK_PAGE_READBACK");p&&p[0]=='1'){
         const unsigned char signature[]={0x8b,0x40,0x04,0x49,0x8b,0x8f,0xe8,0,0,0,0x89,0x41,0x08};
-        const auto *code=reinterpret_cast<const unsigned char*>(host.image_base+0x3f3eff);
-        precise_feedback_site=code&&!std::memcmp(code,signature,sizeof(signature));
+        unsigned char code[sizeof(signature)]{};
+        precise_feedback_site=iss::ImageRead(host.image_base+0x3f3eff,code,sizeof(code))&&!std::memcmp(code,signature,sizeof(signature));
         std::fprintf(stderr,"FEEDBACK_READBACK verified=%d window=4096\n",precise_feedback_site);
     }
     if(const char *p=std::getenv("ISS_PRECISE_REDUCTION_READBACK");p&&p[0]=='1'){
         const unsigned char signature[]={0xc4,0xc1,0x7c,0x58,0x45,0xe0,0xc4,0xc1,0x74,0x58,0x4d,0x00};
-        const auto *code=reinterpret_cast<const unsigned char*>(host.image_base+0x1717c0);
-        precise_reduction_site=code&&!std::memcmp(code,signature,sizeof(signature));
+        unsigned char code[sizeof(signature)]{};
+        precise_reduction_site=iss::ImageRead(host.image_base+0x1717c0,code,sizeof(code))&&!std::memcmp(code,signature,sizeof(signature));
         std::fprintf(stderr,"REDUCTION_READBACK verified=%d window=4096 image_base=0x%llx\n",precise_reduction_site,(unsigned long long)host.image_base);
     }
 }

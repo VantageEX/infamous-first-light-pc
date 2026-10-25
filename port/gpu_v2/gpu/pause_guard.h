@@ -10,10 +10,18 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include "gpu_blackbox.h"
+
+namespace iss {
+// Copies `size` bytes of the game image (bridge.cpp); false instead of a fault where nothing
+// readable is there: another eboot has other segments (issue #14: First Light's SDK 1.60 build
+// has no code at the US 1.07 sites).
+bool ImageRead(std::uint64_t address, void* out, std::size_t size);
+}
 
 namespace iss::pause_guard {
 
@@ -40,10 +48,11 @@ inline void Install(std::uint64_t image_base) {
     // CUSA00223 1.07 eboot: lea r14,[rip+disp32] at +0x27DB27) points at it. Another eboot
     // (base 1.00, other region) would read garbage, keep the guard engaged forever and turn
     // every native path off, so the guard stays off there instead.
-    const auto* site = reinterpret_cast<const unsigned char*>(image_base + CounterSite);
+    unsigned char site[7]{};
     std::int32_t disp{};
+    const bool readable = ImageRead(image_base + CounterSite, site, sizeof(site));
     __builtin_memcpy(&disp, site + 3, 4);
-    if (site[0] != 0x4c || site[1] != 0x8d || site[2] != 0x35 ||
+    if (!readable || site[0] != 0x4c || site[1] != 0x8d || site[2] != 0x35 ||
         CounterSite + 7 + static_cast<std::int64_t>(disp) != CounterOffset) {
         std::fprintf(stderr, "V2_SITE pause_counter not found (eboot is not US 1.07): pause guard off\n");
         return;
