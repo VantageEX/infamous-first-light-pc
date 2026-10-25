@@ -61,7 +61,33 @@ def is_package(name, windows=WINDOWS):
     return name.endswith('.zip') if windows else name.endswith('.tar.gz') and '-linux' in name
 
 
-def fetch_latest(opener=urllib.request.urlopen):
+# Linux: the package is frozen on Ubuntu, and its OpenSSL looks for the CA certificates in
+# /usr/lib/ssl. SteamOS / Arch keep them in /etc/ssl/certs, Fedora in /etc/pki: there every HTTPS
+# certificate check failed and the update check said GitHub could not be reached (as iss_pc #642).
+# When OpenSSL's own CA file and folder are both missing and SSL_CERT_FILE / SSL_CERT_DIR are not
+# set, the first system bundle that exists is used. Verification stays on.
+SYSTEM_CA_BUNDLES = ('/etc/ssl/certs/ca-certificates.crt', '/etc/pki/tls/certs/ca-bundle.crt',
+                     '/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem', '/etc/ssl/ca-bundle.pem',
+                     '/etc/ssl/cert.pem')
+
+
+def ssl_context():
+    """The TLS context of the update check and download (None: Python's default)."""
+    import ssl
+    if WINDOWS or os.environ.get('SSL_CERT_FILE') or os.environ.get('SSL_CERT_DIR'):
+        return None
+    paths = ssl.get_default_verify_paths()
+    if (paths.cafile and os.path.isfile(paths.cafile)) or (paths.capath and os.path.isdir(paths.capath)):
+        return None
+    bundle = next((b for b in SYSTEM_CA_BUNDLES if os.path.isfile(b)), None)
+    return ssl.create_default_context(cafile=bundle) if bundle else None
+
+
+def urlopen(request, timeout):
+    return urllib.request.urlopen(request, timeout=timeout, context=ssl_context())
+
+
+def fetch_latest(opener=urlopen):
     """{'tag', 'page', 'asset', 'url', 'size', 'sha256'} of the latest release."""
     request = urllib.request.Request(LATEST_URL, headers={
         'Accept': 'application/vnd.github+json', 'User-Agent': 'inFAMOUS-First-Light-PC-launcher'})
@@ -79,7 +105,7 @@ def fetch_latest(opener=urllib.request.urlopen):
             'sha256': digest[7:].lower() if digest.startswith('sha256:') else ''}
 
 
-def download(release, dest, progress, opener=urllib.request.urlopen):
+def download(release, dest, progress, opener=urlopen):
     """The package into `dest`, checked against the release's size and SHA-256."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256()
