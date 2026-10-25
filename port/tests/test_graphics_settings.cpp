@@ -28,9 +28,12 @@ static void SetEnv(const char* name, const char* value) {
 }
 
 int main() {
+#ifdef _WIN32
+    _set_error_mode(_OUT_TO_STDERR); // a failed assert prints instead of opening a dialog
+#endif
     assert(G::ParseDisplayMode("borderless") == G::Borderless && G::ParseDisplayMode("bogus") == G::Windowed);
     assert(G::ParseFpsLimit(240) == 240 && G::ParseFpsLimit(75) == 0);
-    assert(G::ParseResolution("1440p") == 3 && G::ParseResolution("8K") == 0);
+    assert(G::ParseResolution("800p") == 3 && G::ParseResolution("1440p") == 4 && G::ParseResolution("8K") == 0);
     assert(G::ParseEngineFps(240) == 240 && G::ParseEngineFps(90) == 120);
     assert(G::ParseFramesQueued(2) == 2 && G::ParseFramesQueued(0) == 0 && G::ParseFramesQueued(5) == 1);
     assert(G::ParseRcasStrength(100) == 100 && G::ParseRcasStrength(101) == 60 && G::ParseRcasStrength(-1) == 60);
@@ -55,7 +58,7 @@ int main() {
     auto& v = TlgSettings::Get();
     TlgSettings::Load();
     assert(v.display_mode == G::Borderless && !v.vsync && v.fps_limit == 240 && !v.async_shaders);
-    assert(v.render_resolution == 3 && v.engine_fps == 240 && !v.deferred_readback && v.stale_readback);
+    assert(v.render_resolution == 4 && v.engine_fps == 240 && !v.deferred_readback && v.stale_readback);
     assert(v.fsr1 && !v.rcas && v.rcas_strength == 40 && v.frames_queued == 2);
     assert(!TlgSettings::GraphicsNeedRestart());
     assert(v.applied_engine_fps == 240);  // no TLG_ENGINE_FPS: the configured rate
