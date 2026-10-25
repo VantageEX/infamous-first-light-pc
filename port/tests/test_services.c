@@ -20,7 +20,7 @@ void tlggpu_save_dialog_close(void) {}
 void tlggpu_save_progress(int kind, int active, int percent, const char *text) { (void)kind; (void)percent; (void)text; progress_shown=active; }
 void tlggpu_save_toast(int kind) { (void)kind; ++toasts; }
 void tlggpu_trophy_attach(const char *pack, const char *store) { (void)pack; (void)store; }
-int tlggpu_trophy_unlock(int id) { (void)id; return 1; }
+int tlggpu_trophy_unlock(int id, int *platinum) { (void)id; if (platinum) *platinum=-1; return 1; }
 int runtime_savedata_param(int32_t user, const char *dir, void *param) { (void)user; (void)dir; (void)param; return -1; }
 int runtime_savedata_icon(int32_t user, const char *dir, char *out, size_t size) { (void)user; (void)dir; (void)out; (void)size; return -1; }
 uint64_t runtime_savedata_size(int32_t user, const char *dir) { (void)user; (void)dir; return 0; }

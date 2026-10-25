@@ -80,18 +80,45 @@ void Attach(const char* pack_path, const char* store_path) {
     std::printf("Trophies: %d in the pack, %zu unlocked on this PC\n", count, unlocked.size());
 }
 
-bool Unlock(int id) {
-    std::scoped_lock lock{mutex};
+namespace {
+
+bool Known(int id) {
     for (const Unlocked& u : unlocked) {
-        if (u.id == id) return false;
+        if (u.id == id) return true;
     }
+    return false;
+}
+
+void Record(int id) {
     const int64_t now = int64_t(std::time(nullptr));
     unlocked.push_back({id, now});
     if (std::FILE* f = std::fopen(store.c_str(), "a")) {
         std::fprintf(f, "%d %lld\n", id, static_cast<long long>(now));
         std::fclose(f);
     }
+}
+
+} // namespace
+
+bool Unlock(int id) {
+    std::scoped_lock lock{mutex};
+    if (Known(id)) return false;
+    Record(id);
     return true;
+}
+
+int AwardPlatinum() {
+    int platinum = -1;
+    for (int id = 0; const Info* info = Describe(id); ++id) {
+        if (info->grade == Platinum) platinum = id;
+    }
+    std::scoped_lock lock{mutex};
+    if (platinum < 0 || !count || Known(platinum)) return -1;
+    for (int id = 0; id < count; ++id) {
+        if (id != platinum && !Known(id)) return -1;
+    }
+    Record(platinum);
+    return platinum;
 }
 
 int Count() {
@@ -181,8 +208,14 @@ extern "C" void tlggpu_trophy_attach(const char* pack_path, const char* store_pa
     }
 }
 
-extern "C" int tlggpu_trophy_unlock(int id) {
+extern "C" int tlggpu_trophy_unlock(int id, int* platinum) {
+    if (platinum) *platinum = -1;
     if (!TlgTrophies::Unlock(id)) return 0;
     TlgOverlay::ShowTrophy(id);
+    const int awarded = TlgTrophies::AwardPlatinum();
+    if (awarded >= 0) {
+        TlgOverlay::ShowTrophy(awarded);
+        if (platinum) *platinum = awarded;
+    }
     return 1;
 }

@@ -3274,6 +3274,7 @@ ImVec2 DrawOverlay(ImDrawList* dl, ImVec2 at, float k) {
     const float opacity = s.overlay_opacity / 100.0f;
     const int panel = dl->VtxBuffer.Size;
     if (opacity > 0.0f) p.Box(0, 0, 1, 1, Theme::Glass, 0.0f, Theme::GlassAlpha * opacity);
+    const bool placeholder = dl->VtxBuffer.Size == panel + 4; // none when the fill's alpha rounds to 0
     ImVec2 size;
     switch (s.overlay_style) {
     case TlgSettings::OverlayStrip: size = StripStyle(p, d); break;
@@ -3282,7 +3283,7 @@ ImVec2 DrawOverlay(ImDrawList* dl, ImVec2 at, float k) {
     case TlgSettings::OverlayMini: size = MiniStyle(p, d); break;
     default: size = CompactStyle(p, d); break;
     }
-    if (opacity > 0.0f && dl->VtxBuffer.Size >= panel + 4) {
+    if (placeholder) {
         ImDrawVert* v = dl->VtxBuffer.Data + panel;
         const ImVec2 a = p.P(0, 0), b = p.P(size.x, size.y);
         v[0].pos = a;
@@ -3589,7 +3590,11 @@ void RetireChoiceTextures() {
 // imgui_mutex held, before NewFrame: new pictures become textures, destroyed ones are freed.
 void UpdateChoiceTextures() {
     for (auto& [id, picture] : trophy_pictures) {
-        if (picture.rgba.empty() || trophy_textures.count(id)) continue;
+        if (trophy_textures.count(id)) continue;
+        if (picture.rgba.empty()) {
+            trophy_textures[id] = nullptr; // no icon: not decoded again
+            continue;
+        }
         ImTextureData* tex = IM_NEW(ImTextureData)();
         tex->Create(ImTextureFormat_RGBA32, picture.width, picture.height);
         std::memcpy(tex->GetPixels(), picture.rgba.data(), picture.rgba.size());
@@ -4052,6 +4057,8 @@ void SaveProgress(int kind, int active, int percent, const char* text) {
 void ShowTrophy(int id) {
     TlgPng::Image picture;
     TlgTrophies::Icon(id, picture); // decoded on the caller's thread, outside the lock
+    const TlgTrophies::Info* info = TlgTrophies::Describe(id);
+    TlgSound::Prepare(info && info->grade == TlgTrophies::Platinum); // the file and the audio stream, here too
     std::scoped_lock lock{imgui_mutex};
     if (!trophy_textures.count(id)) trophy_pictures.emplace_back(id, std::move(picture));
     trophy_queue.push_back(id);

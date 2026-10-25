@@ -550,8 +550,10 @@ static ABI int32_t trophy_register(int32_t ctx,int32_t handle,uint64_t options) 
 }
 static ABI int32_t trophy_unlock(int32_t ctx,int32_t handle,int32_t id,int32_t *platinum) {
     (void)ctx; (void)handle;
-    printf("Runtime: trophy %d unlocked%s\n",id,tlggpu_trophy_unlock(id) ? "" : " (again)");
-    if (platinum) *platinum=-1;
+    int awarded=-1;
+    printf("Runtime: trophy %d unlocked%s\n",id,tlggpu_trophy_unlock(id,&awarded) ? "" : " (again)");
+    if (awarded>=0) printf("Runtime: trophy %d (platinum) unlocked\n",awarded);
+    if (platinum) *platinum=awarded;
     return 0;
 }
 static ABI int32_t trophy_game_info(int32_t ctx,int32_t handle,void *details,void *data) {

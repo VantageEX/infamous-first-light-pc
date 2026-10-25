@@ -10,8 +10,11 @@
  * is dropped: the angles start from the stored ones and the turn speeds stored next (0x170(%rsp),
  * loaded after the site) are zeroed. The game only turns the camera itself (it swings it behind
  * the player while gliding or running) when its right stick has not been used for a while; the
- * direct mouse never touches the stick. Otherwise the store is the game's own, and the right
- * stick keeps working (it reads the angles back on the next update). rax and r11 are free at
+ * direct mouse never touches the stick. Every turn of the game's is dropped meanwhile, not only
+ * that one: a scripted swing within those seconds is lost too (axylpup's build turns only the
+ * follow off, with a byte not found in First Light yet). The gamepad's right stick ends the
+ * hold (runtime_pad.c). Otherwise the store is the game's own, and the right stick keeps working
+ * (it reads the angles back on the next update). rax and r11 are free at
  * the site (rax is loaded next, r11 is not used in the function); xmm2-xmm4 are kept on the
  * stack below the red zone.
  * Found by these bytes, so another build with the same code works too. */

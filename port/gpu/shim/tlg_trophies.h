@@ -22,6 +22,9 @@ struct Unlocked {
 void Attach(const char* pack_path, const char* store_path);
 /// Records a trophy; false when it was already unlocked (the game unlocks some again).
 bool Unlock(int id);
+/// The platinum, recorded once every other trophy of the pack is (on the console the system
+/// awards it, the game never unlocks it itself); its id, or -1 when it is not due.
+int AwardPlatinum();
 /// Trophies in the pack (its TROPnnn.PNG icons); 0 before Attach or without the pack.
 int Count();
 /// The unlocked trophies, in unlock order.

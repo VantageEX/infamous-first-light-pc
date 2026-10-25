@@ -187,18 +187,16 @@ Clip Load(bool platinum) {
     return Chime(platinum);
 }
 
-} // namespace
+Clip clips[2];
+bool loaded[2] = {};
 
-void PlayTrophy(bool platinum) {
-    static Clip clips[2];
-    static bool loaded[2] = {};
-    std::scoped_lock lock{mutex};
+// The clip and the audio stream, made once (mutex held).
+Clip& Ready(bool platinum) {
     Clip& clip = clips[platinum];
     if (!loaded[platinum]) {
         clip = Load(platinum);
         loaded[platinum] = true;
     }
-    if (clip.samples.empty()) return;
     if (!tried_stream) {
         tried_stream = true;
         if (SDL_InitSubSystem(SDL_INIT_AUDIO)) {
@@ -207,7 +205,20 @@ void PlayTrophy(bool platinum) {
         }
         if (!stream) std::printf("Sound: no audio stream (%s)\n", SDL_GetError());
     }
-    if (!stream) return;
+    return clip;
+}
+
+} // namespace
+
+void Prepare(bool platinum) {
+    std::scoped_lock lock{mutex};
+    Ready(platinum);
+}
+
+void PlayTrophy(bool platinum) {
+    std::scoped_lock lock{mutex};
+    const Clip& clip = Ready(platinum);
+    if (clip.samples.empty() || !stream) return;
     const SDL_AudioSpec spec{SDL_AUDIO_F32, clip.channels, clip.rate};
     SDL_ClearAudioStream(stream);
     SDL_SetAudioStreamFormat(stream, &spec, nullptr);

@@ -34,6 +34,14 @@ EXIT_MEANINGS = {
 }
 
 
+def _log_tail(path, size=4 << 20):
+    """The end of a run log (a crash stack is in its last lines; a long session's log is large)."""
+    with open(path, 'rb') as f:
+        f.seek(0, 2)
+        f.seek(max(0, f.tell() - size))
+        return f.read().decode('utf-8', 'replace')
+
+
 def exit_meaning(code):
     """'(...)' explaining a non-zero exit code, '' for 0 or an unknown one."""
     meaning = EXIT_MEANINGS.get(code & 0xFFFFFFFF) if code else None
@@ -372,9 +380,8 @@ class Launcher(QObject):
         if code:
             # The crash stack's frames with function names (symbols.py), in the log and the view.
             try:
-                names = symbols.symbolize(self.runner.log_path.read_text(encoding='utf-8', errors='replace'),
-                                          PORT / 'out')
-            except (OSError, AttributeError):
+                names = symbols.symbolize(_log_tail(self.runner.log_path), PORT / 'out')
+            except (OSError, AttributeError, TypeError):
                 names = ''
             if names:
                 block = 'Crash stack with names (the nearest exported function):\n' + names

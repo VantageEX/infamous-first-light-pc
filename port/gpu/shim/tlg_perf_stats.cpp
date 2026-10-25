@@ -137,7 +137,7 @@ public:
                 const uint64_t total = Ticks(kernel) + Ticks(user);
                 now[entry.th32ThreadID] = total;
                 const auto before = last.find(entry.th32ThreadID);
-                if (before != last.end() && wall_delta) {
+                if (before != last.end() && wall_delta && total >= before->second) { // an id reused: no sample
                     rows.push_back({Name(thread, entry.th32ThreadID),
                                     float(double(total - before->second) * 100.0 / double(wall_delta))});
                 }
@@ -296,7 +296,7 @@ public:
             const uint64_t total = utime + stime;
             now[tid] = total;
             const auto before = last.find(tid);
-            if (before != last.end() && wall_ticks) {
+            if (before != last.end() && wall_ticks && total >= before->second) { // an id reused: no sample
                 rows.push_back({std::string(open + 1, close),
                                 float(double(total - before->second) * 100.0 / double(wall_ticks))});
             }

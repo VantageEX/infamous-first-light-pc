@@ -7,6 +7,9 @@
 
 namespace TlgSound {
 
+/// Decodes the sound and opens the audio stream ahead (any thread: the trophy's, not the
+/// present thread, which PlayTrophy then only feeds).
+void Prepare(bool platinum);
 /// Plays the trophy sound once (any thread; a new one replaces one still playing).
 void PlayTrophy(bool platinum);
 
