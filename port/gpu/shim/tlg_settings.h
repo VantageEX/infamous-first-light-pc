@@ -161,6 +161,11 @@ struct Values {
     std::atomic<bool> mouse_enabled{true}, mouse_invert_y{false};
     /// The mouse turns the camera itself (src/mouse_camera.h) where the game's code allows it.
     std::atomic<bool> mouse_direct{true};
+    /// Input display (tlg_overlay.cpp InputDisplay): the keys and mouse buttons held, drawn on
+    /// screen for recordings, streams and tutorials. F9 shows or hides it. Position as
+    /// overlay_corner (0..5), size and background opacity in percent.
+    std::atomic<bool> input_display{false};
+    std::atomic<int> input_display_corner{2}, input_display_scale{100}, input_display_opacity{55};
     /// A sound with the trophy toast (gpu/shim/tlg_sound.h).
     std::atomic<bool> trophy_sound{true};
     std::atomic<float> mouse_sensitivity{1.0f}, mouse_smoothing{0.5f}, mouse_accel{0.0f}, mouse_deadzone{0.1f};

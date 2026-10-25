@@ -42,7 +42,7 @@ An unofficial native Windows port of **inFAMOUS First Light** (PS4). The game's 
 
 1. Download the [latest release](https://github.com/VantageEX/infamous-first-light-pc/releases/latest) and unzip it anywhere you can write to (not Program Files).
 2. Start **inFAMOUS First Light.exe** and pick your game folder (the one with `eboot.bin` and `sce_sys`).
-3. Press **Play**. F10 shows the performance overlay; Insert (or R3 + L2) opens the in-game menu.
+3. Press **Play**. F10 shows the performance overlay, F9 the keys and mouse buttons held (for recordings and streams); Insert (or R3 + L2) opens the in-game menu.
 
 From v0.3.2 the launcher checks for a new release when it starts and installs it with one click; your saves and settings stay.
 
@@ -134,7 +134,7 @@ Where Windows' Segoe UI is missing (Linux, the Steam Deck) the launcher and the 
 
 1. Скачайте [последний релиз](https://github.com/VantageEX/infamous-first-light-pc/releases/latest) и распакуйте в любую папку, куда можно писать (не в Program Files).
 2. Запустите **inFAMOUS First Light.exe** и выберите папку с игрой (в ней `eboot.bin` и `sce_sys`).
-3. Нажмите **«Играть»**. F10 показывает оверлей производительности, Insert (или R3 + L2) открывает меню в игре.
+3. Нажмите **«Играть»**. F10 показывает оверлей производительности, F9 — нажатые клавиши и кнопки мыши (для записи и стримов), Insert (или R3 + L2) открывает меню в игре.
 
 Начиная с v0.3.2 лаунчер при запуске проверяет новые релизы и ставит их в один клик; сохранения и настройки остаются.
 
