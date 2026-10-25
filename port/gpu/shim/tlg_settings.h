@@ -21,6 +21,11 @@ inline bool IsFsr4(int upscaler) {
     return upscaler == UpscalerFsr4 || upscaler == UpscalerFsr411;
 }
 enum Preset : int { NativeAA = 0, Quality, Balanced, Performance, UltraPerformance, PresetCount };
+/// The performance overlay's look: the rounded card of earlier versions, then the square ones.
+enum OverlayStyle : int { OverlayCard = 0, OverlayCompact, OverlayStrip, OverlayHistogram, OverlayTelemetry,
+                          OverlayMini, OverlayStyleCount };
+inline constexpr int OverlayPositions = 6;
+inline constexpr int OverlayOffsetMaxX = 960, OverlayOffsetMaxY = 540;
 enum DebugView : int { DebugNone = 0, DebugReactive = 1, DebugMotion = 2, DebugViewCount };
 
 /// Live output resolutions: the upscaler's output and the UI host targets.
@@ -56,11 +61,14 @@ struct Values {
     std::atomic<int> sensor_aim{100};
     /// The graffiti guide was shown once; the menu's Controls tab opens it again.
     std::atomic<bool> graffiti_guide_seen{false};
-    /// Performance overlay (tlg_perf_stats.h): items shown, font size and background opacity
-    /// in percent, corner (0 top left, 1 top right, 2 bottom left, 3 bottom right), layout
-    /// (0 one line, 1 one item per line). menu_tab: the menu's last tab.
+    /// Performance overlay (tlg_perf_stats.h): items shown, size and background opacity in
+    /// percent, position (0 top left, 1 top right, 2 bottom left, 3 bottom right, 4 top centre,
+    /// 5 bottom centre) and its distance from the screen's edges in pixels of a 1080-line screen,
+    /// layout (0 one line, 1 one item per line; the mini style's one or two lines), style
+    /// (OverlayStyle). menu_tab: the menu's last tab.
     std::atomic<unsigned> overlay_items{TlgPerfStats::DefaultItems};
     std::atomic<int> overlay_scale{100}, overlay_corner{1}, overlay_opacity{50}, overlay_layout{0};
+    std::atomic<int> overlay_style{1}, overlay_offset_x{40}, overlay_offset_y{36};
     std::atomic<int> menu_tab{0};
     std::atomic<float> red_orb_multiplier{1.0f};
     std::atomic<bool> red_orbs_supported{false};

@@ -196,6 +196,9 @@ float frame_ms_avg = 0.0f;
 // The last present intervals, oldest first from frame_history_next (the overlay's graph).
 std::array<float, 240> frame_history{};
 size_t frame_history_next = 0, frame_history_count = 0;
+// The last 2048 intervals for the lows, percentiles and the histogram, in no order.
+std::array<float, 2048> frame_long{};
+size_t frame_long_next = 0, frame_long_count = 0;
 
 // Colours of the launcher (launcher/fl_launcher/qml/theme.js): grey see-through panels like its
 // pickers, white text, its blue accent, small corner radii.
@@ -1043,49 +1046,92 @@ void ControlsTab() {
     }
 }
 
+ImVec2 DrawOverlay(ImDrawList* dl, ImVec2 at, float k); // the square styles (below, with the overlay)
+
 void OverlayTab() {
     namespace P = TlgPerfStats;
-    auto& s = TlgSettings::Get();
+    using namespace TlgSettings;
+    auto& s = Get();
     if (BeginRows("##overlay_on")) {
         CheckRow(TL("Show overlay (F10)", "Показывать оверлей (F10)"), s.show_fps, TL("The performance overlay in a corner of the screen.", "Оверлей производительности в углу экрана."));
         EndRows();
     }
     ImGui::BeginDisabled(!s.show_fps);
+    SectionTitle(TL("Style", "Вид"));
+    if (BeginRows("##style")) {
+        static const char* const styles[] = {TL("Card (earlier versions)", "Карточка (как раньше)"), TL("Compact", "Компактный"),
+                                             TL("Strip", "Лента"), TL("Graph and histogram", "График и гистограмма"),
+                                             TL("Telemetry", "Телеметрия"), TL("Mini", "Мини")};
+        ChoiceRow(TL("Overlay style", "Стиль оверлея"), s.overlay_style, styles, nullptr, OverlayStyleCount,
+                  TL("Colours: green within the frame rate limit (60 without one), amber up to twice its frame time, red beyond.",
+                     "Цвета: зелёный — в пределах лимита FPS (без лимита — 60), жёлтый — кадр до двух раз дольше, красный — дольше."));
+        EndRows();
+    }
+    // The overlay as it will look, in a card under the style: the square styles drawn live at
+    // their real size, the card's text.
+    {
+        ImGui::Dummy(ImVec2(0.0f, L(12)));
+        const float w = ImGui::GetContentRegionAvail().x - L(40);
+        const ImVec2 pos(ImGui::GetCursorScreenPos().x + L(20), ImGui::GetCursorScreenPos().y);
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        float content_h;
+        if (s.overlay_style == OverlayCard) {
+            const std::string text = OverlayText();
+            const char* shown = text.empty() ? TL("(nothing selected)", "(ничего не выбрано)") : text.c_str();
+            const float size = 19.0f * s.overlay_scale / 100.0f;
+            content_h = TextSize(ImGui::GetFont(), size, shown, w - L(32)).y;
+            dl->AddRectFilled(pos, ImVec2(pos.x + w, pos.y + content_h + L(56)), ImGui::GetColorU32(Theme::White(0.04f)), L(10));
+            dl->AddText(ImGui::GetFont(), L(size), ImVec2(pos.x + L(16), pos.y + L(38)), ImGui::GetColorU32(Theme::Text), shown,
+                        nullptr, w - L(32));
+        } else {
+            dl->ChannelsSplit(2);
+            dl->ChannelsSetCurrent(1);
+            dl->PushClipRect(ImVec2(pos.x + L(16), pos.y), ImVec2(pos.x + w - L(16), pos.y + L(2000)), true);
+            const ImVec2 size = DrawOverlay(dl, ImVec2(pos.x + L(16), pos.y + L(38)), base_scale * s.overlay_scale / 100.0f);
+            dl->PopClipRect();
+            content_h = size.y > 0.0f ? size.y : L(24);
+            dl->ChannelsSetCurrent(0);
+            dl->AddRectFilled(pos, ImVec2(pos.x + w, pos.y + content_h + L(56)), ImGui::GetColorU32(Theme::White(0.04f)), L(10));
+            if (size.y <= 0.0f) {
+                dl->AddText(ImGui::GetFont(), L(19), ImVec2(pos.x + L(16), pos.y + L(38)), ImGui::GetColorU32(Theme::Text),
+                            TL("(nothing selected)", "(ничего не выбрано)"));
+            }
+            dl->ChannelsMerge();
+        }
+        dl->AddText(ImGui::GetFont(), L(16), ImVec2(pos.x + L(16), pos.y + L(10)), ImGui::GetColorU32(Theme::Faint),
+                    TL("Preview", "Предпросмотр"));
+        ImGui::Dummy(ImVec2(0.0f, content_h + L(56)));
+    }
+    SectionTitle(TL("Position and size", "Положение и размер"));
+    if (BeginRows("##appearance")) {
+        SliderRow(TL("Size", "Размер"), s.overlay_scale, 50, 300, "%d%%", TL("Size of the overlay.", "Размер оверлея."));
+        static const char* const places[] = {TL("Top left", "Слева сверху"), TL("Top right", "Справа сверху"),
+                                             TL("Bottom left", "Слева снизу"), TL("Bottom right", "Справа снизу"),
+                                             TL("Top centre", "Сверху по центру"), TL("Bottom centre", "Снизу по центру")};
+        ChoiceRow(TL("Position", "Положение"), s.overlay_corner, places, nullptr, OverlayPositions, TL("Where the overlay sits.", "Где на экране оверлей."));
+        SliderRow(TL("Distance from the side", "Отступ сбоку"), s.overlay_offset_x, 0, OverlayOffsetMaxX, "%d px",
+                  TL("Pixels of a 1080-line screen from the left or right edge (not for the centre).",
+                     "Пиксели экрана 1080p от левого или правого края (по центру не действует)."));
+        SliderRow(TL("Distance from the top or bottom", "Отступ сверху или снизу"), s.overlay_offset_y, 0, OverlayOffsetMaxY, "%d px",
+                  TL("Pixels of a 1080-line screen from the top or bottom edge.", "Пиксели экрана 1080p от верхнего или нижнего края."));
+        SliderRow(TL("Background opacity", "Непрозрачность фона"), s.overlay_opacity, 0, 100, "%d%%", TL("0% is no background.", "0% — без фона."));
+        if (s.overlay_style == OverlayCard) {
+            static const char* const layouts[] = {TL("One line", "В одну строку"), TL("One item per line", "Каждый пункт с новой строки")};
+            ChoiceRow(TL("Layout", "Расположение"), s.overlay_layout, layouts, nullptr, 2, TL("Items side by side or stacked.", "Пункты в ряд или столбиком."));
+        } else if (s.overlay_style == OverlayMini) {
+            static const char* const lines[] = {TL("One line", "Одна строка"), TL("Two lines and a graph", "Две строки и график")};
+            ChoiceRow(TL("Lines", "Строки"), s.overlay_layout, lines, nullptr, 2, TL("The mini overlay's size.", "Размер мини-оверлея."));
+        }
+        EndRows();
+    }
     SectionTitle(TL("What to show", "Что показывать"));
     static const char* const names[] = {"FPS", TL("Frametime", "Время кадра"), TL("Upscaler", "Апскейлер"),
                                         TL("GPU (name and use)", "GPU (название и загрузка)"), TL("CPU (game)", "CPU (игра)"),
                                         TL("RAM (game / total)", "RAM (игра / всего)"),
                                         TL("VRAM (used / available)", "VRAM (занято / доступно)"),
-                                        TL("Frametime graph", "График времени кадра")};
+                                        TL("Frametime graph and statistics", "График времени кадра и статистика")};
     for (unsigned item = 0; item < P::NumItems; ++item) {
         BitRow(names[item], s.overlay_items, 1u << item);
-    }
-    // The overlay's text as it will look, in a card under the list.
-    {
-        const std::string text = OverlayText();
-        const char* shown = text.empty() ? TL("(nothing selected)", "(ничего не выбрано)") : text.c_str();
-        const float size = 19.0f * s.overlay_scale / 100.0f;
-        const float w = ImGui::GetContentRegionAvail().x - L(40);
-        const ImVec2 t = TextSize(ImGui::GetFont(), size, shown, w - L(32));
-        ImGui::Dummy(ImVec2(0.0f, L(12)));
-        const ImVec2 pos(ImGui::GetCursorScreenPos().x + L(20), ImGui::GetCursorScreenPos().y);
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        dl->AddRectFilled(pos, ImVec2(pos.x + w, pos.y + t.y + L(56)), ImGui::GetColorU32(Theme::White(0.04f)), L(10));
-        dl->AddText(ImGui::GetFont(), L(16), ImVec2(pos.x + L(16), pos.y + L(10)), ImGui::GetColorU32(Theme::Faint),
-                    TL("Preview", "Предпросмотр"));
-        dl->AddText(ImGui::GetFont(), L(size), ImVec2(pos.x + L(16), pos.y + L(38)), ImGui::GetColorU32(Theme::Text), shown,
-                    nullptr, w - L(32));
-        ImGui::Dummy(ImVec2(0.0f, t.y + L(56)));
-    }
-    SectionTitle(TL("Appearance", "Внешний вид"));
-    if (BeginRows("##appearance")) {
-        SliderRow(TL("Font size", "Размер шрифта"), s.overlay_scale, 50, 300, "%d%%", TL("Size of the overlay text.", "Размер текста оверлея."));
-        static const char* const corners[] = {TL("Top left", "Слева сверху"), TL("Top right", "Справа сверху"), TL("Bottom left", "Слева снизу"), TL("Bottom right", "Справа снизу")};
-        ChoiceRow(TL("Corner", "Угол"), s.overlay_corner, corners, nullptr, 4, TL("Where the overlay sits.", "В каком углу экрана оверлей."));
-        SliderRow(TL("Background opacity", "Непрозрачность фона"), s.overlay_opacity, 0, 100, "%d%%", TL("0% is no background.", "0% — без фона."));
-        static const char* const layouts[] = {TL("One line", "В одну строку"), TL("One item per line", "Каждый пункт с новой строки")};
-        ChoiceRow(TL("Layout", "Расположение"), s.overlay_layout, layouts, nullptr, 2, TL("Items side by side or stacked.", "Пункты в ряд или столбиком."));
-        EndRows();
     }
     ImGui::EndDisabled();
     SectionTitle(TL("About", "О программе"));
@@ -2042,34 +2088,45 @@ void LoadingScreen() {
            false, 1.0f, w);
 }
 
-// Frame time statistics over the graph's window.
+// Frame time statistics over the last frame_long intervals (half a minute at 60 FPS).
 struct FrameStats {
-    float min_fps = 0.0f, avg_fps = 0.0f, low1_fps = 0.0f, max_ms = 0.0f;
-    int stutters = 0; ///< frames over twice the average and over 25 ms
+    float min_fps = 0.0f, avg_fps = 0.0f, max_fps = 0.0f, low1_fps = 0.0f, low01_fps = 0.0f;
+    float max_ms = 0.0f, p50_ms = 0.0f, p90_ms = 0.0f, p99_ms = 0.0f;
+    float jitter_ms = 0.0f; ///< the mean change from one frame to the next
+    int stutters = 0;       ///< frames over twice the average and over 25 ms
 };
 
 FrameStats ComputeFrameStats() {
     FrameStats out;
-    if (frame_history_count == 0) {
+    const size_t n = frame_long_count;
+    if (n == 0) {
         return out;
     }
-    std::array<float, frame_history.size()> sorted{};
-    double total = 0.0;
-    for (size_t i = 0; i < frame_history_count; ++i) {
-        sorted[i] = frame_history[i];
-        total += frame_history[i];
-        out.max_ms = std::max(out.max_ms, frame_history[i]);
+    std::array<float, frame_long.size()> sorted{};
+    const size_t first = (frame_long_next + frame_long.size() - n) % frame_long.size();
+    double total = 0.0, change = 0.0;
+    for (size_t i = 0; i < n; ++i) {
+        sorted[i] = frame_long[(first + i) % frame_long.size()];
+        total += sorted[i];
+        if (i) change += std::fabs(sorted[i] - sorted[i - 1]);
     }
-    const float avg_ms = float(total / frame_history_count);
-    for (size_t i = 0; i < frame_history_count; ++i) {
-        out.stutters += frame_history[i] > 2.0f * avg_ms && frame_history[i] > 25.0f;
+    const float avg_ms = float(total / n);
+    for (size_t i = 0; i < n; ++i) {
+        out.stutters += sorted[i] > 2.0f * avg_ms && sorted[i] > 25.0f;
     }
-    std::sort(sorted.begin(), sorted.begin() + frame_history_count);
-    // 1% low: the frame time 99% of the frames stay under.
-    const float low1_ms = sorted[std::min(frame_history_count - 1, size_t(frame_history_count * 0.99f))];
+    std::sort(sorted.begin(), sorted.begin() + n);
+    const auto at = [&](float q) { return sorted[std::min(n - 1, size_t(n * q))]; };
+    out.max_ms = sorted[n - 1];
+    out.p50_ms = at(0.5f);
+    out.p90_ms = at(0.9f);
+    out.p99_ms = at(0.99f);
     out.avg_fps = 1000.0f / avg_ms;
     out.min_fps = 1000.0f / out.max_ms;
-    out.low1_fps = 1000.0f / low1_ms;
+    out.max_fps = 1000.0f / std::max(sorted[0], 0.1f);
+    // 1% and 0.1% lows: the frame times 99% and 99.9% of the frames stay under.
+    out.low1_fps = 1000.0f / out.p99_ms;
+    out.low01_fps = 1000.0f / at(0.999f);
+    out.jitter_ms = n > 1 ? float(change / (n - 1)) : 0.0f;
     return out;
 }
 
@@ -2077,11 +2134,28 @@ ImVec4 FpsColor(float fps) {
     return fps >= 55.0f ? Theme::Good : fps >= 28.0f ? Theme::Warn : Theme::Bad;
 }
 
+// Where an overlay of `size` display pixels sits: the chosen corner or the centre of the top or
+// bottom edge, the chosen distance from the edges (a centred one ignores the side one), on screen.
+ImVec2 OverlayPosition(ImVec2 size) {
+    const auto& s = TlgSettings::Get();
+    const ImGuiViewport* v = ImGui::GetMainViewport();
+    const int place = s.overlay_corner;
+    const bool centre = place >= 4, right = place == 1 || place == 3, bottom = place == 2 || place == 3 || place == 5;
+    const float mx = s.overlay_offset_x * base_scale, my = s.overlay_offset_y * base_scale;
+    float x = centre ? v->WorkPos.x + (v->WorkSize.x - size.x) / 2
+              : right ? v->WorkPos.x + v->WorkSize.x - mx - size.x
+                      : v->WorkPos.x + mx;
+    float y = bottom ? v->WorkPos.y + v->WorkSize.y - my - size.y : v->WorkPos.y + my;
+    x = std::clamp(x, v->WorkPos.x, std::max(v->WorkPos.x, v->WorkPos.x + v->WorkSize.x - size.x));
+    y = std::clamp(y, v->WorkPos.y, std::max(v->WorkPos.y, v->WorkPos.y + v->WorkSize.y - size.y));
+    return ImVec2(std::round(x), std::round(y));
+}
+
 // The performance overlay as the mock-up's card: the FPS large (Light, coloured by the rate) with
 // the frame time on its right, the other items in one muted line, the frame time curve (guides
 // at 60 and 30 FPS, stutters in red) and its statistics; the launcher's glass behind. The
-// settings' scale, corner, opacity and items apply.
-void FpsCounter() {
+// settings' scale, position, opacity and items apply.
+void CardOverlay() {
     namespace P = TlgPerfStats;
     const auto& s = TlgSettings::Get();
     const unsigned items = s.overlay_items;
@@ -2090,7 +2164,6 @@ void FpsCounter() {
     if (text.empty() && !big_fps && !frame_time && !graph) {
         return;
     }
-    const ImGuiViewport* viewport = ImGui::GetMainViewport();
     const float k = base_scale * s.overlay_scale / 100.0f;
     SavePainter p{ImGui::GetForegroundDrawList(), ImGui::GetFont(), k, {}};
     const float fps = frame_ms_avg > 0.0f ? 1000.0f / frame_ms_avg : 0.0f;
@@ -2111,11 +2184,7 @@ void FpsCounter() {
     if (graph) h += graph_h + 8 + 22;
     h -= 8;
     w += pad_x * 2;
-    const int corner = s.overlay_corner;
-    const bool right = corner == 1 || corner == 3, bottom = corner >= 2;
-    const float mx = 40 * base_scale, my = 36 * base_scale;
-    p.at = ImVec2(right ? viewport->WorkPos.x + viewport->WorkSize.x - mx - w * k : viewport->WorkPos.x + mx,
-                  bottom ? viewport->WorkPos.y + viewport->WorkSize.y - my - h * k : viewport->WorkPos.y + my);
+    p.at = OverlayPosition(ImVec2(w * k, h * k));
     const float opacity = s.overlay_opacity / 100.0f;
     if (opacity > 0.0f) {
         p.Box(0, 0, w, h, ImVec4(28 / 255.0f, 28 / 255.0f, 30 / 255.0f, 1.0f), 14.0f, 0.78f * opacity);
@@ -2171,6 +2240,677 @@ void FpsCounter() {
     std::snprintf(line, sizeof(line), "%s %.0f     %s %.0f     1%% %.0f     %s %d", TL("min", "мин"), stats.min_fps,
                   TL("avg", "сред"), stats.avg_fps, stats.low1_fps, TL("stutters", "фризы"), stats.stutters);
     p.Text(pad_x, y, 15.0f, Theme::Faint, line);
+}
+
+// ---- The square overlay styles (the Canvas mock-ups A to E in the launcher's colours): drawn
+// in stage pixels from the panel's top-left corner, each returns the panel's size. Frames are
+// coloured against the budget: green within the target's frame time, amber up to twice it, red
+// beyond. ----
+
+#if defined(TLG_RENDERER_V3)
+constexpr const char* RendererName = "V3";
+#elif defined(TLG_RENDERER_V2)
+constexpr const char* RendererName = "V2";
+#else
+constexpr const char* RendererName = "V1";
+#endif
+
+// The overlay's numbers for one frame.
+struct OverlayData {
+    TlgPerfStats::Sample sample;
+    FrameStats stats;
+    unsigned items = 0;
+    float fps = 0.0f, ms = 0.0f;
+    int target = 60;                   ///< the FPS the colours compare with: the frame rate limit, else 60
+    float budget_ms = 1000.0f / 60.0f; ///< the target's frame time
+};
+
+OverlayData CollectOverlayData() {
+    namespace P = TlgPerfStats;
+    const auto& s = TlgSettings::Get();
+    OverlayData d;
+    d.items = s.overlay_items;
+    if ((d.items & (P::Gpu | P::Cpu | P::Ram | P::Vram)) && overlay_instance) {
+        P::Start(*overlay_instance);
+    }
+    d.sample = P::Latest();
+    d.ms = frame_ms_avg;
+    d.fps = frame_ms_avg > 0.0f ? 1000.0f / frame_ms_avg : 0.0f;
+    d.sample.upscaler = UpscalerLabel(s.upscaler);
+    d.stats = ComputeFrameStats();
+    d.target = s.fps_limit > 0 ? s.fps_limit.load() : 60;
+    d.budget_ms = 1000.0f / float(d.target);
+    return d;
+}
+
+ImVec4 FrameColor(float ms, float budget_ms) {
+    return ms <= budget_ms * 1.05f ? Theme::Good : ms <= budget_ms * 2.0f ? Theme::Warn : Theme::Bad;
+}
+
+ImVec4 RateColor(float fps, int target) {
+    return fps >= target * 0.95f ? Theme::Good : fps >= target * 0.5f ? Theme::Warn : Theme::Bad;
+}
+
+// A number with `decimals` places, with a decimal comma in Russian.
+std::string Num(float value, int decimals = 0) {
+    char text[32];
+    std::snprintf(text, sizeof(text), "%.*f", decimals, value);
+    if (UiRussian()) {
+        for (char* c = text; *c; ++c) if (*c == '.') *c = ',';
+    }
+    return text;
+}
+
+std::string Ms(float value) { return Num(value, 1) + " " + TL("ms", "мс"); }
+std::string Percent(float value) { return value < 0.0f ? "n/a" : Num(value) + "%"; }
+std::string Gigabytes(double used, double total) {
+    if (used < 0.0) return "n/a";
+    return total < 0.0 ? Num(float(used), 1) + "G" : Num(float(used), 1) + "/" + Num(float(total), 1) + "G";
+}
+float Fraction(double used, double total) { return used < 0.0 || total <= 0.0 ? 0.0f : float(used / total); }
+
+// "NVIDIA GeForce RTX 4070 SUPER" as "RTX 4070 SUPER".
+std::string ShortGpuName(std::string name) {
+    for (const char* word : {"NVIDIA ", "GeForce ", "AMD ", "Radeon(TM) ", "Intel(R) ", "(R)", "(TM)"}) {
+        for (size_t at; (at = name.find(word)) != std::string::npos;) name.erase(at, std::strlen(word));
+    }
+    return name;
+}
+
+// The i-th of the last n present intervals, oldest first.
+float RecentFrame(size_t n, size_t i) {
+    return frame_history[(frame_history_next + frame_history.size() - n + i) % frame_history.size()];
+}
+
+// The graphs' top: three frame budgets, at least 40 ms and at most 100.
+float GraphTop(const OverlayData& d) { return std::clamp(d.budget_ms * 3.0f, 40.0f, 100.0f); }
+
+// Dashed guides at 60 and 30 FPS over a graph whose top is `top` ms, labelled on the left.
+void Guides(const SavePainter& p, float x, float y, float w, float h, float top, const OverlayData& d, bool labels) {
+    for (const int rate : {60, 30}) {
+        const float ms = 1000.0f / rate;
+        if (ms >= top) continue;
+        const float ly = y + h - ms / top * h;
+        const ImVec4 color = FrameColor(ms, d.budget_ms);
+        for (float lx = x; lx < x + w; lx += 6) p.Line(lx, ly, std::min(lx + 3, x + w), ly, color, 1.0f, 0.75f);
+        if (labels) {
+            const std::string text = std::to_string(rate);
+            p.Box(x, ly - 13, x + p.Width(11.0f, text) + 6, ly, Theme::Ink, 0.0f, 0.6f);
+            p.Text(x + 3, ly - 13, 11.0f, color, text);
+        }
+    }
+}
+
+// The last frames as bars (the newest on the right) coloured against the budget.
+void FrameBars(const SavePainter& p, float x, float y, float w, float h, const OverlayData& d, bool labels) {
+    p.Box(x, y, x + w, y + h, Theme::White(0.05f), 0.0f);
+    const float top = GraphTop(d), step = 3.0f; // a 2-pixel bar and a 1-pixel gap
+    const size_t n = std::min(frame_history_count, size_t(w / step));
+    float max_ms = 0.0f;
+    for (size_t i = 0; i < n; ++i) {
+        const float ms = RecentFrame(n, i);
+        const float bx = x + w - float(n - i) * step;
+        const float bh = std::max(1.0f, std::min(ms, top) / top * h);
+        p.Box(bx, y + h - bh, bx + step - 1.0f, y + h, FrameColor(ms, d.budget_ms), 0.0f);
+        max_ms = std::max(max_ms, ms);
+    }
+    Guides(p, x, y, w, h, top, d, labels);
+    p.Line(x, y + h, x + w, y + h, Theme::White(0.2f), 1.0f);
+    if (labels && n) {
+        const std::string text = TL("max ", "макс ") + Num(max_ms, 1);
+        const float tw = p.Width(11.0f, text) + 6;
+        p.Box(x + w - tw, y, x + w, y + 13, Theme::Ink, 0.0f, 0.6f);
+        p.Text(x + w - tw + 3, y, 11.0f, Theme::Muted, text);
+    }
+}
+
+// The frame time curve over a filled area, the target's budget shaded, stutters marked.
+void FrameCurve(const SavePainter& p, float x, float y, float w, float h, const OverlayData& d) {
+    p.Box(x, y, x + w, y + h, Theme::White(0.05f), 0.0f);
+    const float top = GraphTop(d);
+    const auto y_of = [&](float ms) { return y + h - std::min(ms, top) / top * h; };
+    if (d.budget_ms < top) p.Box(x, y_of(d.budget_ms), x + w, y + h, Theme::Good, 0.0f, 0.07f);
+    Guides(p, x, y, w, h, top, d, true);
+    const size_t n = frame_history_count;
+    if (n >= 2) {
+        const float step = w / float(frame_history.size() - 1);
+        const float x0 = x + w - float(n - 1) * step;
+        std::vector<ImVec2> points(n);
+        size_t max_i = 0;
+        for (size_t i = 0; i < n; ++i) {
+            const float ms = RecentFrame(n, i), px = x0 + float(i) * step;
+            p.Box(px, y_of(ms), px + step, y + h, Theme::Text, 0.0f, 0.07f);
+            points[i] = p.P(px, y_of(ms));
+            if (ms > RecentFrame(n, max_i)) max_i = i;
+        }
+        p.dl->AddPolyline(points.data(), int(n), Theme::U32(Theme::Text, 0.9f), ImDrawFlags_None, 1.5f * p.k);
+        for (size_t i = 0; i < n; ++i) {
+            const float ms = RecentFrame(n, i);
+            if (ms > 2.0f * d.ms && ms > 25.0f) {
+                const float px = x0 + float(i) * step, py = y_of(ms);
+                p.Box(px - 2.5f, py - 2.5f, px + 2.5f, py + 2.5f, FrameColor(ms, d.budget_ms), 0.0f);
+            }
+        }
+        const std::string text = Num(RecentFrame(n, max_i), 1);
+        const float tw = p.Width(11.0f, text) + 6;
+        const float tx = std::clamp(x0 + float(max_i) * step - tw / 2, x + 22, x + w - tw);
+        p.Box(tx, y, tx + tw, y + 13, Theme::Ink, 0.0f, 0.6f);
+        p.Text(tx + 3, y, 11.0f, FrameColor(RecentFrame(n, max_i), d.budget_ms), text);
+    }
+    p.Line(x, y + h, x + w, y + h, Theme::White(0.2f), 1.0f);
+}
+
+// How the frame times spread (the long window), on the curve's scale: a bar per 1/30 of it.
+void FrameHistogram(const SavePainter& p, float x, float y, float w, float h, const OverlayData& d) {
+    p.Box(x, y, x + w, y + h, Theme::White(0.05f), 0.0f);
+    constexpr int rows = 30;
+    const float top = GraphTop(d), row_h = h / rows;
+    std::array<int, rows> counts{};
+    for (size_t i = 0; i < frame_long_count; ++i) {
+        ++counts[std::min(rows - 1, int(frame_long[i] / top * rows))];
+    }
+    const int peak = *std::max_element(counts.begin(), counts.end());
+    for (int r = 0; peak && r < rows; ++r) {
+        if (!counts[r]) continue;
+        const float bw = std::max(1.0f, float(counts[r]) / float(peak) * (w - 2));
+        const float ry = y + h - float(r + 1) * row_h;
+        p.Box(x, ry + 0.5f, x + bw, ry + row_h - 0.5f, FrameColor((r + 0.5f) * top / rows, d.budget_ms), 0.0f);
+    }
+    p.Line(x, y + h, x + w, y + h, Theme::White(0.2f), 1.0f);
+}
+
+// Frame pacing: the change from the previous frame, up for slower and down for faster.
+void FramePacing(const SavePainter& p, float x, float y, float w, float h, const OverlayData& d) {
+    p.Box(x, y, x + w, y + h, Theme::White(0.04f), 0.0f);
+    const float mid = y + h / 2, step = 3.0f;
+    const size_t n = std::min(frame_history_count, size_t(w / step) + 1);
+    for (size_t i = 1; i < n; ++i) {
+        const float change = RecentFrame(n, i) - RecentFrame(n, i - 1), size = std::fabs(change);
+        const float bh = std::min(size, 12.0f) / 12.0f * (h / 2 - 1), bx = x + w - float(n - i) * step;
+        const ImVec4& color = size > 8.0f ? Theme::Bad : size > 3.0f ? Theme::Warn : Theme::Muted;
+        if (change > 0) p.Box(bx, mid - bh, bx + step - 1, mid, color, 0.0f);
+        else p.Box(bx, mid, bx + step - 1, mid + bh, color, 0.0f);
+    }
+    p.Line(x, mid, x + w, mid, Theme::White(0.2f), 1.0f);
+    const std::string text = TL("pacing ±", "ровность ±") + Ms(d.stats.jitter_ms);
+    const float tw = p.Width(11.0f, text) + 6;
+    p.Box(x + w - tw, y, x + w, y + 13, Theme::Ink, 0.0f, 0.6f);
+    p.Text(x + w - tw + 3, y, 11.0f, Theme::Muted, text);
+}
+
+// A thin track filled up to `fraction` (blue, amber from 90%).
+void Track(const SavePainter& p, float x0, float y, float x1, float h, float fraction) {
+    p.Box(x0, y, x1, y + h, Theme::White(0.14f), 0.0f);
+    if (fraction > 0.0f) {
+        p.Box(x0, y, x0 + (x1 - x0) * std::min(fraction, 1.0f), y + h, fraction >= 0.9f ? Theme::Warn : Theme::Accent, 0.0f);
+    }
+}
+
+struct MeterItem {
+    const char* label;
+    std::string value, short_value;
+    float fraction;
+};
+
+std::vector<MeterItem> Meters(const OverlayData& d) {
+    namespace P = TlgPerfStats;
+    const auto& s = d.sample;
+    std::vector<MeterItem> out;
+    if (d.items & P::Gpu) out.push_back({"GPU", Percent(s.gpu_percent), Percent(s.gpu_percent), s.gpu_percent / 100.0f});
+    if (d.items & P::Cpu) out.push_back({"CPU", Percent(s.cpu_percent), Percent(s.cpu_percent), s.cpu_percent / 100.0f});
+    if (d.items & P::Vram) {
+        out.push_back({"VRAM", Gigabytes(s.vram_used_gb, s.vram_total_gb), Gigabytes(s.vram_used_gb, -1.0),
+                       Fraction(s.vram_used_gb, s.vram_total_gb)});
+    }
+    if (d.items & P::Ram) {
+        out.push_back({"RAM", Gigabytes(s.ram_used_gb, s.ram_total_gb), Gigabytes(s.ram_used_gb, -1.0),
+                       Fraction(s.ram_used_gb, s.ram_total_gb)});
+    }
+    return out;
+}
+
+// A meter: the label and the value over a thin track (21 pixels high).
+void Meter(const SavePainter& p, float x, float y, float w, const MeterItem& m) {
+    p.Text(x, y, 13.0f, Theme::Muted, m.label);
+    p.TextRight(x + w, y, 13.0f, Theme::Text, m.value);
+    Track(p, x, y + 18, x + w, 3, m.fraction);
+}
+
+struct CellItem {
+    std::string label, value;
+    ImVec4 color;
+};
+
+// A row of equal cells, the label small over the value (34 pixels high).
+void Cells(const SavePainter& p, float x, float y, float w, const std::vector<CellItem>& cells) {
+    const float gap = 3.0f, cw = (w - gap * float(cells.size() - 1)) / float(cells.size());
+    for (size_t i = 0; i < cells.size(); ++i) {
+        const float cx = x + float(i) * (cw + gap);
+        p.Box(cx, y, cx + cw, y + 34, Theme::White(0.06f), 0.0f);
+        p.Text(cx + 5, y + 2, 11.0f, Theme::Muted, cells[i].label);
+        p.Text(cx + 5, y + 14, 16.0f, cells[i].color, cells[i].value);
+    }
+}
+
+// A grid of one-line cells, the label on the left and the value on the right (23 pixels a row).
+float GridCells(const SavePainter& p, float x, float y, float w, int columns, const std::vector<CellItem>& cells) {
+    const float gap = 3.0f, cw = (w - gap * float(columns - 1)) / float(columns);
+    for (size_t i = 0; i < cells.size(); ++i) {
+        const float cx = x + float(i % columns) * (cw + gap), cy = y + float(i / columns) * 23;
+        p.Box(cx, cy, cx + cw, cy + 20, Theme::White(0.06f), 0.0f);
+        p.Text(cx + 5, cy + 3, 12.0f, Theme::Muted, cells[i].label);
+        p.TextRight(cx + cw - 5, cy + 1, 15.0f, cells[i].color, cells[i].value);
+    }
+    const size_t rows = (cells.size() + columns - 1) / columns;
+    return rows ? float(rows) * 23 - 3 : 0.0f;
+}
+
+// The label muted and the value after it; returns their width.
+float Pair(const SavePainter& p, float x, float y, float size, const std::string& label, const std::string& value,
+           const ImVec4& color) {
+    p.Text(x, y, size, Theme::Muted, label);
+    const float lw = p.Width(size, label) + 4;
+    p.Text(x + lw, y, size, color, value);
+    return lw + p.Width(size, value);
+}
+
+float PairWidth(const SavePainter& p, float size, const std::string& label, const std::string& value) {
+    return p.Width(size, label) + 4 + p.Width(size, value);
+}
+
+void PairRight(const SavePainter& p, float right, float y, float size, const std::string& label,
+               const std::string& value, const ImVec4& color) {
+    Pair(p, right - PairWidth(p, size, label, value), y, size, label, value, color);
+}
+
+using Chip = std::pair<std::string, bool>; // text, accent
+
+// What runs: the renderer, the game's image and the window, the upscaler, VSync, the limit and
+// (with `gpu`) the graphics card.
+std::vector<Chip> InfoChips(const OverlayData& d, bool gpu) {
+    namespace P = TlgPerfStats;
+    const auto& s = TlgSettings::Get();
+    std::vector<Chip> out{{RendererName, true}};
+    const int iw = s.image_width, ih = s.image_height, ww = s.window_width, wh = s.window_height;
+    if (iw > 0 && ih > 0) {
+        std::string size = std::to_string(iw) + "×" + std::to_string(ih);
+        if (ww > 0 && wh > 0 && (ww != iw || wh != ih)) size += " › " + std::to_string(ww) + "×" + std::to_string(wh);
+        out.push_back({size, false});
+    }
+    if (d.items & P::Upscaler) out.push_back({d.sample.upscaler.empty() ? TL("Native", "Нативно") : d.sample.upscaler, false});
+    out.push_back({s.vsync ? "VSync" : TL("VSync off", "VSync выкл"), false});
+    if (s.fps_limit > 0) out.push_back({TL("limit ", "лимит ") + std::to_string(s.fps_limit.load()), false});
+    if (gpu && (d.items & P::Gpu) && !d.sample.gpu_name.empty()) out.push_back({ShortGpuName(d.sample.gpu_name), false});
+    return out;
+}
+
+// The chips in rows `width` wide; returns their height.
+float Chips(const SavePainter& p, float x, float y, float width, const std::vector<Chip>& chips) {
+    float cx = x, cy = y;
+    for (const auto& [text, accent] : chips) {
+        const float w = p.Width(12.0f, text, accent) + 10.0f;
+        if (cx > x && cx + w > x + width) {
+            cx = x;
+            cy += 22.0f;
+        }
+        p.Frame(cx, cy, cx + w, cy + 18, accent ? Theme::Accent : Theme::White(0.22f), 0.0f, 1.0f);
+        p.Text(cx + 5, cy + 1.5f, 12.0f, accent ? Theme::Accent : Theme::Muted, text, accent);
+        cx += w + 4.0f;
+    }
+    return chips.empty() ? 0.0f : cy - y + 18.0f;
+}
+
+// The large FPS (Light, coloured against the target) and the frame time beside it, 40 pixels
+// high; returns the right edge.
+float Headline(const SavePainter& p, float x, float y, const OverlayData& d, float size, bool jitter) {
+    namespace P = TlgPerfStats;
+    if (d.items & P::Fps) {
+        const std::string fps = Num(d.fps);
+        p.TextLight(x, y - size * 0.16f, size, RateColor(d.fps, d.target), fps);
+        x += p.LightWidth(size, fps) + 4;
+        p.Text(x, y + size * 0.48f, 13.0f, Theme::Muted, "FPS");
+        x += p.Width(13.0f, "FPS") + 12;
+    }
+    if (d.items & P::FrameTime) {
+        const std::string ms = Ms(d.ms);
+        p.Text(x, y + (jitter ? 1 : size * 0.3f), 18.0f, Theme::Text, ms);
+        float w = p.Width(18.0f, ms);
+        if (jitter) {
+            const std::string spread = "±" + Ms(d.stats.jitter_ms);
+            p.Text(x, y + 22, 13.0f, Theme::Muted, spread);
+            w = std::max(w, p.Width(13.0f, spread));
+        }
+        x += w;
+    }
+    return x;
+}
+
+std::vector<CellItem> RateCells(const OverlayData& d) {
+    const FrameStats& st = d.stats;
+    return {{TL("min", "мин"), Num(st.min_fps), RateColor(st.min_fps, d.target)},
+            {TL("avg", "сред"), Num(st.avg_fps), RateColor(st.avg_fps, d.target)},
+            {TL("max", "макс"), Num(st.max_fps), RateColor(st.max_fps, d.target)}};
+}
+
+CellItem StutterCell(const OverlayData& d) {
+    return {TL("stutters", "фризы"), std::to_string(d.stats.stutters), d.stats.stutters ? Theme::Warn : Theme::Good};
+}
+
+// A: the FPS, frame time and lows over the bar graph, five statistics, four meters, the chips.
+ImVec2 CompactStyle(const SavePainter& p, const OverlayData& d) {
+    namespace P = TlgPerfStats;
+    const float W = 320, pad = 8, inner = W - 2 * pad, gap = 6;
+    const bool head = d.items & (P::Fps | P::FrameTime), graph = d.items & P::Graph;
+    float y = pad;
+    if (head || graph) {
+        if (head) Headline(p, pad, y, d, 40.0f, true);
+        if (graph) {
+            PairRight(p, W - pad, y + 1, 14.0f, "1%", Num(d.stats.low1_fps), RateColor(d.stats.low1_fps, d.target));
+            PairRight(p, W - pad, y + 21, 14.0f, "0.1%", Num(d.stats.low01_fps), RateColor(d.stats.low01_fps, d.target));
+        }
+        y += 40 + gap;
+    }
+    if (graph) {
+        FrameBars(p, pad, y, inner, 56, d, true);
+        y += 56 + gap;
+        std::vector<CellItem> cells = RateCells(d);
+        cells.push_back({std::string("P99 ") + TL("ms", "мс"), Num(d.stats.p99_ms, 1), FrameColor(d.stats.p99_ms, d.budget_ms)});
+        cells.push_back(StutterCell(d));
+        Cells(p, pad, y, inner, cells);
+        y += 34 + gap;
+    }
+    const std::vector<MeterItem> meters = Meters(d);
+    const float mw = (inner - 12) / 2;
+    for (size_t i = 0; i < meters.size(); ++i) {
+        Meter(p, pad + float(i % 2) * (mw + 12), y + float(i / 2) * 27, mw, meters[i]);
+    }
+    y += float((meters.size() + 1) / 2) * 27;
+    y += Chips(p, pad, y, inner, InfoChips(d, true)) + gap;
+    return ImVec2(W, y - gap + pad);
+}
+
+// B: everything in one row, 46 pixels high, cells parted by thin lines.
+ImVec2 StripStyle(const SavePainter& p, const OverlayData& d) {
+    namespace P = TlgPerfStats;
+    const float H = 46, pad = 8, top = 6, low = 25;
+    float x = pad;
+    bool first = true;
+    const auto next = [&] {
+        if (!first) {
+            x += pad + 2;
+            p.Line(x, 0, x, H, Theme::White(0.1f), 1.0f);
+            x += pad + 2;
+        }
+        first = false;
+    };
+    if (d.items & (P::Fps | P::FrameTime)) {
+        next();
+        if (d.items & P::Fps) {
+            const std::string fps = Num(d.fps);
+            p.TextLight(x, 1, 34.0f, RateColor(d.fps, d.target), fps);
+            x += p.LightWidth(34.0f, fps) + 6;
+        }
+        float w = 0.0f;
+        if (d.items & P::Fps) {
+            p.Text(x, top, 12.0f, Theme::Muted, "FPS");
+            w = p.Width(12.0f, "FPS");
+        }
+        if (d.items & P::FrameTime) {
+            const std::string ms = Ms(d.ms);
+            p.Text(x, (d.items & P::Fps) ? low - 2 : 13, 15.0f, Theme::Text, ms);
+            w = std::max(w, p.Width(15.0f, ms));
+        }
+        x += w;
+    }
+    if (d.items & P::Graph) {
+        next();
+        FrameBars(p, x, 7, 168, 32, d, false);
+        x += 168;
+        next();
+        const std::string lows[2][2] = {{"1%", Num(d.stats.low1_fps)}, {"0.1%", Num(d.stats.low01_fps)}};
+        const ImVec4 lows_color[2] = {RateColor(d.stats.low1_fps, d.target), RateColor(d.stats.low01_fps, d.target)};
+        const std::string worst[2][2] = {{TL("max", "макс"), Num(d.stats.max_ms, 1)},
+                                         {TL("stutters", "фризы"), std::to_string(d.stats.stutters)}};
+        const ImVec4 worst_color[2] = {FrameColor(d.stats.max_ms, d.budget_ms), d.stats.stutters ? Theme::Warn : Theme::Good};
+        float w = 0.0f;
+        for (int r = 0; r < 2; ++r) w = std::max(w, Pair(p, x, r ? low : top, 14.0f, lows[r][0], lows[r][1], lows_color[r]));
+        x += w + 12;
+        w = 0.0f;
+        for (int r = 0; r < 2; ++r) w = std::max(w, Pair(p, x, r ? low : top, 14.0f, worst[r][0], worst[r][1], worst_color[r]));
+        x += w;
+    }
+    const std::vector<MeterItem> meters = Meters(d);
+    for (size_t i = 0; i < meters.size(); i += 2) {
+        next();
+        float w = 0.0f;
+        for (size_t j = i; j < std::min(i + 2, meters.size()); ++j) {
+            const float ry = j == i ? top : low;
+            p.Text(x, ry, 13.0f, Theme::Muted, meters[j].label);
+            Track(p, x + 40, ry + 6, x + 70, 4, meters[j].fraction);
+            p.Text(x + 76, ry, 14.0f, Theme::Text, meters[j].short_value);
+            w = std::max(w, 76 + p.Width(14.0f, meters[j].short_value));
+        }
+        x += w;
+    }
+    next();
+    const std::vector<Chip> chips = InfoChips(d, false);
+    std::string first_line = std::string(RendererName), second_line;
+    for (size_t i = 1; i < chips.size(); ++i) {
+        std::string& line = i == 1 ? first_line : second_line;
+        line += (line.empty() ? "" : i == 1 ? "  " : " · ") + chips[i].first;
+    }
+    p.Text(x, top, 13.0f, Theme::Accent, RendererName, true);
+    p.Text(x + p.Width(13.0f, RendererName, true), top, 13.0f, Theme::Muted, first_line.substr(std::strlen(RendererName)));
+    p.Text(x, low, 13.0f, Theme::Muted, second_line);
+    x += std::max(p.Width(13.0f, first_line) + 1, p.Width(13.0f, second_line));
+    return ImVec2(x + pad, H);
+}
+
+// C: the frame time curve with its histogram on the same scale beside it, the percentiles.
+ImVec2 HistogramStyle(const SavePainter& p, const OverlayData& d) {
+    namespace P = TlgPerfStats;
+    const float W = 360, pad = 8, inner = W - 2 * pad, gap = 6;
+    const bool head = d.items & (P::Fps | P::FrameTime), graph = d.items & P::Graph;
+    float y = pad;
+    if (head || graph) {
+        if (head) Headline(p, pad, y, d, 40.0f, false);
+        if (graph) {
+            PairRight(p, W - pad, y + 1, 14.0f, "0.1%", Num(d.stats.low01_fps), RateColor(d.stats.low01_fps, d.target));
+            PairRight(p, W - pad - PairWidth(p, 14.0f, "0.1%", Num(d.stats.low01_fps)) - 12, y + 1, 14.0f, "1%",
+                      Num(d.stats.low1_fps), RateColor(d.stats.low1_fps, d.target));
+            const float over = d.ms - d.budget_ms;
+            const std::string budget = TL("budget ", "бюджет ") + Ms(d.budget_ms) + " · ";
+            const std::string excess = (over > 0 ? "+" : "") + Num(over, 1);
+            const float ew = p.Width(13.0f, excess);
+            p.Text(W - pad - ew, y + 22, 13.0f, over > 0 ? Theme::Warn : Theme::Good, excess);
+            p.TextRight(W - pad - ew, y + 22, 13.0f, Theme::Muted, budget);
+        }
+        y += 40 + gap;
+    }
+    if (graph) {
+        const float hw = 52, gw = inner - hw - 4, gh = 92;
+        FrameCurve(p, pad, y, gw, gh, d);
+        FrameHistogram(p, pad + gw + 4, y, hw, gh, d);
+        y += gh + gap;
+        const std::string ms = TL(" ms", " мс");
+        Cells(p, pad, y, inner,
+              {{"P50" + ms, Num(d.stats.p50_ms, 1), FrameColor(d.stats.p50_ms, d.budget_ms)},
+               {"P90" + ms, Num(d.stats.p90_ms, 1), FrameColor(d.stats.p90_ms, d.budget_ms)},
+               {"P99" + ms, Num(d.stats.p99_ms, 1), FrameColor(d.stats.p99_ms, d.budget_ms)},
+               {TL("max", "макс") + ms, Num(d.stats.max_ms, 1), FrameColor(d.stats.max_ms, d.budget_ms)},
+               StutterCell(d)});
+        y += 34 + gap;
+    }
+    const std::vector<MeterItem> meters = Meters(d);
+    if (!meters.empty()) {
+        const float cw = inner / float(meters.size());
+        for (size_t i = 0; i < meters.size(); ++i) {
+            Pair(p, pad + float(i) * cw, y, 13.0f, meters[i].label, meters[i].short_value, Theme::Text);
+        }
+        y += 17 + gap;
+    }
+    y += Chips(p, pad, y, inner, InfoChips(d, true)) + gap;
+    return ImVec2(W, y - gap + pad);
+}
+
+// D: as much as is measured: the bars, the pacing, nine statistics, a meter per line, the chips.
+ImVec2 TelemetryStyle(const SavePainter& p, const OverlayData& d) {
+    namespace P = TlgPerfStats;
+    const auto& s = TlgSettings::Get();
+    const float W = 380, pad = 8, inner = W - 2 * pad, gap = 6;
+    const bool head = d.items & (P::Fps | P::FrameTime), graph = d.items & P::Graph;
+    float y = pad;
+    if (head || graph) {
+        if (head) Headline(p, pad, y, d, 40.0f, false);
+        const std::string target = TL("target ", "цель ") + std::to_string(d.target) + " · " + Ms(d.budget_ms);
+        p.TextRight(W - pad, y + 1, 13.0f, Theme::Muted, target);
+        const float load = d.budget_ms > 0.0f ? d.ms / d.budget_ms : 0.0f;
+        const std::string load_text = Num(load * 100.0f) + "%";
+        const float lw = p.Width(13.0f, load_text);
+        const ImVec4& load_color = load > 1.05f ? Theme::Warn : Theme::Good;
+        p.Text(W - pad - lw, y + 21, 13.0f, load_color, load_text);
+        p.Box(W - pad - lw - 86, y + 27, W - pad - lw - 6, y + 31, Theme::White(0.14f), 0.0f);
+        p.Box(W - pad - lw - 86, y + 27, W - pad - lw - 86 + 80 * std::min(load, 1.0f), y + 31, load_color, 0.0f);
+        y += 40 + gap;
+    }
+    if (graph) {
+        FrameBars(p, pad, y, inner, 56, d, true);
+        y += 56 + 3;
+        FramePacing(p, pad, y, inner, 24, d);
+        y += 24 + gap;
+        std::vector<CellItem> cells = RateCells(d);
+        cells.push_back({"1%", Num(d.stats.low1_fps), RateColor(d.stats.low1_fps, d.target)});
+        cells.push_back({"0.1%", Num(d.stats.low01_fps), RateColor(d.stats.low01_fps, d.target)});
+        cells.push_back(StutterCell(d));
+        cells.push_back({"P50", Num(d.stats.p50_ms, 1), FrameColor(d.stats.p50_ms, d.budget_ms)});
+        cells.push_back({"P90", Num(d.stats.p90_ms, 1), FrameColor(d.stats.p90_ms, d.budget_ms)});
+        cells.push_back({"P99", Num(d.stats.p99_ms, 1), FrameColor(d.stats.p99_ms, d.budget_ms)});
+        y += GridCells(p, pad, y, inner, 3, cells) + gap;
+    }
+    const std::vector<MeterItem> meters = Meters(d);
+    for (const MeterItem& m : meters) {
+        p.Text(pad, y, 13.0f, Theme::Muted, m.label);
+        Track(p, pad + 46, y + 7, W - pad - 120, 4, m.fraction);
+        p.TextRight(W - pad, y, 14.0f, Theme::Text, m.value);
+        y += 20;
+    }
+    if (!meters.empty()) y += gap - 2;
+    std::vector<Chip> chips = InfoChips(d, true);
+    chips.push_back({TL("queue ", "очередь ") + std::to_string(s.frames_queued.load()), false});
+    y += Chips(p, pad, y, inner, chips) + gap;
+    return ImVec2(W, y - gap + pad);
+}
+
+// E: one line (the FPS, the frame time, a small bar graph, the 1% low) or two lines and a graph.
+ImVec2 MiniStyle(const SavePainter& p, const OverlayData& d) {
+    namespace P = TlgPerfStats;
+    const float pad = 6;
+    if (TlgSettings::Get().overlay_layout != 1) {
+        float x = pad;
+        if (d.items & P::Fps) {
+            const std::string fps = Num(d.fps);
+            p.TextLight(x, 0, 26.0f, RateColor(d.fps, d.target), fps);
+            x += p.LightWidth(26.0f, fps) + 8;
+        }
+        if (d.items & P::FrameTime) {
+            const std::string ms = Ms(d.ms);
+            p.Text(x, 8, 14.0f, Theme::Text, ms);
+            x += p.Width(14.0f, ms) + 8;
+        }
+        if (d.items & P::Graph) {
+            FrameBars(p, x, 7, 84, 18, d, false);
+            x += 84 + 8;
+            x += Pair(p, x, 8, 14.0f, "1%", Num(d.stats.low1_fps), RateColor(d.stats.low1_fps, d.target)) + 8;
+        }
+        return ImVec2(x - 8 + pad, 32);
+    }
+    const float W = 250, inner = W - 2 * pad;
+    float y = 4;
+    if (d.items & (P::Fps | P::FrameTime | P::Graph)) {
+        float x = pad;
+        if (d.items & P::Fps) {
+            const std::string fps = Num(d.fps);
+            p.TextLight(x, y - 4, 26.0f, RateColor(d.fps, d.target), fps);
+            x += p.LightWidth(26.0f, fps) + 8;
+        }
+        if (d.items & P::FrameTime) p.Text(x, y + 4, 14.0f, Theme::Text, Ms(d.ms));
+        if (d.items & P::Graph) {
+            const std::string low01 = Num(d.stats.low01_fps), low1 = Num(d.stats.low1_fps);
+            PairRight(p, W - pad, y + 4, 13.0f, "0.1%", low01, RateColor(d.stats.low01_fps, d.target));
+            PairRight(p, W - pad - PairWidth(p, 13.0f, "0.1%", low01) - 10, y + 4, 13.0f, "1%", low1,
+                      RateColor(d.stats.low1_fps, d.target));
+        }
+        y += 28;
+    }
+    if (d.items & P::Graph) {
+        FrameBars(p, pad, y, inner, 24, d, false);
+        y += 24 + 5;
+    }
+    float x = pad;
+    for (const MeterItem& m : Meters(d)) {
+        if (m.label == std::string("RAM")) continue;
+        x += Pair(p, x, y, 12.0f, m.label, m.short_value, Theme::Text) + 10;
+    }
+    p.TextRight(W - pad, y, 12.0f, Theme::Accent, RendererName, true);
+    y += 16;
+    return ImVec2(W, y + 4);
+}
+
+// Draws the overlay in its square style with the top-left corner at `at`; returns its size in
+// display pixels (zero when nothing is shown). The panel is drawn first as a rectangle of 4
+// vertices (PrimRect: a, (b.x, a.y), b, (a.x, b.y)) and given its size once the items are laid out.
+ImVec2 DrawOverlay(ImDrawList* dl, ImVec2 at, float k) {
+    namespace P = TlgPerfStats;
+    const auto& s = TlgSettings::Get();
+    const OverlayData d = CollectOverlayData();
+    if (!(d.items & P::AllItems)) {
+        return {};
+    }
+    const SavePainter p{dl, ImGui::GetFont(), k, at};
+    const float opacity = s.overlay_opacity / 100.0f;
+    const int panel = dl->VtxBuffer.Size;
+    if (opacity > 0.0f) p.Box(0, 0, 1, 1, Theme::Glass, 0.0f, Theme::GlassAlpha * opacity);
+    ImVec2 size;
+    switch (s.overlay_style) {
+    case TlgSettings::OverlayStrip: size = StripStyle(p, d); break;
+    case TlgSettings::OverlayHistogram: size = HistogramStyle(p, d); break;
+    case TlgSettings::OverlayTelemetry: size = TelemetryStyle(p, d); break;
+    case TlgSettings::OverlayMini: size = MiniStyle(p, d); break;
+    default: size = CompactStyle(p, d); break;
+    }
+    if (opacity > 0.0f && dl->VtxBuffer.Size >= panel + 4) {
+        ImDrawVert* v = dl->VtxBuffer.Data + panel;
+        const ImVec2 a = p.P(0, 0), b = p.P(size.x, size.y);
+        v[0].pos = a;
+        v[1].pos = ImVec2(b.x, a.y);
+        v[2].pos = b;
+        v[3].pos = ImVec2(a.x, b.y);
+        p.Frame(0, 0, size.x, size.y, Theme::White(0.08f), 0.0f, 1.0f, opacity);
+    }
+    return ImVec2(size.x * k, size.y * k);
+}
+
+// The performance overlay: the card of earlier versions, or a square style drawn at the screen's
+// corner and moved to its place once its size is known.
+void FpsCounter() {
+    const auto& s = TlgSettings::Get();
+    if (s.overlay_style == TlgSettings::OverlayCard) {
+        CardOverlay();
+        return;
+    }
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    const ImVec2 origin = ImGui::GetMainViewport()->WorkPos;
+    const int first = dl->VtxBuffer.Size;
+    const ImVec2 size = DrawOverlay(dl, origin, base_scale * s.overlay_scale / 100.0f);
+    if (size.x <= 0.0f) {
+        return;
+    }
+    const ImVec2 at = OverlayPosition(size);
+    const ImVec2 shift(at.x - origin.x, at.y - origin.y);
+    for (int i = first; i < dl->VtxBuffer.Size; ++i) {
+        dl->VtxBuffer[i].pos.x += shift.x;
+        dl->VtxBuffer[i].pos.y += shift.y;
+    }
 }
 
 std::string notice_text;
@@ -2943,6 +3683,9 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
         frame_history[frame_history_next] = ms;
         frame_history_next = (frame_history_next + 1) % frame_history.size();
         frame_history_count = std::min(frame_history_count + 1, frame_history.size());
+        frame_long[frame_long_next] = ms;
+        frame_long_next = (frame_long_next + 1) % frame_long.size();
+        frame_long_count = std::min(frame_long_count + 1, frame_long.size());
     }
     ConfirmRestart();
     std::unique_lock lock{imgui_mutex};

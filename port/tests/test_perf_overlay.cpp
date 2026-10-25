@@ -51,8 +51,9 @@ int main() {
     {
         std::ofstream out(path);
         out << "show_fps=1\noverlay_fps=0\noverlay_frametime=1\noverlay_upscaler=0\noverlay_gpu=1\n"
-               "overlay_cpu=1\noverlay_ram=0\noverlay_vram=1\noverlay_scale=400\noverlay_corner=2\n"
-               "overlay_opacity=-5\noverlay_layout=1\nmenu_tab=3\n";
+               "overlay_cpu=1\noverlay_ram=0\noverlay_vram=1\noverlay_graph=0\noverlay_scale=400\noverlay_corner=2\n"
+               "overlay_opacity=-5\noverlay_layout=1\nmenu_tab=3\noverlay_style=4\noverlay_offset_x=2000\n"
+               "overlay_offset_y=12\n";
     }
 #ifdef _WIN32
     _putenv_s("TLG_CONFIG", path);
@@ -65,6 +66,7 @@ int main() {
     assert(v.overlay_items == (P::FrameTime | P::Gpu | P::Cpu | P::Vram));
     assert(v.overlay_scale == 300 && v.overlay_corner == 2 && v.overlay_opacity == 0);
     assert(v.overlay_layout == 1 && v.menu_tab == 3);
+    assert(v.overlay_style == 4 && v.overlay_offset_x == 960 && v.overlay_offset_y == 12);
     v.overlay_items = P::Fps | P::Ram;
     v.overlay_scale = 150;
     v.overlay_opacity = 70;
@@ -73,15 +75,17 @@ int main() {
     const std::string saved = Read(path);
     for (const char* line : {"overlay_fps=1\n", "overlay_frametime=0\n", "overlay_ram=1\n", "overlay_vram=0\n",
                              "overlay_scale=150\n", "overlay_corner=2\n", "overlay_opacity=70\n",
-                             "overlay_layout=1\n", "menu_tab=1\n"}) {
+                             "overlay_layout=1\n", "menu_tab=1\n", "overlay_style=4\n", "overlay_offset_x=960\n",
+                             "overlay_offset_y=12\n"}) {
         assert(saved.find(line) != std::string::npos);
     }
     {
         std::ofstream out(path);
-        out << "overlay_corner=9\nmenu_tab=-1\noverlay_scale=10\n";
+        out << "overlay_corner=9\nmenu_tab=-1\noverlay_scale=10\noverlay_style=7\n";
     }
     TlgSettings::Load();
     assert(v.overlay_corner == 1 && v.menu_tab == 0 && v.overlay_scale == 50);
+    assert(v.overlay_style == TlgSettings::OverlayCompact);
     std::remove(path);
     std::puts("PASS: performance overlay");
 }
