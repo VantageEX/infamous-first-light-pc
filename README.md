@@ -48,6 +48,8 @@ From v0.3.2 the launcher checks for a new release when it starts and installs it
 
 **Steam, Playnite, a shortcut:** `"inFAMOUS First Light.exe" --play` starts the game straight away with the launcher's settings, without its window (in Steam: add a non-Steam game, then Properties → Launch options: `--play`). If the game fails, the launcher opens on its log.
 
+**Ultrawide (experimental):** launcher → Display → Picture shape: 21:9, 32:9 or "As the screen". The view widens at the sides and the HUD moves to the edges; the movies stay 16:9 with bars at the sides. The render size keeps the chosen resolution's height (at most 4K's pixel count). Environment variables for testing: `TLG_RENDER_SIZE=2560x1080` sets the size directly, `TLG_MOVIE_FIT=0` stretches the movies as before.
+
 Requirements: Windows 10/11 64-bit, a Vulkan 1.3 GPU, a CPU with AVX (Intel CPUs work: the AMD-only instructions the game uses are emulated).
 
 **Dumping your game:** on your own PS4 with GoldHEN, dump the game (and its update, if any) with a homebrew dumper such as Itemzflow, and copy the folder to the PC.
@@ -137,6 +139,8 @@ Where Windows' Segoe UI is missing (Linux, the Steam Deck) the launcher and the 
 Начиная с v0.3.2 лаунчер при запуске проверяет новые релизы и ставит их в один клик; сохранения и настройки остаются.
 
 **Steam, Playnite, ярлык:** `"inFAMOUS First Light.exe" --play` сразу запускает игру с настройками лаунчера, без его окна (в Steam: «Добавить стороннюю игру», затем Свойства → Параметры запуска: `--play`). Если игра завершится с ошибкой, откроется лаунчер с журналом.
+
+**Ultrawide (экспериментально):** лаунчер → Экран → «Форма кадра»: 21:9, 32:9 или «Как у экрана». Обзор расширяется по бокам, интерфейс уходит к краям; ролики остаются 16:9 с полосами по бокам. Размер рендера берёт высоту выбранного разрешения (не больше пикселей 4K). Переменные окружения для проверки: `TLG_RENDER_SIZE=2560x1080` задаёт размер напрямую, `TLG_MOVIE_FIT=0` растягивает ролики, как раньше.
 
 Нужно: Windows 10/11 64-бит, видеокарта с Vulkan 1.3, процессор с AVX (процессоры Intel тоже подходят: инструкции AMD, которые использует игра, эмулируются).
 

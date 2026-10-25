@@ -16,6 +16,7 @@ RESOLUTIONS = ('native', '480p', '720p', '800p', '1440p', '1800p', '4K')
 # 16:9).
 ASPECTS = ('16:9', '21:9', '32:9', 'auto')
 RESOLUTION_HEIGHTS = {'native': 1080, '480p': 480, '720p': 720, '800p': 800, '1440p': 1440, '1800p': 1800, '4K': 2160}
+MAX_PIXELS = 3840 * 2160
 ENGINE_FPS = (60, 120, 240)
 DEFAULTS = {'render_resolution': 'native', 'engine_fps': '120', 'deferred_readback': '1',
             'stale_readback': '1', 'async_shaders': '1', 'aspect': '16:9'}
@@ -81,14 +82,22 @@ def shape_ratio(text):
 
 def render_size(options, screen_size=None):
     """patches.py's --render-resolution: the resolution's name for a 16:9 picture, else
-    "<width>x<height>": the resolution's height, the shape's width (multiples of 8, at most 32:9).
+    "<width>x<height>": the resolution's height, the shape's width (multiples of 8, at most 32:9 and
+    4K's pixel count).
     A shape narrower than 16:9 keeps 16:9 (the game's view would be cut at the sides)."""
     aspect = options.get('aspect', '16:9')
     # "21:9" as the monitors sold so: 2560 x 1080 (64:27).
     ratio = shape_ratio(screen_size or '') if aspect == 'auto' else shape_ratio('64:27' if aspect == '21:9' else aspect)
     if not ratio or ratio < 16 / 9 * 1.03:
         return options['render_resolution']
+    ratio = min(ratio, 32 / 9)
     height = RESOLUTION_HEIGHTS.get(options['render_resolution'], 1080)
+    # At most 4K's pixels: a wide shape at a high resolution steps down to a smaller one
+    # (32:9 at 4K would be 7680 x 2160, twice 4K's targets).
+    heights = sorted(h for h in RESOLUTION_HEIGHTS.values() if h <= height)
+    while len(heights) > 1 and heights[-1] * heights[-1] * ratio > MAX_PIXELS:
+        heights.pop()
+    height = heights[-1]
     width = min(int(round(height * ratio / 8)) * 8, height * 32 // 9 // 8 * 8)
     return f'{width}x{height}'
 

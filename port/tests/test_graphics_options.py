@@ -31,6 +31,10 @@ class GraphicsOptionsTest(unittest.TestCase):
         self.assertEqual(g.render_size({'render_resolution': 'native', 'aspect': 'auto'}, '3440x1440'), '2576x1080')
         self.assertEqual(g.render_size({'render_resolution': 'native', 'aspect': 'auto'}, '1280x800'), 'native')
         self.assertEqual(g.render_size({'render_resolution': 'native', 'aspect': 'auto'}), 'native')
+        # Not more than 4K's pixels: a lower height instead.
+        self.assertEqual(g.render_size({'render_resolution': '4K', 'aspect': '32:9'}), '5120x1440')
+        self.assertEqual(g.render_size({'render_resolution': '4K', 'aspect': '21:9'}), '4264x1800')
+        self.assertEqual(g.render_size({'render_resolution': '1440p', 'aspect': '21:9'}), '3416x1440')
 
     def test_write_keys_keeps_other_lines(self):
         self.ini.write_text('# comment\nshow_fps=1\nengine_fps=60\n', encoding='utf-8')

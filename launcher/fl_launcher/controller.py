@@ -374,10 +374,10 @@ class Launcher(QObject):
         self.settings.save()
         self._clear_log()
         self._log_line(self.t('starting'))
-        for key, value in extra.items():
-            self._log_line(f'{key}={value}')
         if self.settings.core.get('aspect') == 'auto':
             extra['TLG_SCREEN_SIZE'] = _screen_size()
+        for key, value in extra.items():
+            self._log_line(f'{key}={value}')
         version = VERSION_FILE.read_text(encoding='utf-8').strip() if VERSION_FILE.is_file() else ''
         user_env = parse_env(self.settings.launcher['extra_env']) if self._advanced else {}
         header = report.session_header(version, self.info, self.settings.core, self.renderer, user_env)
