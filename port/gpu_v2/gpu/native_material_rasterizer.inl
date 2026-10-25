@@ -393,7 +393,8 @@ bool Rasterizer::NativeMaterialBind(const NativeMaterialTemplate& t) {
             info = vk::DescriptorBufferInfo{VK_NULL_HANDLE, 0, VK_WHOLE_SIZE};
             continue;
         }
-        const u64 size = memory->ClampRangeSize(sharp.base_address, sharp.GetSize());
+        const u64 size =
+            VideoCore::ClampHugeRead(memory->ClampRangeSize(sharp.base_address, sharp.GetSize()), desc.is_written);
         bool known_unwritten = false;
         const auto [buffer, offset] =
             buffer_cache.ObtainBuffer(sharp.base_address, u32(size), false, desc.is_formatted,

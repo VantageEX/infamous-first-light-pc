@@ -598,11 +598,13 @@ static ng::Recording* RecordBatch(const ng::Batch& b, const ng::RangeStart& star
             }
             vk::Buffer handle;
             u64 offset;
-            if (!resolve(sharp.base_address, sharp.GetSize(), handle, offset))
+            const u64 size =
+            VideoCore::ClampHugeRead(sharp.GetSize(), stage.buffers[slot.desc].is_written);
+            if (!resolve(sharp.base_address, size, handle, offset))
                 return fail(MissBuffer);
             const u64 aligned = Common::AlignDown(offset, alignment);
             push.buf_offsets[slot.binding] = u8(offset - aligned);
-            info = vk::DescriptorBufferInfo{handle, aligned, sharp.GetSize() + (offset - aligned)};
+            info = vk::DescriptorBufferInfo{handle, aligned, size + (offset - aligned)};
         }
         NR_STEP("descriptors");
         NativeMaterial::BuildWrites(*t, infos.data(), writes);

@@ -17,6 +17,10 @@ class LeastRecentlyUsedCache {
         TickType tick;
         Item* next{};
         Item* prev{};
+        /// iss: false once freed. Touch on a freed id (a memo still holding an image the
+        /// collector freed) linked the item again: the collector then met the freed image
+        /// on every pass (TEXTURE_DOUBLE_FREE, 2026-10-22) and a reused id was linked twice.
+        bool alive{};
     };
 
 public:
@@ -28,13 +32,14 @@ public:
         auto& item = item_pool[new_id];
         item.obj = obj;
         item.tick = tick;
+        item.alive = true;
         Attach(item);
         return new_id;
     }
 
     void Touch(size_t id, TickType tick) {
         auto& item = item_pool[id];
-        if (item.tick >= tick) {
+        if (!item.alive || item.tick >= tick) {
             return;
         }
         item.tick = tick;
@@ -47,6 +52,10 @@ public:
 
     void Free(size_t id) {
         auto& item = item_pool[id];
+        if (!item.alive) {
+            return;
+        }
+        item.alive = false;
         Detach(item);
         item.prev = nullptr;
         item.next = nullptr;

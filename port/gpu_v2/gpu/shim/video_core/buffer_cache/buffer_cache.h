@@ -63,6 +63,26 @@ struct QueueContext {
     u32 index; ///< 0 graphics, 1 compute (RegionManager::CrossQueueAccess).
 };
 
+/// iss: the size bound for a read-only buffer binding. inFAMOUS's skinning vertex shaders
+/// (0x6042bbde, 0x1201d207: descriptor 2, 16-bit texel buffer, indexed by a vertex attribute)
+/// describe a small global table with num_records reaching the end of the GPU heap: 2.5 GB in
+/// garlic and 540 MB in onion. Bound whole, the arena made all of it resident: 3 GB of VRAM
+/// (RTX 2060, 2026-10-22). Bindings above ISS_HUGE_READ_LIMIT_MB (default 1024) are cut to
+/// ISS_HUGE_READ_WINDOW_MB (default 64: 32M 16-bit entries); reads past it return zero (robust
+/// buffer access). The onion one stays whole: its residency is what lets the native paths find
+/// the per-frame buffers there (cut too, they missed 93% of their draws: 48 -> 33 fps).
+inline u64 ClampHugeRead(u64 size, bool written) {
+    static const u64 window = [] {
+        const char* p = std::getenv("ISS_HUGE_READ_WINDOW_MB");
+        return u64(p ? std::strtoull(p, nullptr, 10) : 64) << 20;
+    }();
+    static const u64 limit = [] {
+        const char* p = std::getenv("ISS_HUGE_READ_LIMIT_MB");
+        return u64(p ? std::strtoull(p, nullptr, 10) : 1024) << 20;
+    }();
+    return !written && window != 0 && size > limit && size > window ? window : size;
+}
+
 class BufferCache {
     static constexpr u64 ADDRESS_SPACE_BITS = 40;
     static constexpr u64 ARENA_PAGE_BITS = 32;
@@ -249,6 +269,11 @@ public:
     /// work it waits for has been handed to the driver (asc_queue).
     void FlushComputeQueue();
 
+    /// iss: bytes of guest memory made resident in the arena (spilled: those in system memory).
+    u64 ArenaResidentBytes(bool spilled) const;
+    /// Bytes made resident by: 0 buffer bindings, 1 image sources, 2 GPU writes.
+    u64 ArenaReasonBytes(int reason) const;
+
     /// Returns minimum granularity of a sparse memory bind.
     u32 GetSparsePageShift() const noexcept {
         return block_shift;
@@ -363,6 +388,11 @@ public:
     };
     /// Read-only C preflight. Returns empty while a required bind is still pending.
     [[nodiscard]] PublishedArena PeekPublishedArena(VAddr device_addr, u32 size) const;
+    /// iss: makes a guest range resident in the arena and current (command processor thread,
+    /// not split): the native paths only find ranges already resident, and the small ones the
+    /// command processor streams never became resident once the 2.5 GB binding stopped making
+    /// the whole heap resident (ClampHugeRead). False when the range cannot be prefaulted.
+    bool PrefaultArena(VAddr device_addr, u32 size);
     struct AscArenaPreflight {
         u64 graphics_tick{};
         u64 mapping_generation{};
@@ -757,6 +787,8 @@ private:
     std::vector<u64> resident_full; ///< A bit per word of resident_bits that is all ones.
 
     u32 arena_memory_type_index{};
+    /// iss: a memory type outside VRAM the arena may also bind (~0u: none).
+    u32 arena_spill_type_index{~0u};
     u32 block_size{};
     u32 block_shift{};
     u32 blocks_per_arena_page{};

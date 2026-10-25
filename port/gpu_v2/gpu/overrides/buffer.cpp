@@ -14,6 +14,7 @@
 
 #include <vk_mem_alloc.h>
 #include <array>
+#include "vram_stats.h"
 
 namespace iss::asc_family {
 /// ISS: queue family of the asc_queue compute queue when it is a compute-only family (async
@@ -86,6 +87,7 @@ UniqueBuffer::~UniqueBuffer() {
 
 void UniqueBuffer::Destroy() {
     if (allocation) {
+        iss::vram_stats::Untrack(allocation);
         vmaDestroyBuffer(allocator, buffer, allocation);
     } else if (buffer) {
         device.destroyBuffer(buffer);
@@ -129,6 +131,7 @@ void UniqueBuffer::Create(vk::BufferCreateInfo& buffer_ci, MemoryType mem_type,
         ASSERT_MSG(result == VK_SUCCESS, "Failed allocating buffer with error {}",
                    vk::to_string(vk::Result{result}));
         buffer = vk::Buffer{unsafe_buffer};
+        iss::vram_stats::Track(allocator, allocation, int(mem_type));
     } else {
         buffer_ci.flags |=
             vk::BufferCreateFlagBits::eSparseBinding | vk::BufferCreateFlagBits::eSparseResidency;
@@ -173,6 +176,12 @@ Buffer::Buffer(const Vulkan::Instance& instance, VAddr cpu_addr_, u64 size_bytes
             mapped_data = std::span<u8>{std::bit_cast<u8*>(alloc_info.pMappedData), size_bytes};
         }
         is_coherent = property_flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        // The large VRAM buffers by name (VRAM_OTHER's device_local and stream).
+        if ((property_flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) && size_bytes >= (16ull << 20))
+            std::fprintf(stderr, "VRAM_BUFFER %s %llu MB (%s)\n",
+                         debug_name.empty() ? "unnamed" : std::string(debug_name).c_str(),
+                         (unsigned long long)(size_bytes >> 20),
+                         std::string(BufferTypeName(mem_type)).c_str());
         static const bool report_stream_memory = [] {
             const char* value = std::getenv("ISS_NATIVE_MEMORY_REPORT");
             return value && value[0] == '1';

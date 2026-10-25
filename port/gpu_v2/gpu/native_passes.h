@@ -197,6 +197,12 @@ bool AscRecorded(const u32* ring);
 /// Command processor, at a learn request: which registers the lane assumed differently.
 void NoteDivergence(const Segment& segment, const u32* reg_array);
 void Report();
+/// Pool recording vs image destruction: a freed image's generation is bumped, then the views are
+/// destroyed only once every job that started before RecordingTicket() has finished (a job that
+/// checked the generation before the bump may still be writing the old view into a command
+/// buffer: NVIDIA's driver read the destroyed view, nvoglv64.dll+0xede28f / libnvidia-glcore).
+u64 RecordingTicket();
+void WaitRecordingBefore(u64 ticket);
 
 // Registers the lanes follow (graphics context, vertex/pixel shader, VGT user config).
 constexpr u32 TrackedFirst[3] = {0xA000, 0x2C00, 0xC240};

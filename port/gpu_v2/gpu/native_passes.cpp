@@ -1042,9 +1042,16 @@ void RecordCommandBuffer(Lane& l, const u32* begin, const u32* end, const std::v
     CloseSegment(l, CloseChunk);
 }
 
+// Jobs running now, by pool thread: the sequence number each started with (0: idle).
+constexpr u32 MaxPoolThreads = 64;
+std::atomic<u64> job_sequence{};
+std::array<std::atomic<u64>, MaxPoolThreads> running_jobs{};
+std::atomic<u32> pool_slots{};
+
 void PoolThread() {
     SetThreadDescription(GetCurrentThread(), L"ISS:NativePassesPool");
     auto lane = NewJobLane();
+    const u32 slot = pool_slots.fetch_add(1) % MaxPoolThreads;
     for (;;) {
         Job job;
         {
@@ -1053,7 +1060,11 @@ void PoolThread() {
             job = std::move(submit.jobs.front());
             submit.jobs.pop_front();
         }
+        // seq_cst: the job's image generation reads come after this store, and a free's ticket
+        // read after its bump sees it (see WaitRecordingBefore).
+        running_jobs[slot].store(job_sequence.fetch_add(1) + 1);
         RecordCommandBuffer(*lane, job.begin, job.end, job.start);
+        running_jobs[slot].store(0, std::memory_order_release);
         submit.jobs_done.fetch_add(1, std::memory_order_relaxed);
         if (job.work->job_done) job.work->job_done[job.index].store(1, std::memory_order_release);
         const bool last = job.work->jobs_left.fetch_sub(1, std::memory_order_acq_rel) == 1;
@@ -1064,6 +1075,22 @@ void PoolThread() {
     }
 }
 
+} // namespace
+
+u64 RecordingTicket() {
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    return job_sequence.load();
+}
+
+void WaitRecordingBefore(u64 ticket) {
+    for (auto& job : running_jobs) {
+        for (u64 started = job.load(std::memory_order_acquire); started != 0 && started <= ticket;
+             started = job.load(std::memory_order_acquire))
+            std::this_thread::yield();
+    }
+}
+
+namespace {
 u64 NowUs() {
     LARGE_INTEGER t, f;
     QueryPerformanceCounter(&t);

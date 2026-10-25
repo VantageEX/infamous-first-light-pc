@@ -501,6 +501,10 @@ public:
     /// Returns the amount of memory used.
     [[nodiscard]] u64 GetDeviceMemoryUsage() const;
 
+    /// iss: the driver's current budget (VK_EXT_memory_budget), lower when other programs hold
+    /// VRAM.
+    [[nodiscard]] u64 GetDeviceMemoryBudgetNow() const;
+
     /// Returns the total memory budget available to the device.
     [[nodiscard]] u64 GetTotalMemoryBudget() const {
         return total_memory_budget;

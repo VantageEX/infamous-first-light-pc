@@ -9,6 +9,7 @@
 #include "native_gbuffer.h"
 #include "native_passes.h"
 #include "pause_guard.h"
+#include "guest_heap_census.h"
 #include "repeat_census.h"
 namespace iss::native_gbuffer { int InstallCensus(std::uint64_t base); }
 #include "sparse_copy.h"
@@ -393,6 +394,7 @@ extern "C" void iss_gpu_install_image(uint64_t image_base){
     { const auto* c = reinterpret_cast<const unsigned char*>(host.image_base + 0x3f3eff);
       std::fprintf(stderr, "V2_EBOOT us_1_07=%d (renderer v2 sites target CUSA00223 US 1.07)\n", c[0] == 0x8b && c[1] == 0x40 && c[2] == 0x04 && c[3] == 0x49); }
     iss::pause_guard::Install(host.image_base);
+    iss::heap_census::Install(host.image_base);
     iss::native_passes::Install(host.image_base);
     if(const char *p=std::getenv("ISS_FEEDBACK_PAGE_READBACK");p&&p[0]=='1'){
         const unsigned char signature[]={0x8b,0x40,0x04,0x49,0x8b,0x8f,0xe8,0,0,0,0x89,0x41,0x08};

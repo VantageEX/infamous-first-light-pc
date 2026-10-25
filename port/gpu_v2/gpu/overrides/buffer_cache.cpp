@@ -83,6 +83,12 @@ namespace iss::asc_stats_api {void Print(){iss::asc_stats::Print();}}
 u64 g_iss_dcb_lo{}, g_iss_dcb_hi{};
 
 namespace VideoCore {
+namespace {
+// Why ranges became resident: 0 a buffer binding, 1 an image's source bytes, 2 a GPU write.
+thread_local int residency_reason = 0;
+std::atomic<u64> arena_reason_bytes[3]{};
+} // namespace
+
 
 namespace {
 // ISS_PARALLEL_UPLOAD_COPY (default on, =0 off): the guest copy of a large upload part split in
@@ -693,6 +699,23 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
         FindMemoryType(instance.GetMemoryProperties(), vk::MemoryPropertyFlagBits::eDeviceLocal,
                        reqs.memoryTypeBits)
             .value();
+    // iss: residency only grows: guest memory the GPU used stays in VRAM for good, and on 8 GB
+    // cards it filled what the collector could not free (6.2 of 6.4 GB, RX 6600, 2026-10-22).
+    // When VRAM is short, new ranges go to system memory instead, if the driver allows sparse
+    // binds there. ISS_ARENA_SPILL=0 off.
+    if (const char* p = std::getenv("ISS_ARENA_SPILL"); !p || p[0] != '0') {
+        const auto& props = instance.GetMemoryProperties();
+        for (u32 i = 0; i < props.memoryTypeCount; ++i) {
+            const auto flags = props.memoryTypes[i].propertyFlags;
+            if ((reqs.memoryTypeBits & (1u << i)) && !(flags & vk::MemoryPropertyFlagBits::eDeviceLocal)) {
+                arena_spill_type_index = i;
+                break;
+            }
+        }
+    }
+    std::fprintf(stderr, "ARENA_SPILL type=%d (arena type %u, allowed types 0x%x)\n",
+                 arena_spill_type_index == ~0u ? -1 : int(arena_spill_type_index),
+                 arena_memory_type_index, reqs.memoryTypeBits);
 
     const u64 bda_pagetable_size =
         (blocks_per_arena_page * NUM_ARENA_PAGES) * sizeof(vk::DeviceAddress);
@@ -2724,6 +2747,9 @@ std::pair<const Buffer*, u64> BufferCache::ObtainBuffer(VAddr device_addr, u32 s
             return ObtainUnified(device_addr, size, is_written, known_unwritten);
         }
     }
+    const int reason_before = residency_reason;
+    if (is_written && reason_before == 0) residency_reason = 2;
+    SCOPE_EXIT { residency_reason = reason_before; };
     ObtainTimer obtain_timer{device_addr, size, is_written,
                              ObtainCensusEnabled() && liverpool && liverpool->IsCurrentCpThread()};
     auto& stream_copies = ComputeScratchActive() ? compute_scratch.stream_copies
@@ -2979,6 +3005,8 @@ std::pair<const Buffer*, u64> BufferCache::SyncReadInPlace(VAddr device_addr, u3
 }
 
 std::pair<const Buffer*, u64> BufferCache::ObtainBufferForImage(VAddr device_addr, u32 size) {
+    residency_reason = 1;
+    SCOPE_EXIT { residency_reason = 0; };
     if (IsUnified(device_addr, size)) {
         // The GPU copies the image from the guest's bytes in place (in order with its writes).
         iss::unified::Add(iss::unified::ImageSources);
@@ -3142,6 +3170,23 @@ std::optional<BufferCache::AscArenaPreflight> BufferCache::PrepareArenaForAsc(
     if (mapping_before != MappingGeneration() || HasGpuData(device_addr, size))
         return std::nullopt;
     return AscArenaPreflight{Sched().CurrentTick(), mapping_before};
+}
+
+bool BufferCache::PrefaultArena(VAddr device_addr, u32 size) {
+    if (cp_split_enabled || compute_queue || size == 0 || device_addr == 0 ||
+        device_addr > std::numeric_limits<VAddr>::max() - size || !liverpool ||
+        !liverpool->IsCurrentCpThread())
+        return false;
+    const u64 first_block = device_addr >> block_shift;
+    const u64 last_block = (device_addr + size - 1) >> block_shift;
+    if ((first_block >> blocks_per_arena_page_shift) != (last_block >> blocks_per_arena_page_shift))
+        return false;
+    // A GPU producer's bytes need a readback first: left to the command processor's own path.
+    if (HasGpuData(device_addr, size)) return false;
+    const auto* arena = GetArena(first_block, last_block);
+    EnsureResident(arena, first_block, last_block);
+    SynchronizeMemory(arena, device_addr, size, false, false);
+    return true;
 }
 
 std::string BufferCache::DescribePages(VAddr device_addr, u32 size) {
@@ -3334,9 +3379,13 @@ struct ResidencyPool {
     bool refilling{};
     u64 chunks{}, sync_allocations{};
 };
-ResidencyPool residency_pool;
+// One pool per memory type: [0] VRAM, [1] system memory (ISS_ARENA_SPILL).
+ResidencyPool residency_pools[2];
+std::atomic<u64> arena_resident_bytes[2]{};
 
-std::pair<vk::DeviceMemory, u64> AllocateResidency(vk::Device device, u32 type_index, u64 size) {
+
+std::pair<vk::DeviceMemory, u64> AllocateResidency(vk::Device device, u32 type_index, u64 size,
+                                                   ResidencyPool& pool) {
     static const bool enabled = [] {
         const char* p = std::getenv("ISS_RESIDENCY_POOL");
         return !p || p[0] != '0';
@@ -3350,7 +3399,6 @@ std::pair<vk::DeviceMemory, u64> AllocateResidency(vk::Device device, u32 type_i
     if (!enabled || size > ResidencyPool::ChunkSize / 2) {
         return {allocate(size), 0};
     }
-    auto& pool = residency_pool;
     std::unique_lock lock{pool.mutex};
     if (!pool.chunk || pool.chunk_used + size > ResidencyPool::ChunkSize) {
         if (pool.spare) {
@@ -3361,15 +3409,15 @@ std::pair<vk::DeviceMemory, u64> AllocateResidency(vk::Device device, u32 type_i
         }
         pool.chunk_used = 0;
         ++pool.chunks;
-        std::fprintf(stderr, "RESIDENCY_POOL chunk=%llu synchronous=%llu\n",
+        std::fprintf(stderr, "RESIDENCY_POOL type=%u chunk=%llu synchronous=%llu\n", type_index,
                      (unsigned long long)pool.chunks, (unsigned long long)pool.sync_allocations);
         if (!pool.refilling) {
             pool.refilling = true;
-            std::thread([allocate] {
+            std::thread([allocate, &pool] {
                 const auto memory = allocate(ResidencyPool::ChunkSize);
-                std::scoped_lock refill_lock{residency_pool.mutex};
-                residency_pool.spare = memory;
-                residency_pool.refilling = false;
+                std::scoped_lock refill_lock{pool.mutex};
+                pool.spare = memory;
+                pool.refilling = false;
             }).detach();
         }
     }
@@ -3378,6 +3426,18 @@ std::pair<vk::DeviceMemory, u64> AllocateResidency(vk::Device device, u32 type_i
     return {pool.chunk, offset};
 }
 } // namespace
+
+u64 BufferCache::ArenaReasonBytes(int reason) const {
+    return arena_reason_bytes[reason].load(std::memory_order_relaxed);
+}
+
+u64 BufferCache::ArenaResidentBytes(bool spilled) const {
+    if (spilled) {
+        return arena_resident_bytes[1].load(std::memory_order_relaxed);
+    }
+    return arena_resident_bytes[0].load(std::memory_order_relaxed) +
+           arena_resident_bytes[1].load(std::memory_order_relaxed);
+}
 
 void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_block) {
     ASSERT_MSG(!cp_split_enabled || !liverpool || !liverpool->CpSplitActive() ||
@@ -3404,8 +3464,30 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
         return;
     }
 
+    const u64 new_bytes = u64(resident_blocks) << block_shift;
+    // Spill to system memory when this range would leave less than 1 GB of the driver's
+    // current budget (images, staging and the swapchain need it).
+    bool spill = false;
+    if (arena_spill_type_index != ~0u && instance.CanReportMemoryUsage()) {
+        const u64 budget = instance.GetDeviceMemoryBudgetNow();
+        spill = budget != 0 && instance.GetDeviceMemoryUsage() + new_bytes + (1ull << 30) > budget;
+    }
     const auto [device_memory, memory_base] = AllocateResidency(
-        instance.GetDevice(), arena_memory_type_index, resident_blocks << block_shift);
+        instance.GetDevice(), spill ? arena_spill_type_index : arena_memory_type_index, new_bytes,
+        residency_pools[spill ? 1 : 0]);
+    arena_resident_bytes[spill ? 1 : 0].fetch_add(new_bytes, std::memory_order_relaxed);
+    arena_reason_bytes[residency_reason].fetch_add(new_bytes, std::memory_order_relaxed);
+    // The large residency requests: which guest ranges fill the arena.
+    if (new_bytes >= (8ull << 20)) {
+        static std::atomic<u32> logged{};
+        if (logged.fetch_add(1, std::memory_order_relaxed) < 200)
+            std::fprintf(stderr, "ARENA_RESIDENT range=%llx-%llx new=%llu MB request=%llu MB reason=%d\n",
+                         (unsigned long long)(first_block << block_shift),
+                         (unsigned long long)((last_block + 1) << block_shift),
+                         (unsigned long long)(new_bytes >> 20),
+                         (unsigned long long)(((last_block - first_block + 1) << block_shift) >> 20),
+                         residency_reason);
+    }
 
     boost::container::small_vector<vk::BufferCopy, 8> copies;
     const auto staging =

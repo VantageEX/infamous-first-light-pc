@@ -22,12 +22,26 @@ struct Globals {
     const Instance* instance{};
     Scheduler* scheduler{};
     VideoCore::BufferCache* buffer_cache{};
+    VideoCore::TextureCache* texture_cache{};
     PipelineCache* pipeline_cache{}; ///< speculative compute translations (ISS_SPEC_COMPUTE)
     std::atomic<const VideoCore::Buffer*> unified{};
     std::atomic<VAddr> unified_base{};
     std::atomic<bool> ready{};
 };
 static Globals g;
+
+// Ranges the pool threads did not find resident in the arena: the command processor makes them
+// resident before its next segment (PrefaultArena), so the next frame's jobs find them.
+struct ArenaMisses {
+    std::mutex mutex;
+    std::vector<std::pair<VAddr, u32>> ranges;
+    std::unordered_set<VAddr> queued; ///< 64 KB granules already queued
+    std::atomic<bool> pending{};
+};
+static ArenaMisses& Misses() {
+    static ArenaMisses m;
+    return m;
+}
 
 // Keys the command processor gave up learning.
 struct Unlearnable {
@@ -587,7 +601,13 @@ struct Worker {
                 .allocationSize = requirements.size,
                 .memoryTypeIndex = type,
             });
-            if (result == vk::Result::eSuccess) memory = allocated;
+            if (result == vk::Result::eSuccess) {
+                memory = allocated;
+                static std::atomic<u32> rings{};
+                std::fprintf(stderr, "VRAM_RING native_passes worker=%u %llu MB vram=%d\n",
+                             rings.fetch_add(1) + 1, (unsigned long long)(requirements.size >> 20),
+                             int(type == types[0]));
+            }
         }
         if (!memory) return false;
         Check(device.bindBufferMemory(ring, memory, 0));
@@ -966,6 +986,12 @@ static np::DrawResult Record(np::Segment& s, void* regs_ptr, u64 key, const u32*
         if (t->pipeline != shape && !NativeRecorder::InstallViews(*t->pipeline, regs, views, num_views))
             return miss(MissViews);
     }
+    // The template's views as learned: an image freed since may have its views destroyed, and
+    // writing one into the command buffer crashed NVIDIA's driver. The command processor checks
+    // the rest (TexturesValid) before executing the segment.
+    for (const auto& cap : t->images) {
+        if (cap.id && !g.texture_cache->ImageAlive(cap.id, cap.uid)) return miss(MissViews);
+    }
     const auto* pipeline = t->pipeline;
     if (!pipeline->IsReady() || (!pipeline->UsesPushDescriptors() && !NativeMaterial::SetsEnabled()))
         return miss(MissPipeline);
@@ -1043,7 +1069,17 @@ static np::DrawResult Record(np::Segment& s, void* regs_ptr, u64 key, const u32*
         // Read first: an arena created or migrated after it changes the generation.
         const u64 arena_gen = cache.ArenaBindingGeneration();
         const auto arena = cache.PeekPublishedArena(address, u32(size));
-        if (!arena) return false;
+        if (!arena) {
+            if (size <= (16u << 20)) {
+                auto& m = Misses();
+                std::scoped_lock lock{m.mutex};
+                if (m.ranges.size() < 8192 && m.queued.insert(address >> 16).second) {
+                    m.ranges.emplace_back(address, u32(size));
+                    m.pending.store(true, std::memory_order_release);
+                }
+            }
+            return false;
+        }
         handle = arena.arena->Handle();
         offset = arena.offset;
         for (const auto& a : r.arena_reads)
@@ -1157,10 +1193,12 @@ static np::DrawResult Record(np::Segment& s, void* regs_ptr, u64 key, const u32*
         }
         vk::Buffer handle;
         u64 offset;
-        if (!resolve(sharp.base_address, sharp.GetSize(), handle, offset)) return fail(MissBuffer);
+        const u64 size =
+            VideoCore::ClampHugeRead(sharp.GetSize(), stage.buffers[slot.desc].is_written);
+        if (!resolve(sharp.base_address, size, handle, offset)) return fail(MissBuffer);
         const u64 aligned = Common::AlignDown(offset, alignment);
         push.buf_offsets[slot.binding] = u8(offset - aligned);
-        info = vk::DescriptorBufferInfo{handle, aligned, sharp.GetSize() + (offset - aligned)};
+        info = vk::DescriptorBufferInfo{handle, aligned, size + (offset - aligned)};
     }
     NativeMaterial::BuildWrites(*t, infos.data(), writes);
     if (pipeline->UsesPushDescriptors()) {
@@ -1324,7 +1362,7 @@ static bool IsUnlearnable(u64 key) {
 }
 
 struct CpStats {
-    u64 executed{}, draws{}, report{}, learned{}, learn_mismatch{}, learn_failed{}, relearn{},
+    u64 executed{}, draws{}, report{}, prefault_batches{}, learned{}, learn_mismatch{}, learn_failed{}, relearn{},
         inherited_merged{};
     std::array<u64, 13> reject{};
     // ISS_NATIVE_INDIRECT: segments starting at an indexed indirect draw.
@@ -1468,6 +1506,7 @@ void Rasterizer::NativePassesSetup() {
     g.instance = &instance;
     g.scheduler = &scheduler;
     g.buffer_cache = &buffer_cache;
+    g.texture_cache = &texture_cache;
     g.pipeline_cache = &pipeline_cache;
     Shader::Info::ud_snapshots_used.store(true, std::memory_order_relaxed);
     g.ready.store(true, std::memory_order_release);
@@ -1513,6 +1552,22 @@ bool Rasterizer::NativePassExecute(iss::native_passes::Segment& s,
         occlusion.HasOpen() || buffer_cache.HasComputeQueue() ||
         !instance.IsVertexInputDynamicState() || iss::hazard_probe::Enabled())
         return reject(RejectEnv);
+    if (auto& m = Misses(); m.pending.load(std::memory_order_acquire)) {
+        std::vector<std::pair<VAddr, u32>> ranges;
+        {
+            std::scoped_lock lock{m.mutex};
+            ranges.swap(m.ranges);
+            m.queued.clear();
+            m.pending.store(false, std::memory_order_relaxed);
+        }
+        static std::atomic<u64> prefaulted{}, refused{};
+        for (const auto& [address, size] : ranges)
+            (buffer_cache.PrefaultArena(address, size) ? prefaulted : refused)
+                .fetch_add(1, std::memory_order_relaxed);
+        if ((++c.prefault_batches & 255) == 1)
+            std::fprintf(stderr, "NATIVE_ARENA_PREFAULT ranges=%llu refused=%llu\n",
+                         (unsigned long long)prefaulted.load(), (unsigned long long)refused.load());
+    }
     auto* r = static_cast<Rec*>(s.recording);
     if (!r || r->templates.empty()) return reject(RejectPipeline);
     iss::cp_path::Switch(iss::cp_path::RecChain);

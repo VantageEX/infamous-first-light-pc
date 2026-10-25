@@ -49,6 +49,11 @@ class TextureCache {
     static constexpr s64 DEFAULT_PRESSURE_GC_MEMORY = 1_GB + 512_MB;
     static constexpr s64 DEFAULT_CRITICAL_GC_MEMORY = 3_GB;
     static constexpr s64 TARGET_GC_THRESHOLD = 8_GB;
+    /// iss: discrete cards up to this budget keep RESIDENCY_HEADROOM of VRAM out of the
+    /// collector's reach, for buffers (guest memory becomes resident in large ranges) and the
+    /// swapchain. 8 GB cards (RX 6600, RTX 5050/5060) reached 6.4 GB of a 6.4 GB budget.
+    static constexpr s64 SMALL_CARD_MEMORY = 12_GB;
+    static constexpr s64 RESIDENCY_HEADROOM = 1_GB + 512_MB;
 
     using ImageIds = boost::container::small_vector<ImageId, 16>;
 
@@ -177,6 +182,13 @@ public:
         return image_id.index < NumImageGens
                    ? image_gens[image_id.index].load(std::memory_order_acquire)
                    : 0;
+    }
+
+    /// iss: whether the image `uid` still lives in slot `image_id` (its views not yet destroyed).
+    /// Lock free: native passes pool threads check it before writing a template's views.
+    [[nodiscard]] bool ImageAlive(ImageId image_id, u64 uid) const noexcept {
+        return image_id.index < NumImageGens &&
+               image_uids[image_id.index].load(std::memory_order_acquire) == uid;
     }
 
     /// Garbage collector tick, one per guest frame (command processor thread).
@@ -521,6 +533,8 @@ private:
     }
 
     void GarbageCollectImages();
+    void RefreshGcLimits();
+    bool ImageBudgetMode() const;
     void GarbageCollectSamplers();
 
 private:
@@ -540,6 +554,22 @@ private:
     u64 trigger_gc_memory = 0;
     u64 pressure_gc_memory = 0;
     u64 critical_gc_memory = 0;
+    /// iss: the limits before RefreshGcLimits applies the forced budget and the headroom.
+    u64 base_trigger_gc_memory = 0;
+    u64 base_pressure_gc_memory = 0;
+    u64 base_critical_gc_memory = 0;
+    u64 card_budget_memory = 0;
+    /// ISS_GC_BUDGET_MB (the launcher's VRAM budget), 0 when unset.
+    u64 forced_gc_budget = 0;
+    /// ISS_GC_BUDGET_MB=auto: the texture budget follows the device (RefreshGcLimits).
+    bool auto_gc_budget = false;
+    /// The texture budget the automatic mode computed last (0 outside it).
+    u64 auto_budget_memory = 0;
+    /// iss: the device usage above which the collector runs critical whatever the image bytes
+    /// (image budget mode, see GarbageCollectImages).
+    u64 device_guard_memory = 0;
+    /// iss: bytes of the registered images (total_used_memory is the whole device's usage).
+    u64 image_bytes = 0;
     u64 total_used_samplers = 0;
     u64 trigger_gc_samplers = 0;
     u64 pressure_gc_samplers = 0;
@@ -566,6 +596,7 @@ private:
     }
     static constexpr u32 NumImageGens = 1 << 16;
     std::unique_ptr<std::atomic<u32>[]> image_gens{std::make_unique<std::atomic<u32>[]>(NumImageGens)};
+    std::unique_ptr<std::atomic<u64>[]> image_uids{std::make_unique<std::atomic<u64>[]>(NumImageGens)};
     void BumpImageGeneration(ImageId image_id) noexcept {
         if (image_id.index < NumImageGens) {
             image_gens[image_id.index].fetch_add(1, std::memory_order_release);
