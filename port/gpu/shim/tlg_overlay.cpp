@@ -3407,12 +3407,6 @@ std::atomic<s64> input_wheel_up{0}, input_wheel_down{0}; // steady clock ticks u
 std::atomic<float> input_motion_x{0.0f}, input_motion_y{0.0f}; // relative motion since the last frame
 float input_vel_x = 0.0f, input_vel_y = 0.0f; // present thread: the smoothed motion
 
-void AddFloat(std::atomic<float>& target, float value) {
-    float old = target.load(std::memory_order_relaxed);
-    while (!target.compare_exchange_weak(old, old + value, std::memory_order_relaxed)) {
-    }
-}
-
 void ClearInput() {
     for (auto& key : input_keys) key.store(false, std::memory_order_relaxed);
     input_buttons = 0;
@@ -4089,7 +4083,12 @@ bool HandleEvent(const SDL_Event& event) {
             return true;
         }
         // F9 shows or hides the input display (the keys and mouse buttons held), kept in tlg.ini.
-        if (down && !event.key.repeat && event.key.key == SDLK_F9) {
+        // Not with TLG_PAD_RECORD: there F9 starts and stops the route recording (runtime_pad.c).
+        static const bool pad_record = [] {
+            const char* path = std::getenv("TLG_PAD_RECORD");
+            return path && *path;
+        }();
+        if (down && !event.key.repeat && event.key.key == SDLK_F9 && !pad_record) {
             auto& settings = TlgSettings::Get();
             settings.input_display = !settings.input_display;
             if (is_open) {
