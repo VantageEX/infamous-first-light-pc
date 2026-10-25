@@ -4,11 +4,14 @@
 #include <chrono>
 #include <mutex>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 #include "video_core/renderer_vulkan/vk_instance.h"
 
 #ifndef _WIN32
+#include <cstdlib>
 #include <cstring>
+#include <dirent.h>
 #include <dlfcn.h>
 #include <sys/sysinfo.h>
 #include <unistd.h>
@@ -18,6 +21,7 @@
 #include <pdh.h>
 #include <pdhmsg.h>
 #include <psapi.h>
+#include <tlhelp32.h>
 #endif
 
 namespace TlgPerfStats {
@@ -27,6 +31,34 @@ namespace {
 std::mutex mutex;
 Sample latest;
 std::once_flag started;
+
+// The fault and pipeline rates since the last sample, `seconds` ago.
+void CountRates(Sample& s, double seconds) {
+    static uint64_t last_faults = 0, last_pipelines = 0;
+    static bool counted = false;
+    const uint64_t faults = fault_count.load(std::memory_order_relaxed);
+    const uint64_t pipelines = pipeline_count.load(std::memory_order_relaxed);
+    if (counted && seconds > 0.0) {
+        s.faults_per_second = float(double(faults - last_faults) / seconds);
+        s.pipelines_per_second = float(double(pipelines - last_pipelines) / seconds);
+    }
+    s.pipelines = pipelines;
+    last_faults = faults;
+    last_pipelines = pipelines;
+    counted = true;
+}
+
+// The busiest of `rows` (at least 1% of a core), at most four, without the "shadPS4:" prefix.
+std::vector<ThreadLoad> Busiest(std::vector<ThreadLoad> rows) {
+    std::sort(rows.begin(), rows.end(), [](const ThreadLoad& a, const ThreadLoad& b) { return a.percent > b.percent; });
+    std::vector<ThreadLoad> out;
+    for (ThreadLoad& row : rows) {
+        if (out.size() == 4 || row.percent < 1.0f) break;
+        if (row.name.rfind("shadPS4:", 0) == 0) row.name.erase(0, 8);
+        out.push_back(std::move(row));
+    }
+    return out;
+}
 
 #ifdef _WIN32
 uint64_t Ticks(const FILETIME& time) {
@@ -85,8 +117,62 @@ private:
     std::vector<unsigned char> buffer;
 };
 
+// Each thread's kernel and user time since the last call (a system thread snapshot), named by its
+// description (SetThreadDescription, pthread_setname_np) or its id.
+class ThreadTimes {
+public:
+    std::vector<ThreadLoad> Loads(uint64_t wall_delta) {
+        std::vector<ThreadLoad> rows;
+        HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+        if (snapshot == INVALID_HANDLE_VALUE) return rows;
+        std::unordered_map<DWORD, uint64_t> now;
+        THREADENTRY32 entry{.dwSize = sizeof(entry)};
+        const DWORD process = GetCurrentProcessId();
+        for (BOOL ok = Thread32First(snapshot, &entry); ok; ok = Thread32Next(snapshot, &entry)) {
+            if (entry.th32OwnerProcessID != process) continue;
+            HANDLE thread = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, entry.th32ThreadID);
+            if (!thread) continue;
+            FILETIME created, ended, kernel, user;
+            if (GetThreadTimes(thread, &created, &ended, &kernel, &user)) {
+                const uint64_t total = Ticks(kernel) + Ticks(user);
+                now[entry.th32ThreadID] = total;
+                const auto before = last.find(entry.th32ThreadID);
+                if (before != last.end() && wall_delta) {
+                    rows.push_back({Name(thread, entry.th32ThreadID),
+                                    float(double(total - before->second) * 100.0 / double(wall_delta))});
+                }
+            }
+            CloseHandle(thread);
+        }
+        CloseHandle(snapshot);
+        last = std::move(now);
+        return rows;
+    }
+
+private:
+    static std::string Name(HANDLE thread, DWORD id) {
+        using GetDescription = HRESULT(WINAPI*)(HANDLE, PWSTR*);
+        static const auto get_description = reinterpret_cast<GetDescription>(
+            reinterpret_cast<void (*)()>(GetProcAddress(GetModuleHandleA("kernel32.dll"), "GetThreadDescription")));
+        PWSTR wide = nullptr;
+        std::string name;
+        if (get_description && SUCCEEDED(get_description(thread, &wide)) && wide) {
+            const int n = WideCharToMultiByte(CP_UTF8, 0, wide, -1, nullptr, 0, nullptr, nullptr);
+            if (n > 1) {
+                name.resize(size_t(n - 1));
+                WideCharToMultiByte(CP_UTF8, 0, wide, -1, name.data(), n, nullptr, nullptr);
+            }
+            LocalFree(wide);
+        }
+        return name.empty() ? "tid " + std::to_string(id) : name;
+    }
+
+    std::unordered_map<DWORD, uint64_t> last;
+};
+
 void Run(const Vulkan::Instance* instance) {
     GpuUsage gpu;
+    ThreadTimes threads;
     FILETIME created, ended, kernel, user, now;
     uint64_t last_process = 0, last_wall = 0;
     const unsigned cores = std::max(1u, std::thread::hardware_concurrency());
@@ -99,6 +185,8 @@ void Run(const Vulkan::Instance* instance) {
             const uint64_t process = Ticks(kernel) + Ticks(user), wall = Ticks(now);
             if (last_wall) {
                 s.cpu_percent = CpuPercent(process - last_process, wall - last_wall, cores);
+                CountRates(s, double(wall - last_wall) / 1e7);
+                if (want_threads.load(std::memory_order_relaxed)) s.threads = Busiest(threads.Loads(wall - last_wall));
             }
             last_process = process;
             last_wall = wall;
@@ -181,8 +269,50 @@ uint64_t ProcessTicks() { // utime + stime in clock ticks
     return utime + stime;
 }
 
+// Each thread's utime + stime since the last call (/proc/self/task), named by its comm.
+class ThreadTimes {
+public:
+    std::vector<ThreadLoad> Loads(uint64_t wall_ticks) {
+        std::vector<ThreadLoad> rows;
+        DIR* dir = opendir("/proc/self/task");
+        if (!dir) return rows;
+        std::unordered_map<long, uint64_t> now;
+        while (const dirent* e = readdir(dir)) {
+            if (e->d_name[0] < '0' || e->d_name[0] > '9') continue;
+            const long tid = std::atol(e->d_name);
+            char path[64], buffer[512];
+            std::snprintf(path, sizeof(path), "/proc/self/task/%ld/stat", tid);
+            std::FILE* f = std::fopen(path, "r");
+            if (!f) continue;
+            const size_t n = std::fread(buffer, 1, sizeof(buffer) - 1, f);
+            std::fclose(f);
+            buffer[n] = 0;
+            const char* open = std::strchr(buffer, '(');
+            const char* close = std::strrchr(buffer, ')');
+            unsigned long long utime = 0, stime = 0;
+            if (!open || !close || close < open ||
+                std::sscanf(close + 2, "%*c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %llu %llu", &utime, &stime) != 2)
+                continue;
+            const uint64_t total = utime + stime;
+            now[tid] = total;
+            const auto before = last.find(tid);
+            if (before != last.end() && wall_ticks) {
+                rows.push_back({std::string(open + 1, close),
+                                float(double(total - before->second) * 100.0 / double(wall_ticks))});
+            }
+        }
+        closedir(dir);
+        last = std::move(now);
+        return rows;
+    }
+
+private:
+    std::unordered_map<long, uint64_t> last;
+};
+
 void Run(const Vulkan::Instance* instance) {
     GpuUsage gpu;
+    ThreadTimes threads;
     const unsigned cores = std::max(1u, std::thread::hardware_concurrency());
     const long hz = sysconf(_SC_CLK_TCK), page = sysconf(_SC_PAGESIZE);
     constexpr double GiB = 1024.0 * 1024.0 * 1024.0;
@@ -194,8 +324,11 @@ void Run(const Vulkan::Instance* instance) {
         const uint64_t process = ProcessTicks();
         const auto wall = std::chrono::steady_clock::now();
         if (last_process && hz > 0) {
-            const uint64_t wall_ticks = uint64_t(std::chrono::duration<double>(wall - last_wall).count() * double(hz));
+            const double seconds = std::chrono::duration<double>(wall - last_wall).count();
+            const uint64_t wall_ticks = uint64_t(seconds * double(hz));
             s.cpu_percent = CpuPercent(process - last_process, wall_ticks, cores);
+            CountRates(s, seconds);
+            if (want_threads.load(std::memory_order_relaxed)) s.threads = Busiest(threads.Loads(wall_ticks));
         }
         last_process = process;
         last_wall = wall;

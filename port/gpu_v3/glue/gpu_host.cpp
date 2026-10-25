@@ -41,6 +41,7 @@
 #include "tlg_settings.h"
 #include "v3_glue.h"
 #include "v3_stutter.h"
+#include "tlg_perf_stats.h"
 
 extern "C" {
 // runtime_memory.c
@@ -294,7 +295,9 @@ extern "C" int tlggpu_handle_fault(void* ucontext, void* address) {
         std::scoped_lock lock{g_histogram_mutex};
         ++g_histogram[reinterpret_cast<uintptr_t>(address) >> 20];
     }
-    return Core::Signals::Instance()->DispatchAccessViolation(ucontext, address) ? 1 : 0;
+    if (!Core::Signals::Instance()->DispatchAccessViolation(ucontext, address)) return 0;
+    TlgPerfStats::CountFault();
+    return 1;
 }
 
 // The runtime's large host writes into guest memory (file reads, the game's memcpy/memset): the

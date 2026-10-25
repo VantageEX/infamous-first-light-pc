@@ -20,6 +20,7 @@
 #include "tlg_overlay.h"
 #include "tlg_png.h"
 #include "tlg_settings.h"
+#include "tlg_perf_stats.h"
 
 extern "C" {
 // runtime_memory.c
@@ -129,7 +130,9 @@ extern "C" uintptr_t tlggpu_resolve(const char* scoped_nid) {
 }
 
 extern "C" int tlggpu_handle_fault(void* ucontext, void* address) {
-    return iss_gpu_fault(ucontext, address) ? 1 : 0;
+    if (!iss_gpu_fault(ucontext, address)) return 0;
+    TlgPerfStats::CountFault();
+    return 1;
 }
 
 extern "C" int tlggpu_cpu_write(void*, const void*, int, uint64_t) {

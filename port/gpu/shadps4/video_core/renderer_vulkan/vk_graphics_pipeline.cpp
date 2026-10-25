@@ -23,6 +23,7 @@
 #include "video_core/cache_storage.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"
+#include "tlg_perf_stats.h"
 
 namespace Vulkan {
 
@@ -146,6 +147,7 @@ GraphicsPipeline::GraphicsPipeline(
     const GraphicsBuilder* builder)
     : Pipeline{instance, scheduler, desc_heap, profile, pipeline_cache}, key{key_},
       fetch_shader{std::move(fetch_shader_)} {
+    TlgPerfStats::CountPipeline(); // tlg: the overlay's pipeline rate
     const auto started = Clock::now();
     const vk::Device device = instance.GetDevice();
     std::ranges::copy(infos, stages.begin());

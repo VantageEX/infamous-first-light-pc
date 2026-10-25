@@ -398,6 +398,7 @@ extern "C" int tlggpu_handle_fault(void* ucontext, void* address) {
     }
     TlgFreeze::faults_in_progress.fetch_sub(1, std::memory_order_relaxed);
     TlgFreeze::faults_handled.fetch_add(handled, std::memory_order_relaxed);
+    if (handled) TlgPerfStats::CountFault();
     return handled;
 }
 

@@ -16,6 +16,7 @@
 #include "video_core/renderer_vulkan/vk_pipeline_compile_pool.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"
+#include "tlg_perf_stats.h"
 
 namespace Vulkan {
 
@@ -50,6 +51,7 @@ ComputePipeline::ComputePipeline(const Instance& instance, Scheduler& scheduler,
                                  SerializationSupport& sdata, bool preloading /*=false*/)
     : Pipeline{instance, scheduler, desc_heap, profile, pipeline_cache, true},
       compute_key{compute_key_} {
+    TlgPerfStats::CountPipeline(); // tlg: the overlay's pipeline rate
     auto& info = stages[int(Shader::LogicalStage::Compute)];
     info = &info_;
     const auto debug_str = GetDebugString();

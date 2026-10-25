@@ -2787,6 +2787,18 @@ ImVec2 TelemetryStyle(const SavePainter& p, const OverlayData& d) {
         cells.push_back({"P99", Num(d.stats.p99_ms, 1), FrameColor(d.stats.p99_ms, d.budget_ms)});
         y += GridCells(p, pad, y, inner, 3, cells) + gap;
     }
+    // The busiest threads (with the CPU item), in percent of one core.
+    if ((d.items & P::Cpu) && !d.sample.threads.empty()) {
+        p.Text(pad, y, 11.0f, Theme::Muted, TL("threads, % of a core", "потоки, % ядра"));
+        y += 15;
+        for (const P::ThreadLoad& t : d.sample.threads) {
+            p.Text(pad, y, 13.0f, Theme::Muted, p.Fit(13.0f, t.name, 150.0f));
+            Track(p, pad + 156, y + 7, W - pad - 50, 4, t.percent / 100.0f);
+            p.TextRight(W - pad, y, 14.0f, Theme::Text, Num(t.percent) + "%");
+            y += 20;
+        }
+        y += gap - 2;
+    }
     const std::vector<MeterItem> meters = Meters(d);
     for (const MeterItem& m : meters) {
         p.Text(pad, y, 13.0f, Theme::Muted, m.label);
@@ -2795,6 +2807,17 @@ ImVec2 TelemetryStyle(const SavePainter& p, const OverlayData& d) {
         y += 20;
     }
     if (!meters.empty()) y += gap - 2;
+    // What the renderer does: GPU memory tracking faults and pipelines made, per second.
+    {
+        const auto rate = [](float value) { return value < 0.0f ? std::string("n/a") : Num(value); };
+        float x = pad;
+        x += Pair(p, x, y, 13.0f, TL("memory faults/s", "ошибок памяти/с"), rate(d.sample.faults_per_second),
+                  Theme::Text) + 14;
+        x += Pair(p, x, y, 13.0f, TL("pipelines/s", "конвейеров/с"), rate(d.sample.pipelines_per_second),
+                  d.sample.pipelines_per_second > 0.5f ? Theme::Warn : Theme::Text) + 6;
+        p.Text(x, y, 13.0f, Theme::Muted, "(" + std::to_string(d.sample.pipelines) + ")");
+        y += 17 + gap;
+    }
     std::vector<Chip> chips = InfoChips(d, true);
     chips.push_back({TL("queue ", "очередь ") + std::to_string(s.frames_queued.load()), false});
     y += Chips(p, pad, y, inner, chips) + gap;
@@ -3728,6 +3751,15 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
     }
     if (menu_open) {
         Menu();
+    }
+    {
+        // The overlay asks the sampler for the busiest threads only while the telemetry style
+        // shows them (in the game or in the menu's preview).
+        const auto& settings = TlgSettings::Get();
+        TlgPerfStats::want_threads.store((settings.show_fps || menu_open) &&
+                                             settings.overlay_style == TlgSettings::OverlayTelemetry &&
+                                             (settings.overlay_items & TlgPerfStats::Cpu),
+                                         std::memory_order_relaxed);
     }
     if (TlgSettings::Get().show_fps && !menu_open) {
         FpsCounter();

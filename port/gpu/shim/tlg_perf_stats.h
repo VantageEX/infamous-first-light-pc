@@ -6,9 +6,11 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 namespace Vulkan {
 class Instance;
@@ -32,13 +34,33 @@ inline constexpr unsigned NumItems = 8;
 // tlg: the game renders natively (no upscaler), so the defaults show GPU load and VRAM instead.
 inline constexpr unsigned DefaultItems = Fps | FrameTime | Gpu | Vram | Graph;
 
+/// A thread's CPU use over the last sample, in percent of one core.
+struct ThreadLoad {
+    std::string name;
+    float percent = 0.0f;
+};
+
 struct Sample {
     float fps = 0.0f, frame_ms = 0.0f;
     std::string upscaler;
     std::string gpu_name;
     float gpu_percent = -1.0f, cpu_percent = -1.0f;
     double ram_used_gb = -1.0, ram_total_gb = -1.0, vram_used_gb = -1.0, vram_total_gb = -1.0;
+    /// The busiest threads, the busiest first (only while WantThreads is set).
+    std::vector<ThreadLoad> threads;
+    /// GPU memory tracking faults and pipelines made per second; -1 before the second sample.
+    float faults_per_second = -1.0f, pipelines_per_second = -1.0f;
+    uint64_t pipelines = 0; ///< pipelines made since the start
 };
+
+/// Counters the renderers bump: a guest memory fault the GPU's page tracking handled
+/// (tlggpu_handle_fault), a graphics or compute pipeline made (from the driver's cache or compiled).
+inline std::atomic<uint64_t> fault_count{0}, pipeline_count{0};
+inline void CountFault() { fault_count.fetch_add(1, std::memory_order_relaxed); }
+inline void CountPipeline() { pipeline_count.fetch_add(1, std::memory_order_relaxed); }
+/// Set by the overlay while it shows the threads (the telemetry style): enumerating them costs
+/// a system-wide thread snapshot on Windows.
+inline std::atomic<bool> want_threads{false};
 
 /// Process CPU time over wall time on every core, 0 to 100; -1 without a wall interval.
 inline float CpuPercent(uint64_t process_delta, uint64_t wall_delta, unsigned cores) {
