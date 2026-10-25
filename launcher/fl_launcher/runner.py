@@ -45,12 +45,16 @@ class GameRunner(QObject):
         super().__init__(parent)
         self.process = None
         self.log_file = None
+        self.log_path = None
+        self._start_time = 0.0
+        self._file_partial = ''
 
     @property
     def running(self):
         return self.process is not None and self.process.state() != QProcess.NotRunning
 
-    def start(self, game_dir, data_dir, language_id, extra_env=None, ui_language='en'):
+    def start(self, game_dir, data_dir, language_id, extra_env=None, ui_language='en', header=''):
+        """Runs the game; `header` (the system and the settings) opens its log."""
         if self.running:
             return
         data_dir = Path(data_dir)
@@ -58,7 +62,12 @@ class GameRunner(QObject):
         logs.mkdir(parents=True, exist_ok=True)
         for old in sorted(logs.glob('run-*.log'))[:-KEEP_LOGS]:
             old.unlink(missing_ok=True)
-        self.log_file = open(logs / time.strftime('run-%Y%m%d-%H%M%S.log'), 'w', encoding='utf-8')
+        self.log_path = logs / time.strftime('run-%Y%m%d-%H%M%S.log')
+        self.log_file = open(self.log_path, 'w', encoding='utf-8')
+        self._start_time = time.monotonic()
+        self._file_partial = ''
+        if header:
+            self.log_file.write(header.rstrip('\n') + '\n\n')
 
         env = QProcessEnvironment.systemEnvironment()
         env.insert('TLG_GAME_DIR', str(game_dir))
@@ -113,7 +122,12 @@ class GameRunner(QObject):
         # of them, so the decoder and the unfinished line carry over to the next chunk.
         text = self._decoder.decode(bytes(self.process.readAllStandardOutput()), final)
         if self.log_file:
-            self.log_file.write(text)
+            # Each line with the seconds since the start ("[   12.345] "): when a load, a
+            # stutter or a hang happened. The line is written once it is complete.
+            lines = (self._file_partial + text).split('\n')
+            self._file_partial = '' if final else lines.pop()
+            stamp = f'[{time.monotonic() - self._start_time:9.3f}] '
+            self.log_file.write(''.join(stamp + line.rstrip('\r') + '\n' for line in lines if line or not final))
             self.log_file.flush()
         rows = (self._partial + text).split('\n')
         self._partial = rows.pop()
@@ -129,6 +143,15 @@ class GameRunner(QObject):
             self.log_file.close()
             self.log_file = None
         self.finished.emit(code)
+
+    def append_log(self, text):
+        """Adds the launcher's own lines (the exit, the crash stack's names) to the last log."""
+        if self.log_path:
+            try:
+                with open(self.log_path, 'a', encoding='utf-8') as f:
+                    f.write(text.rstrip('\n') + '\n')
+            except OSError:
+                pass
 
     def log_folder(self, data_dir):
         return Path(data_dir) / 'logs'

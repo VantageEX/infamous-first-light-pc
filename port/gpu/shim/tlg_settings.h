@@ -68,7 +68,7 @@ struct Values {
     /// (OverlayStyle). menu_tab: the menu's last tab.
     std::atomic<unsigned> overlay_items{TlgPerfStats::DefaultItems};
     std::atomic<int> overlay_scale{100}, overlay_corner{1}, overlay_opacity{50}, overlay_layout{0};
-    std::atomic<int> overlay_style{1}, overlay_offset_x{40}, overlay_offset_y{36};
+    std::atomic<int> overlay_style{OverlayHistogram}, overlay_offset_x{40}, overlay_offset_y{36};
     std::atomic<int> menu_tab{0};
     std::atomic<float> red_orb_multiplier{1.0f};
     std::atomic<bool> red_orbs_supported{false};

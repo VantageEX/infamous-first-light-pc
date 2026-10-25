@@ -46,6 +46,8 @@ An unofficial native Windows port of **inFAMOUS First Light** (PS4). The game's 
 
 From v0.3.2 the launcher checks for a new release when it starts and installs it with one click; your saves and settings stay.
 
+**Steam, Playnite, a shortcut:** `"inFAMOUS First Light.exe" --play` starts the game straight away with the launcher's settings, without its window (in Steam: add a non-Steam game, then Properties → Launch options: `--play`). If the game fails, the launcher opens on its log.
+
 Requirements: Windows 10/11 64-bit, a Vulkan 1.3 GPU, a CPU with AVX (Intel CPUs work: the AMD-only instructions the game uses are emulated).
 
 **Dumping your game:** on your own PS4 with GoldHEN, dump the game (and its update, if any) with a homebrew dumper such as Itemzflow, and copy the folder to the PC.
@@ -133,6 +135,8 @@ Where Windows' Segoe UI is missing (Linux, the Steam Deck) the launcher and the 
 3. Нажмите **«Играть»**. F10 показывает оверлей производительности, Insert (или R3 + L2) открывает меню в игре.
 
 Начиная с v0.3.2 лаунчер при запуске проверяет новые релизы и ставит их в один клик; сохранения и настройки остаются.
+
+**Steam, Playnite, ярлык:** `"inFAMOUS First Light.exe" --play` сразу запускает игру с настройками лаунчера, без его окна (в Steam: «Добавить стороннюю игру», затем Свойства → Параметры запуска: `--play`). Если игра завершится с ошибкой, откроется лаунчер с журналом.
 
 Нужно: Windows 10/11 64-бит, видеокарта с Vulkan 1.3, процессор с AVX (процессоры Intel тоже подходят: инструкции AMD, которые использует игра, эмулируются).
 

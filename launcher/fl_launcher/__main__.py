@@ -50,11 +50,14 @@ if len(sys.argv) > 1 and sys.argv[1] == '--run':
     sys.exit(run_script())
 
 try:
-    from .app import main, selftest
+    from .app import main, play, selftest
 except ImportError:   # started as a plain script (the PyInstaller entry point)
-    from fl_launcher.app import main, selftest
+    from fl_launcher.app import main, play, selftest
 
 if len(sys.argv) > 1 and sys.argv[1] == '--selftest':
     # The package check (CI): the interface loads with every QML file, font and asset it needs.
     sys.exit(selftest())
+if len(sys.argv) > 1 and sys.argv[1] == '--play':
+    # Straight into the game, no launcher window (shortcuts, Steam, Playnite).
+    sys.exit(play())
 sys.exit(main())

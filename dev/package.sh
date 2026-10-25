@@ -115,6 +115,11 @@ fi
 if find "$dest" -iname 'eboot.bin' -o -iname '*.sfo' -o -iname 'param.sfo' | grep -q .; then
     echo 'A game file ended up in the package' >&2; exit 1
 fi
+# The cores with their debug info, kept here (not shipped): a player's crash stack
+# ("tlg-probe-v3.exe+0x...") is named exactly with llvm-symbolizer --obj=<this exe> 0x140000000+<offset>.
+symbols="dist/symbols/${release:-$(git rev-parse --short HEAD)}"
+mkdir -p "$symbols"
+cp port/out/tlg-probe*.exe "$symbols/"
 rm -f "dist/$name.zip"
 (cd dist && powershell -NoProfile -Command "Compress-Archive -Path '$name' -DestinationPath '$name.zip'")
 du -sh "$dest" "dist/$name.zip"

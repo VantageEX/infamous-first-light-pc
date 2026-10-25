@@ -85,7 +85,7 @@ int main() {
     }
     TlgSettings::Load();
     assert(v.overlay_corner == 1 && v.menu_tab == 0 && v.overlay_scale == 50);
-    assert(v.overlay_style == TlgSettings::OverlayCompact);
+    assert(v.overlay_style == TlgSettings::OverlayHistogram);
     std::remove(path);
     std::puts("PASS: performance overlay");
 }

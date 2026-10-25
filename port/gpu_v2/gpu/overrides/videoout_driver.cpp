@@ -10,6 +10,8 @@
 #include "runtime_timeline.h"
 #include "core/debug_state.h"
 #include "core/emulator_settings.h"
+#include "tlg_graphics.h"
+#include "tlg_settings.h"
 #include "core/libraries/kernel/time.h"
 #include "core/libraries/videoout/driver.h"
 #include "core/libraries/videoout/videoout_error.h"
@@ -455,19 +457,35 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
         const char* value = std::getenv("ISS_FLIP_RATE");
         return value && *value ? std::atoi(value) : -1;
     }();
-    // BB_FPS_LIMIT=n (launcher "FPS limit", 0 = off): a flip is taken only once 1/n s passed since
-    // the last one (half a vblank of tolerance, so jitter does not cost a whole tick); the guest
-    // waits for its queued flip, which paces the game itself.
-    const u32 frame_limit = EmulatorSettings.GetFrameLimit();
-    const auto min_flip_interval =
-        frame_limit ? std::chrono::nanoseconds(1000000000 / frame_limit) - vblank_period / 2
-                    : std::chrono::nanoseconds(0);
-    if (frame_limit) std::fprintf(stderr, "VIDEOOUT fps_limit=%u\n", frame_limit);
+    // The frame rate limit (0 = off): a flip is taken only once 1/n s passed since the last one
+    // (half a vblank of tolerance, so jitter does not cost a whole tick); the guest waits for its
+    // queued flip, which paces the game itself. tlg: the launcher's and the in-game menu's limit
+    // (TlgSettings::fps_limit, changed live), as renderer v1 has it; BB_FPS_LIMIT keeps a fixed one.
+    // This renderer only read BB_FPS_LIMIT, which the launcher never sets: the "60" limit did
+    // nothing and the game ran at the engine's 120 (issue #9).
+    const bool fixed_limit = std::getenv("BB_FPS_LIMIT") != nullptr;
+    const auto current_limit = [&] {
+        const auto& s = TlgSettings::Get();
+        return fixed_limit ? EmulatorSettings.GetFrameLimit()
+                           : u32(TlgGraphics::PresentLimit(s.fps_limit, s.applied_engine_fps));
+    };
+    const auto flip_interval = [&](u32 limit) {
+        return limit ? std::chrono::nanoseconds(1000000000 / limit) - vblank_period / 2
+                     : std::chrono::nanoseconds(0);
+    };
+    u32 frame_limit = current_limit();
+    auto min_flip_interval = flip_interval(frame_limit);
+    std::fprintf(stderr, "VIDEOOUT fps_limit=%u\n", frame_limit);
     auto last_flip = std::chrono::steady_clock::time_point{};
     s32 seen_flip_rate = -1;
     bool was_paused = false;
     while (!token.stop_requested()) {
         timer.Start();
+        if (const u32 limit = current_limit(); limit != frame_limit) {
+            frame_limit = limit;
+            min_flip_interval = flip_interval(limit);
+            std::fprintf(stderr, "VIDEOOUT fps_limit=%u\n", frame_limit);
+        }
         if (main_port.flip_rate != seen_flip_rate) {
             seen_flip_rate = main_port.flip_rate;
             std::fprintf(stderr, "VIDEOOUT flip_rate=%d (guest) forced=%d\n", seen_flip_rate,

@@ -5,7 +5,7 @@ from pathlib import Path
 from PySide6.QtCore import Property, QLocale, QObject, QUrl, Signal, Slot
 from PySide6.QtGui import QTextCursor
 
-from . import game, report, saves, trophies
+from . import game, report, saves, symbols, trophies
 from .i18n import STRINGS, UI_LANGUAGES, Texts
 from .runner import GameRunner, open_folder, system_language_key
 from .settings import (CORE_DEFAULTS, DISPLAY_MODES, FPS_LIMITS, INI_SWITCHES, PORT, RENDER_RESOLUTIONS, TEST_BUILD, VERSION_FILE,
@@ -18,6 +18,28 @@ CORE_SWITCHES = ('vsync', 'fsr1', 'rcas', 'show_fps', 'async_shaders')
 
 def _url(path):
     return QUrl.fromLocalFile(str(path)).toString() if path else ''
+
+
+# What an exit code says: Windows exception codes (the process died of one) and the C runtime's.
+EXIT_MEANINGS = {
+    3: 'abort: a failed check or an unhandled C++ exception',
+    0xC0000005: 'access violation (STATUS_ACCESS_VIOLATION)',
+    0xC000001D: 'illegal instruction: the CPU lacks one the game uses',
+    0xC00000FD: 'stack overflow',
+    0xC0000374: 'heap corruption',
+    0xC0000409: 'fail-fast: a security check or abort (STATUS_STACK_BUFFER_OVERRUN)',
+    0xC000013A: 'closed with Ctrl+C or the console window',
+    0x80000003: 'breakpoint: a failed assert',
+    0xE06D7363: 'unhandled C++ exception',
+}
+
+
+def exit_meaning(code):
+    """'(...)' explaining a non-zero exit code, '' for 0 or an unknown one."""
+    meaning = EXIT_MEANINGS.get(code & 0xFFFFFFFF) if code else None
+    if not meaning and code and code & 0xFFFFFFFF >= 0x80000000:
+        meaning = f'Windows exception 0x{code & 0xFFFFFFFF:08X}'
+    return f'({meaning})' if meaning else ''
 
 
 class Launcher(QObject):
@@ -332,14 +354,33 @@ class Launcher(QObject):
         self._log_line(self.t('starting'))
         for key, value in extra.items():
             self._log_line(f'{key}={value}')
+        version = VERSION_FILE.read_text(encoding='utf-8').strip() if VERSION_FILE.is_file() else ''
+        user_env = parse_env(self.settings.launcher['extra_env']) if self._advanced else {}
+        header = report.session_header(version, self.info, self.settings.core, self.renderer, user_env)
         self.runner.start(self.info.folder, self.settings.folder, self._language_id(), extra,
-                          ui_language=self.t.language)
+                          ui_language=self.t.language, header=header)
         self._set_status(self.t('running') if self.runner.running else '')
         self.runningChanged.emit()
 
     def _game_finished(self, code):
         message = self.t('exited', code=code)
+        meaning = exit_meaning(code)
+        if meaning:
+            message += f' {meaning}'
         self._log_line(message)
+        self.runner.append_log(f'Launcher: {message}')
+        if code:
+            # The crash stack's frames with function names (symbols.py), in the log and the view.
+            try:
+                names = symbols.symbolize(self.runner.log_path.read_text(encoding='utf-8', errors='replace'),
+                                          PORT / 'out')
+            except (OSError, AttributeError):
+                names = ''
+            if names:
+                block = 'Crash stack with names (the nearest exported function):\n' + names
+                self.runner.append_log(block)
+                for line in block.splitlines():
+                    self._log_line(line)
         self._set_status(message)
         self.runningChanged.emit()
         self.savesChanged.emit()

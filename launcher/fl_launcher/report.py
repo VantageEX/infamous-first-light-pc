@@ -12,7 +12,7 @@ from pathlib import Path
 from .settings import REPO
 
 RUN_LOGS = 3
-GPU_LINE = re.compile(r'^(GPU \d+:|GPU: using)')
+GPU_LINE = re.compile(r'^(?:\[\s*[\d.]+\] )?(GPU \d+:|GPU: using)')
 
 
 def _windows():
@@ -115,6 +115,22 @@ def system_text(logs):
                 gpu.append(line.rstrip())
     lines += gpu or ['GPU: (no GPU lines in the newest run log)']
     return '\n'.join(lines) + '\n'
+
+
+def session_header(version, game, core, renderer, user_env):
+    """The first lines of a run log: the launcher's version, the system, the game and the
+    settings the run uses, so a log alone tells what ran where."""
+    ram = _ram_gb()
+    system = _windows() if os.name == 'nt' else _linux()
+    lines = [f"=== inFAMOUS First Light PC {version or '(no version)'} · {time.strftime('%Y-%m-%d %H:%M:%S')} ===",
+             f'System: {system}',
+             f'CPU: {_cpu()} · {os.cpu_count() or "?"} logical processors · RAM {ram:.1f} GB' if ram
+             else f'CPU: {_cpu()} · {os.cpu_count() or "?"} logical processors',
+             f'Game: {game.title_id} {game.version}' if game else 'Game: (none)',
+             f'Renderer: {renderer} · settings: ' + ', '.join(f'{key}={value}' for key, value in sorted(core.items()))]
+    if user_env:
+        lines.append("Player's variables: " + ', '.join(f'{key}={value}' for key, value in user_env.items()))
+    return '\n'.join(lines)
 
 
 def create(data_dir, launcher_settings, game=None, version_file=None):

@@ -48,7 +48,7 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         return;
     }
     if (key == "overlay_style") {
-        v.overlay_style = i >= 0 && i < OverlayStyleCount ? i : int(OverlayCompact);
+        v.overlay_style = i >= 0 && i < OverlayStyleCount ? i : int(OverlayHistogram);
         return;
     }
     if (key == "overlay_offset_x") {
