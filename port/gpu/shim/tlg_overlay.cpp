@@ -1275,9 +1275,10 @@ void ControlsTab() {
         ImGui::BeginDisabled(!s.input_display);
         static const char* const places[] = {TL("Top left", "Слева сверху"), TL("Top right", "Справа сверху"),
                                              TL("Bottom left", "Слева снизу"), TL("Bottom right", "Справа снизу"),
-                                             TL("Top centre", "Сверху по центру"), TL("Bottom centre", "Снизу по центру")};
-        static_assert(std::size(places) == TlgSettings::OverlayPositions);
-        ChoiceRow(TL("Position", "Положение"), s.input_display_corner, places, nullptr, TlgSettings::OverlayPositions,
+                                             TL("Top centre", "Сверху по центру"), TL("Bottom centre", "Снизу по центру"),
+                                             TL("Left centre", "Слева по центру"), TL("Right centre", "Справа по центру")};
+        static_assert(std::size(places) == TlgSettings::InputDisplayPositions);
+        ChoiceRow(TL("Position", "Положение"), s.input_display_corner, places, nullptr, TlgSettings::InputDisplayPositions,
                   TL("Where the input display sits.", "Где на экране отображение нажатий."));
         SliderRow(TL("Size", "Размер"), s.input_display_scale, 50, 300, "%d%%",
                   TL("Size of the input display.", "Размер отображения нажатий."));
@@ -3361,11 +3362,17 @@ void NoticeBox() {
 std::atomic<bool> mouse_pad_on{false}, mouse_pad_touch{false}, mouse_pad_click{false};
 std::atomic<float> mouse_pad_x{0.5f}, mouse_pad_y{0.5f};
 
+// The touchpad emulation's box (Ctrl): its width and its top edge from the screen's bottom.
+constexpr float MousePadWidth = 240.0f, MousePadMargin = 24.0f;
+float MousePadTop() {
+    return (MousePadMargin + MousePadWidth * 942.0f / 1919.0f + 16.0f) * base_scale;
+}
+
 void MousePadBox() {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    const float w = 240.0f * base_scale, h = w * 942.0f / 1919.0f;
-    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + 24.0f * base_scale,
-                                   viewport->WorkPos.y + viewport->WorkSize.y - 24.0f * base_scale),
+    const float w = MousePadWidth * base_scale, h = w * 942.0f / 1919.0f;
+    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + MousePadMargin * base_scale,
+                                   viewport->WorkPos.y + viewport->WorkSize.y - MousePadMargin * base_scale),
                             ImGuiCond_Always, ImVec2(0.0f, 1.0f));
     ImGui::SetNextWindowBgAlpha(0.45f);
     ImGui::SetNextWindowSize(ImVec2(w + 16.0f * base_scale, h + 16.0f * base_scale));
@@ -3521,28 +3528,41 @@ void InputDisplay() {
     const float w = pad * 2 + keyboard_w + mouse_gap + mouse_w;
     const float h = pad * 2 + rows_h + (others.empty() ? 0.0f : gap * 2 + chip_h);
 
-    // The place: as the performance overlay's positions, at the default distance from the edges.
+    // The place: the performance overlay's positions plus the middle of the left and right edges,
+    // at the default distance from the edges. In the bottom left corner it moves up above the
+    // touchpad emulation's box while that is shown (Ctrl), and back down after it.
     const ImGuiViewport* v = ImGui::GetMainViewport();
     const int place = s.input_display_corner;
-    const bool centre = place >= 4, right = place == 1 || place == 3, bottom = place == 2 || place == 3 || place == 5;
+    const bool centre = place == 4 || place == 5, right = place == 1 || place == 3 || place == 7;
+    const bool bottom = place == 2 || place == 3 || place == 5, middle = place == 6 || place == 7;
     const float mx = 40.0f * base_scale, my = 36.0f * base_scale;
     float x = centre ? v->WorkPos.x + (v->WorkSize.x - w * k) / 2
               : right ? v->WorkPos.x + v->WorkSize.x - mx - w * k
                       : v->WorkPos.x + mx;
-    float y = bottom ? v->WorkPos.y + v->WorkSize.y - my - h * k : v->WorkPos.y + my;
+    float y = middle ? v->WorkPos.y + (v->WorkSize.y - h * k) / 2
+              : bottom ? v->WorkPos.y + v->WorkSize.y - my - h * k
+                       : v->WorkPos.y + my;
+    static float lift = 0.0f; // present thread: how far it is moved up now, in display pixels
+    const float bottom_edge = v->WorkPos.y + v->WorkSize.y - my;
+    const float lift_to = place == 2 && mouse_pad_on
+                              ? std::max(0.0f, bottom_edge - (v->WorkPos.y + v->WorkSize.y - MousePadTop() - 12.0f * base_scale))
+                              : 0.0f;
+    lift += (lift_to - lift) * 0.3f;
+    if (std::abs(lift_to - lift) < 0.5f) lift = lift_to;
+    y -= lift;
     p.at = ImVec2(std::round(x), std::round(y));
 
     if (bg > 0.0f) {
-        const bool frosted = Frost(p.dl, p.P(0, 0), p.P(w, h), Theme::PanelRadius * 2 * k);
-        p.Box(0, 0, w, h, Theme::Glass, Theme::PanelRadius * 2, (frosted ? Theme::GlassAlpha : 0.9f) * bg);
+        p.Box(0, 0, w, h, Theme::Glass, 0.0f, Theme::GlassAlpha * bg);
+        p.Frame(0, 0, w, h, Theme::White(0.08f), 0.0f, 1.0f, bg);
     }
 
     auto key_cap = [&](float x0, float y0, float x1, float y1, const char* label, bool held, float size) {
         if (held) {
-            p.Box(x0, y0, x1, y1, Theme::Accent, Theme::ItemRadius);
+            p.Box(x0, y0, x1, y1, Theme::Accent, 0.0f);
         } else {
-            p.Box(x0, y0, x1, y1, Theme::White(0.08f), Theme::ItemRadius);
-            p.Frame(x0, y0, x1, y1, Theme::White(0.22f), Theme::ItemRadius, 1.0f);
+            p.Box(x0, y0, x1, y1, Theme::White(0.08f), 0.0f);
+            p.Frame(x0, y0, x1, y1, Theme::White(0.22f), 0.0f, 1.0f);
         }
         if (label && *label) {
             const ImVec2 ts = p.Face(true)->CalcTextSizeA(size * k, FLT_MAX, 0.0f, label);
@@ -3569,16 +3589,11 @@ void InputDisplay() {
     const u32 buttons = input_buttons.load(std::memory_order_relaxed);
     auto button = [&](int b) { return (buttons >> b & 1u) != 0; };
     const float m0 = pad + keyboard_w + mouse_gap, m1 = m0 + mouse_w, mt = pad, mb = pad + rows_h;
-    const float mid = (m0 + m1) / 2, split = mt + (mb - mt) * 0.42f, body_r = mouse_w / 2;
-    p.dl->AddRectFilled(p.P(m0, mt), p.P(m1, mb), Theme::U32(Theme::White(0.06f)), body_r * k);
-    p.dl->AddRect(p.P(m0, mt), p.P(m1, mb), Theme::U32(Theme::White(0.22f)), body_r * k, 0, 1.0f * k);
-    const ImU32 lit = Theme::U32(Theme::Accent);
-    if (button(SDL_BUTTON_LEFT)) {
-        p.dl->AddRectFilled(p.P(m0 + 1, mt + 1), p.P(mid - 1, split), lit, body_r * k, ImDrawFlags_RoundCornersTopLeft);
-    }
-    if (button(SDL_BUTTON_RIGHT)) {
-        p.dl->AddRectFilled(p.P(mid + 1, mt + 1), p.P(m1 - 1, split), lit, body_r * k, ImDrawFlags_RoundCornersTopRight);
-    }
+    const float mid = (m0 + m1) / 2, split = mt + (mb - mt) * 0.42f;
+    p.Box(m0, mt, m1, mb, Theme::White(0.06f), 0.0f);
+    p.Frame(m0, mt, m1, mb, Theme::White(0.22f), 0.0f, 1.0f);
+    if (button(SDL_BUTTON_LEFT)) p.Box(m0 + 1, mt + 1, mid - 1, split, Theme::Accent, 0.0f);
+    if (button(SDL_BUTTON_RIGHT)) p.Box(mid + 1, mt + 1, m1 - 1, split, Theme::Accent, 0.0f);
     p.Line(m0, split, m1, split, Theme::White(0.22f), 1.0f);
     p.Line(mid, mt, mid, split, Theme::White(0.22f), 1.0f);
     p.Text(m0 + 14, mt + 22, 14.0f, button(SDL_BUTTON_LEFT) ? Theme::Text : Theme::Faint, "L", true);
@@ -3587,8 +3602,8 @@ void InputDisplay() {
     const s64 now = std::chrono::steady_clock::now().time_since_epoch().count();
     const bool up = now < input_wheel_up.load(), down = now < input_wheel_down.load();
     const float wx0 = mid - 7, wx1 = mid + 7, wy0 = mt + 18, wy1 = split - 12;
-    p.Box(wx0, wy0, wx1, wy1, button(SDL_BUTTON_MIDDLE) ? Theme::Accent : Theme::Glass, 7.0f);
-    p.Frame(wx0, wy0, wx1, wy1, Theme::White(0.35f), 7.0f, 1.0f);
+    p.Box(wx0, wy0, wx1, wy1, button(SDL_BUTTON_MIDDLE) ? Theme::Accent : Theme::Glass, 0.0f);
+    p.Frame(wx0, wy0, wx1, wy1, Theme::White(0.35f), 0.0f, 1.0f);
     auto arrow = [&](float cy, float dir, bool on) {
         p.dl->AddTriangleFilled(p.P(mid, cy - 4 * dir), p.P(mid - 5, cy + 3 * dir), p.P(mid + 5, cy + 3 * dir),
                                 Theme::U32(on ? Theme::Accent : Theme::White(0.18f)));
@@ -3597,14 +3612,14 @@ void InputDisplay() {
     arrow(wy1 + 7, -1.0f, down);
     // The side buttons (X1 back, X2 forward) on the left edge.
     const float sy = split + 14;
-    p.Box(m0 - 3, sy, m0 + 5, sy + 20, button(SDL_BUTTON_X2) ? Theme::Accent : Theme::White(0.22f), 3.0f);
-    p.Box(m0 - 3, sy + 24, m0 + 5, sy + 44, button(SDL_BUTTON_X1) ? Theme::Accent : Theme::White(0.22f), 3.0f);
+    p.Box(m0 - 3, sy, m0 + 5, sy + 20, button(SDL_BUTTON_X2) ? Theme::Accent : Theme::White(0.22f), 0.0f);
+    p.Box(m0 - 3, sy + 24, m0 + 5, sy + 44, button(SDL_BUTTON_X1) ? Theme::Accent : Theme::White(0.22f), 0.0f);
     // The motion: smoothed, the dot moves out from the centre with the speed.
     input_vel_x = input_vel_x * 0.75f + input_motion_x.exchange(0.0f, std::memory_order_relaxed) * 0.25f;
     input_vel_y = input_vel_y * 0.75f + input_motion_y.exchange(0.0f, std::memory_order_relaxed) * 0.25f;
     const float speed = std::sqrt(input_vel_x * input_vel_x + input_vel_y * input_vel_y);
     const float cx = mid, cy = (split + mb) / 2 + 6, ring = 22.0f;
-    p.dl->AddCircle(p.P(cx, cy), ring * k, Theme::U32(Theme::White(0.18f)), 0, 1.0f * k);
+    p.Frame(cx - ring, cy - ring, cx + ring, cy + ring, Theme::White(0.18f), 0.0f, 1.0f);
     float dx = 0.0f, dy = 0.0f;
     if (speed > 0.05f) {
         const float reach = ring * speed / (speed + 12.0f);
@@ -3612,7 +3627,7 @@ void InputDisplay() {
         dy = input_vel_y / speed * reach;
         p.Line(cx, cy, cx + dx, cy + dy, Theme::Accent, 2.0f, 0.7f);
     }
-    p.dl->AddCircleFilled(p.P(cx + dx, cy + dy), 4.5f * k, Theme::U32(speed > 0.5f ? Theme::Accent : Theme::White(0.5f)));
+    p.Box(cx + dx - 4, cy + dy - 4, cx + dx + 4, cy + dy + 4, speed > 0.5f ? Theme::Accent : Theme::White(0.5f), 0.0f);
 
     // Other keys held, as chips under the keyboard.
     if (!others.empty()) {

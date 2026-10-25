@@ -52,7 +52,7 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         return;
     }
     if (key == "input_display_corner") {
-        v.input_display_corner = i >= 0 && i < OverlayPositions ? i : 2;
+        v.input_display_corner = i >= 0 && i < InputDisplayPositions ? i : 2;
         return;
     }
     if (key == "input_display_scale") {

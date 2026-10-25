@@ -25,6 +25,8 @@ enum Preset : int { NativeAA = 0, Quality, Balanced, Performance, UltraPerforman
 enum OverlayStyle : int { OverlayCard = 0, OverlayCompact, OverlayStrip, OverlayHistogram, OverlayTelemetry,
                           OverlayMini, OverlayStyleCount };
 inline constexpr int OverlayPositions = 6;
+/// The input display's: the overlay's 6, then the middle of the left and of the right edge.
+inline constexpr int InputDisplayPositions = 8;
 inline constexpr int OverlayOffsetMaxX = 960, OverlayOffsetMaxY = 540;
 enum DebugView : int { DebugNone = 0, DebugReactive = 1, DebugMotion = 2, DebugViewCount };
 
@@ -163,7 +165,8 @@ struct Values {
     std::atomic<bool> mouse_direct{true};
     /// Input display (tlg_overlay.cpp InputDisplay): the keys and mouse buttons held, drawn on
     /// screen for recordings, streams and tutorials. F9 shows or hides it. Position as
-    /// overlay_corner (0..5), size and background opacity in percent.
+    /// overlay_corner (0..5), then 6 left centre, 7 right centre; size and background opacity in
+    /// percent.
     std::atomic<bool> input_display{false};
     std::atomic<int> input_display_corner{2}, input_display_scale{100}, input_display_opacity{55};
     /// A sound with the trophy toast (gpu/shim/tlg_sound.h).
