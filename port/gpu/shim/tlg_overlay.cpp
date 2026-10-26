@@ -3827,6 +3827,8 @@ void Init(const Vulkan::Instance& instance, vk::Format format, u32 image_count) 
     }
     overlay_instance = &instance;
     initialized = true;
+    // The profiling session (TLG_SESSION_DIR) records the overlay's numbers from the start.
+    if (const char* session = std::getenv("TLG_SESSION_DIR"); session && *session) TlgPerfStats::Start(instance);
     std::printf("Overlay: menu ready (Insert or R3+L2)\n");
 }
 

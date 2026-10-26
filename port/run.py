@@ -333,12 +333,17 @@ def main():
         else:
             # Linux: the game execs this through sh -c in its own process, so nothing to wait for.
             env['TLG_RESTART_COMMAND'] = shlex.join([sys.executable, *this, *args])
+        # TLG_SESSION_DIR: the profiling session (scripts/profile_session.py, docs/profiling.md).
+        import profile_session
+        probe, capture, session = profile_session.start(env, data, probe, no_console())
         command = [str(probe), str(out / 'boot-linked.bin'), '--content-profile', str(out / 'content.bin'),
                    '--patches', str(out / 'patches.bin'), '--app0', str(game),
                    '--user', str(user_dir),
                    '--timeout', env.get('TLG_TIMEOUT', '0'), *isa_args, *args]
         # No stdin: an inherited pipe (shells such as Git Bash) cost the game its console output.
-        return subprocess.run(command, stdin=subprocess.DEVNULL, creationflags=no_console()).returncode
+        code = subprocess.run(command, stdin=subprocess.DEVNULL, creationflags=no_console()).returncode
+        profile_session.finish(capture, session)
+        return code
     finally:
         if mod_view:
             shutil.rmtree(mod_view, ignore_errors=True)

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "tlg_perf_stats.h"
+#include "tlg_profile.h"
 
 #include <chrono>
 #include <mutex>
@@ -363,6 +364,7 @@ void Start(const Vulkan::Instance& instance) {
     // ponytail: never joined; a thread that ended while the game ran crashed in ntdll
     // (vk_pipeline_serialization.cpp, StopWarmUp). It sleeps between samples.
     std::call_once(started, [&] { std::thread(Run, &instance).detach(); });
+    TlgProfile::Start(); // the profiling session's sensors, with TLG_SESSION_DIR
 }
 
 Sample Latest() {

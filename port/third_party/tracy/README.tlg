@@ -1,0 +1,1 @@
+Tracy Profiler v0.14.1 client (public/), https://github.com/wolfpld/tracy, tarball sha256 bf4af567e9c7524d07f3caa745fad02fb33bd5694f11910750382d1efbb251c1. BSD-3 (LICENSE). Used only by the profiling build (TLG_PROFILE=1).

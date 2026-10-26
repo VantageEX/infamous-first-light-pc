@@ -62,7 +62,7 @@ foreach(original video_core/renderer_vulkan/vk_presenter.cpp)
 endforeach()
 # This port's own interface (its look): the overlay, menu, settings, save dialogs, game hooks.
 set(OURS_SOURCES ${PORT}/shim/tlg_overlay.cpp ${PORT}/shim/tlg_settings.cpp
-    ${PORT}/shim/tlg_perf_stats.cpp ${PORT}/shim/tlg_png.cpp ${PORT}/shim/tlg_trophies.cpp ${PORT}/shim/tlg_sound.cpp ${PORT}/shim/tlg_orbs.cpp
+    ${PORT}/shim/tlg_perf_stats.cpp ${PORT}/shim/tlg_profile.cpp ${PORT}/shim/tlg_png.cpp ${PORT}/shim/tlg_trophies.cpp ${PORT}/shim/tlg_sound.cpp ${PORT}/shim/tlg_orbs.cpp
     ${PORT}/shim/tlg_actors.cpp ${PORT}/shim/tlg_view.cpp)
 set(IMGUI_SOURCES ${PORT}/third_party/imgui/backends/imgui_impl_vulkan.cpp
     ${PORT}/third_party/imgui/imgui.cpp ${PORT}/third_party/imgui/imgui_draw.cpp

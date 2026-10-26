@@ -131,7 +131,7 @@ list(APPEND ALL ${SRC}/core/libraries/videodec/video_utils.cpp)
 file(GLOB CS_SOURCES ${CS}/*.cpp)
 # This port's own interface (its look): the overlay, menu, settings, save dialogs, game hooks.
 set(OURS_SOURCES ${PORT}/shim/tlg_overlay.cpp ${PORT}/shim/tlg_settings.cpp
-    ${PORT}/shim/tlg_perf_stats.cpp ${PORT}/shim/tlg_png.cpp ${PORT}/shim/tlg_trophies.cpp ${PORT}/shim/tlg_sound.cpp ${PORT}/shim/tlg_orbs.cpp
+    ${PORT}/shim/tlg_perf_stats.cpp ${PORT}/shim/tlg_profile.cpp ${PORT}/shim/tlg_png.cpp ${PORT}/shim/tlg_trophies.cpp ${PORT}/shim/tlg_sound.cpp ${PORT}/shim/tlg_orbs.cpp
     ${PORT}/shim/tlg_actors.cpp ${PORT}/shim/tlg_view.cpp)
 # The bridge to the Windows runtime, its window and save dialogs: replaced by this port's own.
 list(REMOVE_ITEM CS_SOURCES ${CS}/save_dialog_ui.cpp)
@@ -173,6 +173,26 @@ else()
     target_compile_options(issgpu PRIVATE -include ${CMAKE_CURRENT_SOURCE_DIR}/compat/linux/iss_win_compat.h)
     target_link_options(issgpu PRIVATE -Wl,--allow-shlib-undefined)
     target_link_libraries(issgpu PRIVATE PkgConfig::CRYPTO)
+endif()
+
+# TLG_PROFILE=ON: the profiling build (docs/profiling.md). The Tracy client (third_party/tracy)
+# replaces the stubs in compat/tracy for this library and, through TRACY_ENABLE, the runtime that
+# links it; out/gpu_v2_profile, beside the normal build.
+option(TLG_PROFILE "Build with the Tracy profiler client" OFF)
+if (TLG_PROFILE)
+    set(TRACY ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/tracy/public)
+    add_library(tlgtracy STATIC ${TRACY}/TracyClient.cpp)
+    target_include_directories(tlgtracy PUBLIC ${TRACY})
+    target_compile_definitions(tlgtracy PUBLIC TRACY_ENABLE=1 TLG_PROFILE=1)
+    target_compile_options(tlgtracy PRIVATE -O2 -g1 -w)
+    if (WIN32)
+        target_link_libraries(tlgtracy PUBLIC ws2_32 dbghelp advapi32 user32)
+    else()
+        target_link_libraries(tlgtracy PUBLIC dl pthread)
+    endif()
+    # Before compat/: its tracy/Tracy.hpp is the stub.
+    target_include_directories(issgpu BEFORE PRIVATE ${TRACY})
+    target_link_libraries(issgpu PUBLIC tlgtracy)
 endif()
 
 # Our overlay's ImGui Vulkan backend loads its functions itself (as in this port's own build).
