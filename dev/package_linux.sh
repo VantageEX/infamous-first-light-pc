@@ -15,6 +15,14 @@ cd -- "$(dirname -- "$0")/.."
 [[ -f port/out/tlg-probe && -f port/out/gpu/libtlggpu.so ]] || { echo 'Build the core first: cd port && TLG_RENDERER_V2=1 bash build.sh' >&2; exit 1; }
 name=inFAMOUS-First-Light-PC-linux-x86_64
 if [[ ${TEST:-0} == 1 ]]; then name=$name-test; fi
+# PROFILE=1: the profiling package for testers (port/docs/profiling.md): the profiling build of
+# renderer v2 and tracy-capture beside the normal ones (TLG_PROFILE=1 build.sh,
+# packaging/build_tracy_tools.sh).
+if [[ ${PROFILE:-0} == 1 ]]; then
+    name=$name-profiling
+    [[ -f port/out/tlg-probe-v2-profile && -f port/out/gpu_v2_profile/libissgpu.so && -f port/out/tracy-capture ]] ||
+        { echo 'Build the profiling build first: TLG_PROFILE=1 build.sh and packaging/build_tracy_tools.sh' >&2; exit 1; }
+fi
 exe_name='inFAMOUS First Light'
 
 python=${PYTHON:-python3}
@@ -57,6 +65,14 @@ if [[ -f port/out/tlg-probe-v2 && -f port/out/gpu_v2/libissgpu.so ]]; then
     strip --strip-debug -o "$dest/port/out/gpu_v2/libissgpu.so" port/out/gpu_v2/libissgpu.so
     cp port/gpu_v2/defaults.env "$dest/port/gpu_v2/"
     v2_bins=(port/out/tlg-probe-v2 port/out/gpu_v2/libissgpu.so)
+    if [[ ${PROFILE:-0} == 1 ]]; then
+        # Only the debug sections go: the symbol tables name the port's code in the reports.
+        mkdir -p "$dest/port/out/gpu_v2_profile"
+        strip --strip-debug -o "$dest/port/out/tlg-probe-v2-profile" port/out/tlg-probe-v2-profile
+        strip --strip-debug -o "$dest/port/out/gpu_v2_profile/libissgpu.so" port/out/gpu_v2_profile/libissgpu.so
+        strip -o "$dest/port/out/tracy-capture" port/out/tracy-capture
+        v2_bins+=(port/out/tlg-probe-v2-profile port/out/gpu_v2_profile/libissgpu.so port/out/tracy-capture)
+    fi
 fi
 # Libraries to bundle: everything the core loads except the base system (glibc, the C++ runtime,
 # the Vulkan loader and drivers, X11/Wayland, audio servers), which must come from the player's
@@ -91,7 +107,9 @@ if find "$dest" -iname 'eboot.bin' -o -iname '*.sfo' | grep -q .; then
 fi
 # Every program the core loads must resolve from the package and the base system alone.
 missing=$(LD_LIBRARY_PATH="$dest/port/out/lib" ldd "$dest/port/out/tlg-probe" "$dest/port/out/gpu/libtlggpu.so" \
-    ${v2_bins:+"$dest/port/out/tlg-probe-v2" "$dest/port/out/gpu_v2/libissgpu.so"} | grep 'not found' || true)
+    ${v2_bins:+"$dest/port/out/tlg-probe-v2" "$dest/port/out/gpu_v2/libissgpu.so"} \
+    $([[ ${PROFILE:-0} == 1 ]] && echo "$dest/port/out/tlg-probe-v2-profile $dest/port/out/gpu_v2_profile/libissgpu.so $dest/port/out/tracy-capture") |
+    grep 'not found' || true)
 [[ -z $missing ]] || { echo "Unresolved libraries:"$'\n'"$missing" >&2; exit 1; }
 rm -f "dist/$name.tar.gz"
 tar -C dist -czf "dist/$name.tar.gz" "$name"

@@ -49,6 +49,17 @@ MINGW*|MSYS*)
         fi
         cp out/gpu_v2/tlg-probe-v2.exe out/
         echo "Built $PWD/out/tlg-probe-v2.exe (renderer v2)"
+        # TLG_PROFILE=1: also the profiling build of renderer v2 (docs/profiling.md), the Tracy
+        # client built in, as out/tlg-probe-v2-profile.exe (scripts/profile_session.py runs it).
+        if [[ ${TLG_PROFILE:-} == 1 ]]; then
+            cmake -S gpu_v2 -B out/gpu_v2_profile -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DTLG_PROFILE=ON >/dev/null
+            if ! ninja -C out/gpu_v2_profile tlg-probe-v2 > out/gpu_v2_profile-build.log 2>&1; then
+                grep -v '^\[' out/gpu_v2_profile-build.log | tail -60 >&2
+                echo 'Profiling build failed (full log: out/gpu_v2_profile-build.log)' >&2; exit 1
+            fi
+            cp out/gpu_v2_profile/tlg-probe-v2.exe out/tlg-probe-v2-profile.exe
+            echo "Built $PWD/out/tlg-probe-v2-profile.exe (renderer v2, profiling)"
+        fi
     fi
     # TLG_RENDERER_V3=1: renderer v3 (gpu_v3/README.md), linked into out/tlg-probe-v3.exe.
     if [[ ${TLG_RENDERER_V3:-} == 1 ]]; then
@@ -142,6 +153,19 @@ if [[ ${1:-} != --test-only ]]; then
         cs=(-Lout/gpu_v2 -lissgpu -Wl,-rpath,'$ORIGIN/gpu_v2' -Wl,-rpath,"$PWD/out/gpu_v2" -rdynamic)
         "$CC" -std=c11 -O2 -g -Wall -Wextra -Werror -pthread -no-pie -DTLG_BUILD_COMMIT="\"$TLG_BUILD_COMMIT\"" "${includes[@]}" -I. -Isrc src/probe.c "${runtime[@]}" src/cpu_check.c src/vulkan_smoke.c out/isa_emulate.o src/isa_rewrite.c out/libatrac9.a -lm "${cs[@]}" "${libraries[@]}" -o out/tlg-probe-v2
         echo "Built $PWD/out/tlg-probe-v2 (renderer v2)"
+        # TLG_PROFILE=1: also the profiling build of renderer v2 (docs/profiling.md): the library
+        # with the Tracy client in out/gpu_v2_profile, and the runtime compiled with TRACY_ENABLE
+        # (its zones call the client there) as out/tlg-probe-v2-profile.
+        if [[ ${TLG_PROFILE:-} == 1 ]]; then
+            cmake -S gpu_v2 -B out/gpu_v2_profile -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_C_COMPILER=clang -DTLG_PROFILE=ON >/dev/null
+            if ! ninja -C out/gpu_v2_profile issgpu > out/gpu_v2_profile-build.log 2>&1; then
+                grep -v '^\[' out/gpu_v2_profile-build.log | tail -40 >&2
+                echo 'Profiling build failed (full log: out/gpu_v2_profile-build.log)' >&2; exit 1
+            fi
+            ps=(-Lout/gpu_v2_profile -lissgpu -Wl,-rpath,'$ORIGIN/gpu_v2_profile' -Wl,-rpath,"$PWD/out/gpu_v2_profile" -rdynamic)
+            "$CC" -std=c11 -O2 -g -Wall -Wextra -Werror -pthread -no-pie -DTRACY_ENABLE=1 -DTLG_PROFILE=1 -isystem third_party/tracy/public -DTLG_BUILD_COMMIT="\"$TLG_BUILD_COMMIT\"" "${includes[@]}" -I. -Isrc src/probe.c "${runtime[@]}" src/cpu_check.c src/vulkan_smoke.c out/isa_emulate.o src/isa_rewrite.c out/libatrac9.a -lm "${ps[@]}" "${libraries[@]}" -o out/tlg-probe-v2-profile
+            echo "Built $PWD/out/tlg-probe-v2-profile (renderer v2, profiling)"
+        fi
     fi
     # GPU check for run.sh (live_resolution=auto): links only the Vulkan loader.
     "$CC" -std=c11 -O2 -Wall -Wextra -Werror -Igpu/shadps4 tools/gpu_capabilities.c "${libraries[@]}" -o out/tlg-gpu-capabilities

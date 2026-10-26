@@ -14,6 +14,13 @@ name=inFAMOUS-First-Light-PC
 # TEST=1: the test build for players' reports (a TEST_BUILD file: the launcher turns the readback
 # statistics on and asks for a report after playing).
 if [[ ${TEST:-0} == 1 ]]; then name=$name-test; fi
+# PROFILE=1: the profiling package for testers (port/docs/profiling.md): the profiling build of
+# renderer v2 (TLG_PROFILE=1 build.sh) and tracy-capture (packaging/build_tracy_tools.sh) too.
+if [[ ${PROFILE:-0} == 1 ]]; then
+    name=$name-profiling
+    [[ -f port/out/tlg-probe-v2-profile.exe && -f port/out/tracy-capture.exe ]] ||
+        { echo 'Build the profiling build first: TLG_PROFILE=1 build.sh and packaging/build_tracy_tools.sh' >&2; exit 1; }
+fi
 exe_name='inFAMOUS First Light'
 
 python=${WINPYTHON:-}
@@ -64,6 +71,10 @@ if [[ -f port/out/tlg-probe-v2.exe ]]; then
     llvm-strip --strip-debug -o "$dest/port/out/tlg-probe-v2.exe" port/out/tlg-probe-v2.exe
     mkdir -p "$dest/port/gpu_v2"
     cp port/gpu_v2/defaults.env "$dest/port/gpu_v2/"
+    if [[ ${PROFILE:-0} == 1 ]]; then
+        llvm-strip --strip-debug -o "$dest/port/out/tlg-probe-v2-profile.exe" port/out/tlg-probe-v2-profile.exe
+        cp port/out/tracy-capture.exe "$dest/port/out/"
+    fi
 fi
 # Renderer v3 (port/gpu_v3, experimental) when it was built (TLG_RENDERER_V3=1 build.sh): the same.
 if [[ -f port/out/tlg-probe-v3.exe ]]; then
@@ -76,6 +87,7 @@ fi
 declare -A shipped=()
 queue=("$dest/port/out/tlg-probe.exe")
 [[ -f "$dest/port/out/tlg-probe-v2.exe" ]] && queue+=("$dest/port/out/tlg-probe-v2.exe")
+[[ -f "$dest/port/out/tlg-probe-v2-profile.exe" ]] && queue+=("$dest/port/out/tlg-probe-v2-profile.exe")
 [[ -f "$dest/port/out/tlg-probe-v3.exe" ]] && queue+=("$dest/port/out/tlg-probe-v3.exe")
 while ((${#queue[@]})); do
     binary=${queue[0]}

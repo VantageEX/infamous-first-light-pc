@@ -23,6 +23,11 @@ on:
         type: boolean
         required: false
         default: false
+      profiling:
+        description: 'Profiling package for testers (port/docs/profiling.md; never attached)'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: write   # only used by the "Attach to the release" step
@@ -76,18 +81,23 @@ jobs:
           done) &
           progress_pid=$!
           trap 'kill "$progress_pid" 2>/dev/null || true' EXIT
-          TLG_RENDERER_V2=1 TLG_LTO=ON TLG_PGO=off bash build.sh
+          TLG_RENDERER_V2=1 TLG_LTO=ON TLG_PGO=off TLG_PROFILE=${{ inputs.profiling && '1' || '0' }} bash build.sh
+      - name: Build tracy-capture (profiling)
+        if: inputs.profiling
+        working-directory: port
+        run: bash packaging/build_tracy_tools.sh
       - name: Package
         env:
           RELEASE: ${{ inputs.release }}
           TEST: ${{ inputs.test_build && '1' || '0' }}
+          PROFILE: ${{ inputs.profiling && '1' || '0' }}
         run: bash dev/package_linux.sh
       - name: Smoke test (the packaged launcher)
         # The frozen launcher loads its interface offscreen: a package that cannot start (missing
         # Qt plugin, QML, font) must not reach players.
         run: |
           set -euo pipefail
-          name=inFAMOUS-First-Light-PC-linux-x86_64${{ inputs.test_build && '-test' || '' }}
+          name=inFAMOUS-First-Light-PC-linux-x86_64${{ inputs.test_build && '-test' || '' }}${{ inputs.profiling && '-profiling' || '' }}
           smoke=$(mktemp -d)
           tar -C "$smoke" -xzf "dist/$name.tar.gz"
           out=$(QT_QPA_PLATFORM=offscreen FL_UPDATE_CHECK=0 FL_DATA_DIR="$smoke/data" \
@@ -99,12 +109,12 @@ jobs:
           sha256sum "dist/$name.tar.gz" | tee "dist/$name.tar.gz.sha256"
       - uses: actions/upload-artifact@v4
         with:
-          name: inFAMOUS-First-Light-PC-linux-x86_64
+          name: inFAMOUS-First-Light-PC-linux-x86_64${{ inputs.profiling && '-profiling' || '' }}
           path: dist/inFAMOUS-First-Light-PC-linux-x86_64*.tar.gz*
           if-no-files-found: error
           retention-days: 14
       - name: Attach to the release
-        if: inputs.attach && inputs.release != ''
+        if: inputs.attach && inputs.release != '' && !inputs.profiling
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "${{ inputs.release }}" dist/inFAMOUS-First-Light-PC-linux-x86_64*.tar.gz --clobber
