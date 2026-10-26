@@ -19,7 +19,7 @@ Item {
     Behavior on opacity { NumberAnimation { duration: 550; easing.type: Easing.BezierSpline; easing.bezierCurve: T.ease } }
 
     function focusDefault() { play.forceActiveFocus() }
-    function showLog() { page = 3 }
+    function showLog() { page = 4 }
 
     // the home screen's intro: the tile and title, then Play, then the panel slides in
     property real topIn: 0
@@ -523,6 +523,7 @@ Item {
                     { label: launcher.tr.display, glyph: 'display' },
                     { label: launcher.tr.language, glyph: 'globe' },
                     { label: launcher.tr.advanced, glyph: 'code' },
+                    { label: launcher.tr.profiling, glyph: 'report' },
                     { label: launcher.tr.log, glyph: 'log' }
                 ]
                 delegate: SectionRow {
@@ -551,7 +552,7 @@ Item {
             width: parent.width - x - 40
             height: parent.height - y - 28
 
-            function enter() { [launcher.renderers.length > 1 ? displayFirst : displayModeRow, languageFirst, advancedRow, logArea][view.page].forceActiveFocus() }
+            function enter() { [launcher.renderers.length > 1 ? displayFirst : displayModeRow, languageFirst, advancedRow, profileFirst, logArea][view.page].forceActiveFocus() }
             Keys.onEscapePressed: sectionRows.itemAt(view.page).forceActiveFocus()
 
             // display
@@ -674,11 +675,61 @@ Item {
                 }
             }
 
+            // profiling: sessions and benchmarks (profiling.py)
+            Flickable {
+                anchors.fill: parent
+                visible: view.page === 3
+                contentHeight: profileRows.height
+                clip: true
+                boundsBehavior: Flickable.StopAtBounds
+                Column {
+                    id: profileRows
+                    width: parent.width
+                    spacing: 0
+                    ToggleRow {
+                        id: profileFirst
+                        label: launcher.tr.profile_record
+                        description: launcher.profileBuild ? launcher.tr.profile_record_note
+                                                           : launcher.tr.profile_record_note + ' ' + launcher.tr.profile_no_build
+                        checked: launcher.profileRecord
+                        onToggled: on => launcher.setProfileRecord(on)
+                    }
+                    ChoiceRow {
+                        label: launcher.tr.profile_route
+                        options: launcher.profileRoutes
+                        value: launcher.profileRoute
+                        onPicked: v => launcher.setProfileRoute(v)
+                    }
+                    ChoiceRow {
+                        label: launcher.tr.profile_duration
+                        options: launcher.profileDurations
+                        value: launcher.profileSeconds
+                        onPicked: v => launcher.setProfileSeconds(v)
+                    }
+                    ToggleRow {
+                        label: launcher.tr.profile_record_route
+                        description: launcher.tr.profile_record_route_note
+                        checked: launcher.profileRecordRoute
+                        last: true
+                        onToggled: on => launcher.setProfileRecordRoute(on)
+                    }
+                    Item { width: 1; height: 22 }
+                    PillButton {
+                        text: launcher.tr.profile_open
+                        glyph: 'openFolder'
+                        size: 58
+                        fontSize: 23
+                        minWidth: 290
+                        onClicked: launcher.openSessions()
+                    }
+                }
+            }
+
             // log
             Item {
                 anchors.fill: parent
                 anchors.topMargin: 6
-                visible: view.page === 3
+                visible: view.page === 4
                 Text {
                     id: testHint
                     anchors.left: parent.left

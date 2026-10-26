@@ -5,7 +5,9 @@ from pathlib import Path
 from PySide6.QtCore import Property, QLocale, QObject, QUrl, Signal, Slot
 from PySide6.QtGui import QTextCursor
 
-from . import game, report, saves, symbols, trophies
+import threading
+
+from . import game, profiling, report, saves, symbols, trophies
 from .i18n import STRINGS, UI_LANGUAGES, Texts
 from .runner import GameRunner, open_folder, system_language_key
 from .settings import (ASPECTS, CORE_DEFAULTS, DISPLAY_MODES, FPS_LIMITS, INI_SWITCHES, PORT, RENDER_RESOLUTIONS, TEST_BUILD, VERSION_FILE,
@@ -69,6 +71,8 @@ class Launcher(QObject):
     savesChanged = Signal()          # the game folder, the language or a play session changed the saves
     notice = Signal(str, str, str)   # title, text, kind ('warning' or 'done'): a toast
     showLog = Signal()               # the game failed: open the log page
+    profileChanged = Signal()        # the profiling page's choices or routes changed
+    sessionPacked = Signal(str)      # a session's zip is ready (from the packing thread)
 
     def __init__(self, icon_font=('', False), parent=None):
         super().__init__(parent)
@@ -87,6 +91,9 @@ class Launcher(QObject):
         self.runner = GameRunner(self)
         self.runner.line.connect(self._log_line)
         self.runner.finished.connect(self._game_finished)
+        self._record_route = False   # profiling: the next start records a pad route (once)
+        self._session = None         # profiling: the folder the running game records into
+        self.sessionPacked.connect(self._session_packed)
         self._load_game(self.settings.launcher['game_dir'], quiet=True)
 
     # ---- texts --------------------------------------------------------------------------------
@@ -317,6 +324,102 @@ class Launcher(QObject):
         self._advanced = on
         self.settingsChanged.emit()
 
+    # ---- profiling (profiling.py, port/docs/profiling.md) ------------------------------------
+    @Property(bool, notify=profileChanged)
+    def profileRecord(self):
+        return self.settings.launcher['profile_record'] == '1'
+
+    @Slot(bool)
+    def setProfileRecord(self, on):
+        self.settings.launcher['profile_record'] = '1' if on else '0'
+        self.settings.save()
+        self.profileChanged.emit()
+
+    @Property(bool, notify=profileChanged)
+    def profileRecordRoute(self):
+        return self._record_route
+
+    @Slot(bool)
+    def setProfileRecordRoute(self, on):
+        self._record_route = on
+        self.profileChanged.emit()
+
+    @Property('QVariantList', notify=profileChanged)
+    def profileRoutes(self):
+        return [{'value': '', 'text': self.t('profile_no_route')}] + [
+            {'value': name, 'text': name} for name in profiling.list_routes(self.settings.folder)]
+
+    @Property(str, notify=profileChanged)
+    def profileRoute(self):
+        return self.settings.launcher['profile_route']
+
+    @Slot(str)
+    def setProfileRoute(self, value):
+        self.settings.launcher['profile_route'] = value
+        self.settings.save()
+        self.profileChanged.emit()
+
+    @Property('QVariantList', notify=textsChanged)
+    def profileDurations(self):
+        return [{'value': v, 'text': self.t('profile_until_closed') if v == '0' else self.t('profile_seconds', n=v)}
+                for v in profiling.SECONDS]
+
+    @Property(str, notify=profileChanged)
+    def profileSeconds(self):
+        return self.settings.launcher['profile_seconds']
+
+    @Slot(str)
+    def setProfileSeconds(self, value):
+        self.settings.launcher['profile_seconds'] = value
+        self.settings.save()
+        self.profileChanged.emit()
+
+    @Property(bool, notify=settingsChanged)
+    def profileBuild(self):
+        """The profiling build of renderer v2 is here (the Tracy capture); without it a session
+        still records the sensors, the timeline and the game's code."""
+        return profiling.profile_build(game.renderer_v2_probe(PORT)) is not None
+
+    @Slot()
+    def openSessions(self):
+        folder = profiling.sessions_dir(self.settings.folder)
+        folder.mkdir(parents=True, exist_ok=True)
+        open_folder(folder)
+
+    def _profile_env(self):
+        """The profiling page's variables for this start (the session folder is kept for packing)."""
+        l = self.settings.launcher
+        env, self._session = profiling.start_env(self.settings.folder, l['profile_record'] == '1', l['profile_route'],
+                                                 l['profile_seconds'], self._record_route)
+        if self._record_route:  # once: the next start plays normally again
+            self._record_route = False
+            self.profileChanged.emit()
+        return env
+
+    def _pack_session(self):
+        session, self._session = self._session, None
+        if session is None:
+            return
+        self._log_line(self.t('profile_packing'))
+        log = self.runner.log_path
+
+        def work():
+            try:
+                archive = profiling.pack(session, log)
+                self.sessionPacked.emit(str(archive))
+            except OSError as error:
+                self.sessionPacked.emit('!' + str(error))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _session_packed(self, result):
+        if result.startswith('!'):
+            self._log_line(self.t('profile_pack_failed', error=result[1:]))
+            return
+        text = self.t('profile_packed', path=result, size=profiling.size_text(result))
+        self._log_line(text)
+        self.notice.emit(self.t('profiling'), text, 'done')
+        self.profileChanged.emit()  # a recorded route is a new choice
+
     @Property(str, constant=True)
     def extraEnv(self):
         """The advanced box as stored; QML sets it once and then only writes."""
@@ -371,6 +474,7 @@ class Launcher(QObject):
         if not self.info:
             return
         extra = self._extra_env()
+        extra.update(self._profile_env())
         self.settings.save()
         self._clear_log()
         self._log_line(self.t('starting'))
@@ -407,6 +511,8 @@ class Launcher(QObject):
         self._set_status(message)
         self.runningChanged.emit()
         self.savesChanged.emit()
+        self._pack_session()
+        self.profileChanged.emit()  # a route recorded in this run
         if code:
             self.showLog.emit()
 

@@ -72,6 +72,9 @@ LAUNCHER_DEFAULTS = {
     'ui_language': 'auto',
     'extra_env': '',   # KEY=VALUE lines for testing core switches
     'renderer': '2',   # 2: renderer v2 (port/gpu_v2) when built, else 1: the core's own renderer
+    'profile_record': '0',     # profiling: record a session at every start (profiling.py)
+    'profile_route': '',       # profiling: the pad route a benchmark replays ('' none)
+    'profile_seconds': '120',  # profiling: how long a benchmark (or a timed route recording) runs
 }
 
 
