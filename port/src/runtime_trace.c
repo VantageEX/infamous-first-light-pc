@@ -1,4 +1,5 @@
 /* Tracy zones and names from the C runtime (runtime_trace.h). */
+#define _GNU_SOURCE /* strnlen with -std=c11 (glibc) */
 #include "runtime_trace.h"
 
 #ifdef TRACY_ENABLE

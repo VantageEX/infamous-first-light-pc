@@ -17,6 +17,7 @@
  * <dir>/modules.txt lists the loaded modules ("base size path" a line, hex; Linux: a copy of
  * /proc/self/maps), so the analyser can put the samples outside the game's image (the runtime,
  * the renderer, the driver) on their module and its symbols. */
+#define _GNU_SOURCE /* strnlen with -std=c11 (glibc) */
 #include "runtime.h"
 #include <pthread.h>
 #include <stdio.h>
