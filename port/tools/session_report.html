@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Session report</title>
+<style>
+:root { --bg:#101014; --panel:#18181e; --line:#2a2a33; --fg:#e8e8ee; --fg2:#a4a4b0; --fg3:#6e6e7a;
+  --blue:#3d8bfd; --good:#43c47a; --warn:#f0b43c; --bad:#ef5b5b; --violet:#a57cff; --cyan:#38c6d9; --pink:#ff7ab6; }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.45 "Segoe UI", system-ui, sans-serif; }
+header { padding:22px 28px 10px; }
+h1 { font-weight:300; font-size:28px; margin:0 0 4px; }
+h2 { font-weight:400; font-size:18px; margin:0 0 12px; color:var(--fg); }
+.sub { color:var(--fg2); }
+main { padding:0 28px 40px; display:grid; gap:16px; }
+section { background:var(--panel); border:1px solid var(--line); padding:16px 18px; }
+.cards { display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:10px; }
+.card { border:1px solid var(--line); padding:10px 12px; }
+.card .k { color:var(--fg3); font-size:12px; text-transform:uppercase; letter-spacing:.04em; }
+.card .v { font-size:24px; font-weight:300; }
+.card .d { font-size:12px; }
+canvas { width:100%; display:block; background:#0c0c10; border:1px solid var(--line); }
+table { border-collapse:collapse; width:100%; font-size:13px; }
+th, td { text-align:left; padding:5px 8px; border-bottom:1px solid var(--line); white-space:nowrap; }
+th { color:var(--fg3); font-weight:400; text-transform:uppercase; font-size:11px; letter-spacing:.04em; }
+td.n, th.n { text-align:right; font-variant-numeric:tabular-nums; }
+.scroll { overflow:auto; max-height:460px; }
+.legend span { display:inline-block; margin-right:14px; color:var(--fg2); }
+.legend i { display:inline-block; width:10px; height:10px; margin-right:5px; vertical-align:-1px; }
+.row { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+@media (max-width: 1100px) { .row { grid-template-columns:1fr; } }
+select { background:#0c0c10; color:var(--fg); border:1px solid var(--line); padding:4px 8px; }
+#tip { position:fixed; pointer-events:none; background:#000d; border:1px solid var(--line); padding:6px 9px; font-size:12px; display:none; z-index:9; white-space:pre; }
+.good { color:var(--good); } .bad { color:var(--bad); } .muted { color:var(--fg3); }
+.note { color:var(--fg2); font-size:12px; margin-top:8px; }
+</style>
+</head>
+<body>
+<header><h1 id="title">Session report</h1><div class="sub" id="subtitle"></div></header>
+<main id="main"></main>
+<div id="tip"></div>
+<script>
+const DATA = /*SESSION_DATA*/null;
+const S = DATA.sessions;
+const A = S[0], B = S[1];
+const CLASS_COLORS = { 'GPU':'#ef5b5b', 'command processor':'#f0b43c', 'game thread':'#a57cff', 'GPU readback':'#ff7ab6',
+  'pipeline build':'#38c6d9', 'sync / pacing':'#3d8bfd', 'unknown':'#6e6e7a' };
+const PART = [['gpu','GPU','#ef5b5b'],['cp_busy','Command processor','#f0b43c'],['present_wait','Present waits','#3d8bfd'],
+  ['readback','Readback waits','#ff7ab6'],['compile','Pipeline builds','#38c6d9']];
+const el = (tag, attrs = {}, html = '') => { const e = document.createElement(tag); Object.assign(e, attrs); if (html) e.innerHTML = html; return e; };
+const fmt = (v, d = 1) => v === null || v === undefined || isNaN(v) ? '—' : Number(v).toFixed(d);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const tip = document.getElementById('tip');
+function showTip(e, text) { tip.textContent = text; tip.style.display = 'block'; tip.style.left = (e.clientX + 14) + 'px'; tip.style.top = (e.clientY + 12) + 'px'; }
+function hideTip() { tip.style.display = 'none'; }
+function section(title, note) { const s = el('section'); s.append(el('h2', {}, title)); if (note) s.append(el('div', {className:'note'}, note)); document.getElementById('main').append(s); return s; }
+function canvas(parent, height) {
+  const c = el('canvas'); c.style.height = height + 'px'; parent.append(c);
+  const ratio = window.devicePixelRatio || 1; c.width = c.clientWidth * ratio; c.height = height * ratio;
+  const g = c.getContext('2d'); g.scale(ratio, ratio); return [c, g, c.clientWidth, height];
+}
+function axes(g, w, h, x0, x1, y0, y1, xlabel, ylabel) {
+  g.strokeStyle = '#2a2a33'; g.fillStyle = '#6e6e7a'; g.font = '11px Segoe UI, sans-serif'; g.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) { const y = 18 + (h - 40) * i / 4; g.beginPath(); g.moveTo(46, y); g.lineTo(w - 8, y); g.stroke();
+    g.fillText(fmt(y1 - (y1 - y0) * i / 4, y1 < 10 ? 1 : 0), 4, y + 4); }
+  for (let i = 0; i <= 6; i++) { const x = 46 + (w - 54) * i / 6; g.fillText(fmt(x0 + (x1 - x0) * i / 6, 0) + (xlabel || ''), x - 10, h - 6); }
+  if (ylabel) g.fillText(ylabel, 50, 12);
+}
+
+// ---- header ----
+document.getElementById('title').textContent = 'Session ' + A.name + (B ? '  vs  ' + B.name : '');
+const info = A.info || {};
+document.getElementById('subtitle').textContent = [info.started, info.probe, info.platform,
+  A.tracy ? 'Tracy capture' : (A.capture_found ? 'Tracy capture (tracy-csvexport not found)' : 'no Tracy capture'),
+  A.sample_hz ? `game code sampled ${A.sample_hz}/s` : ''].filter(Boolean).join(' · ');
+
+// ---- summary ----
+function cards(parent, s, other) {
+  const box = el('div', {className:'cards'}); parent.append(box);
+  const items = [['Average FPS','fps',1,true],['1% low FPS','low1_fps',1,true],['Median frame','p50_ms',1,false,' ms'],
+    ['95% frame','p95_ms',1,false,' ms'],['99% frame','p99_ms',1,false,' ms'],['Worst frame','max_ms',0,false,' ms'],
+    ['Stutters','stutters',0,false,''],['Frames under 30 FPS','under30_share',1,false,' %'],
+    ['GPU per frame','gpu_ms',1,false,' ms'],['Command processor','cp_busy_ms',1,false,' ms'],
+    ['Present waits','present_wait_ms',1,false,' ms'],['Readback waits','readback_ms',1,false,' ms'],
+    ['Pipeline builds','compile_ms',2,false,' ms'],['Main thread running','main_run_share',0,false,' %'],
+    ['Frames','frames',0,true,''],['Seconds','seconds',0,true,'']];
+  for (const [k, key, d, higherBetter, unit] of items) {
+    if (s[key] === undefined) continue;
+    const c = el('div', {className:'card'});
+    c.append(el('div', {className:'k'}, k), el('div', {className:'v'}, fmt(s[key], d) + (unit || '')));
+    if (other && other[key] !== undefined && key !== 'frames' && key !== 'seconds') {
+      const delta = s[key] - other[key], pct = other[key] ? 100 * delta / other[key] : 0;
+      const better = higherBetter ? delta > 0 : delta < 0;
+      c.append(el('div', {className:'d ' + (Math.abs(pct) < 1 ? 'muted' : better ? 'good' : 'bad')},
+        `${delta >= 0 ? '+' : ''}${fmt(delta, d)} (${pct >= 0 ? '+' : ''}${fmt(pct, 0)}%) vs ${B.name}`));
+    }
+    box.append(c);
+  }
+}
+{
+  const s = section(B ? 'Summary (this session, its change against the baseline under each number)' : 'Summary',
+    'What a frame waited on is a heuristic: a pipeline build or a readback that took over 30% of it, else the GPU or the command processor busy for over 85%, else the game\'s main thread running for over 85% of its samples, else sync / pacing (waits, vsync, the frame limit).');
+  cards(s, A.summary, B && B.summary);
+  const legend = el('div', {className:'legend'}); legend.style.marginTop = '12px';
+  const total = A.classes.reduce((t, c) => t + c[1], 0) || 1;
+  for (const [name, n] of A.classes) legend.innerHTML += `<span><i style="background:${CLASS_COLORS[name] || '#888'}"></i>${esc(name)}: ${fmt(100 * n / total, 0)}% of frames</span>`;
+  s.append(legend);
+}
+
+// ---- frame times ----
+function frameChart(parent, sess) {
+  const [c, g, w, h] = canvas(parent, 260);
+  const fr = sess.frames; if (!fr.length) return;
+  const x1 = fr[fr.length - 1][0] || 1, cap = Math.min(Math.max(...fr.map(f => f[1])), Math.max(100, 4 * (sess.summary.p50_ms || 16)));
+  axes(g, w, h, 0, x1, 0, cap, 's', 'frame ms');
+  for (const [ms, color] of [[1000 / 30, '#43c47a'], [1000 / 60, '#2f6e4c']]) {
+    const y = 18 + (h - 40) * (1 - ms / cap); g.strokeStyle = color; g.setLineDash([4, 4]); g.beginPath(); g.moveTo(46, y); g.lineTo(w - 8, y); g.stroke(); g.setLineDash([]);
+  }
+  const X = t => 46 + (w - 54) * t / x1, Y = ms => 18 + (h - 40) * (1 - Math.min(ms, cap) / cap);
+  for (const f of fr) { g.fillStyle = CLASS_COLORS[f[2]] || '#888'; g.fillRect(X(f[0]), Y(f[1]), 1.5, Math.max(1, (h - 22) - Y(f[1]))); }
+  c.onmousemove = e => {
+    const r = c.getBoundingClientRect(), t = (e.clientX - r.left - 46) / (w - 54) * x1;
+    let i = fr.findIndex(f => f[0] >= t); if (i < 0) i = fr.length - 1; const f = fr[i];
+    showTip(e, `${fmt(f[0], 2)} s   ${fmt(f[1], 1)} ms   ${f[2]}\nGPU ${fmt(f[3])}  CP ${fmt(f[4])}  present ${fmt(f[5])}  readback ${fmt(f[6])}  build ${fmt(f[7])} ms\nmain thread running ${fmt(100 * f[8], 0)}%`);
+  };
+  c.onmouseleave = hideTip;
+}
+{
+  const s = section('Frame times', 'Each bar is one presented game frame, coloured by what it waited on. Dashed: 30 and 60 FPS.');
+  frameChart(s, A);
+  if (B) { s.append(el('div', {className:'note'}, 'Baseline: ' + esc(B.name))); frameChart(s, B); }
+}
+
+// ---- histogram ----
+{
+  const s = section('Frame time distribution');
+  const [c, g, w, h] = canvas(s, 200);
+  const bins = 60, top = Math.max(50, ...[A, B].filter(Boolean).map(x => x.summary.p99_ms || 0)) * 1.2;
+  const hist = sess => { const out = new Array(bins).fill(0); for (const f of sess.frames) out[Math.min(bins - 1, Math.floor(f[1] / top * bins))]++; const n = sess.frames.length || 1; return out.map(v => v / n); };
+  const ha = hist(A), hb = B ? hist(B) : null, maxv = Math.max(...ha, ...(hb || [0]));
+  axes(g, w, h, 0, top, 0, maxv * 100, ' ms', '% of frames');
+  const bw = (w - 54) / bins;
+  ha.forEach((v, i) => { g.fillStyle = '#3d8bfd'; g.fillRect(46 + i * bw, 18 + (h - 40) * (1 - v / maxv), bw - 1, (h - 40) * v / maxv); });
+  if (hb) { g.strokeStyle = '#f0b43c'; g.lineWidth = 2; g.beginPath(); hb.forEach((v, i) => { const x = 46 + (i + .5) * bw, y = 18 + (h - 40) * (1 - v / maxv); i ? g.lineTo(x, y) : g.moveTo(x, y); }); g.stroke();
+    s.append(el('div', {className:'legend'}, `<span><i style="background:#3d8bfd"></i>${esc(A.name)}</span><span><i style="background:#f0b43c"></i>${esc(B.name)} (baseline)</span>`)); }
+}
+
+// ---- breakdown and worst frames ----
+{
+  const s = section('Where the frame time goes (average per frame)');
+  const [c, g, w, h] = canvas(s, 54 + (B ? 40 : 0));
+  const rows = [A, B].filter(Boolean); let maxms = 0;
+  for (const r of rows) maxms = Math.max(maxms, r.summary.p50_ms || 0, PART.reduce((t, p) => t + (r.summary[p[0] + '_ms'] || 0), 0));
+  rows.forEach((r, k) => { let x = 140; const y = 10 + k * 40; g.fillStyle = '#a4a4b0'; g.font = '12px Segoe UI'; g.fillText(r.name.slice(0, 20), 6, y + 18);
+    for (const [key, , color] of PART) { const v = r.summary[key + '_ms'] || 0, bw = (w - 160) * v / maxms; g.fillStyle = color; g.fillRect(x, y, bw, 26); x += bw; }
+    g.strokeStyle = '#e8e8ee'; const fx = 140 + (w - 160) * (r.summary.p50_ms || 0) / maxms; g.beginPath(); g.moveTo(fx, y - 4); g.lineTo(fx, y + 30); g.stroke(); });
+  s.append(el('div', {className:'legend'}, PART.map(p => `<span><i style="background:${p[2]}"></i>${p[1]}</span>`).join('') + '<span>white line: median frame</span>'));
+  s.append(el('div', {className:'note'}, 'The parts overlap (the GPU works while the CPU prepares the next frame): a part close to the median frame is the limit.'));
+}
+{
+  const s = section('Worst frames');
+  const t = el('table'); t.innerHTML = '<tr><th class="n">at s</th><th class="n">ms</th><th>waited on</th><th class="n">GPU</th><th class="n">CP</th><th class="n">present</th><th class="n">readback</th><th class="n">builds</th><th class="n">main running</th></tr>';
+  for (const [at, f] of A.worst) t.innerHTML += `<tr><td class="n">${fmt(at, 2)}</td><td class="n">${fmt(f.ms)}</td><td style="color:${CLASS_COLORS[f.class]}">${esc(f.class)}</td><td class="n">${fmt(f.gpu)}</td><td class="n">${fmt(f.cp_busy)}</td><td class="n">${fmt(f.present_wait)}</td><td class="n">${fmt(f.readback)}</td><td class="n">${fmt(f.compile)}</td><td class="n">${fmt(100 * f.main_run, 0)}%</td></tr>`;
+  const d = el('div', {className:'scroll'}); d.append(t); s.append(d);
+}
+
+// ---- system ----
+function lineChart(parent, title, series, unit) {
+  const box = el('div'); box.append(el('div', {className:'sub'}, title)); parent.append(box);
+  const [c, g, w, h] = canvas(box, 170);
+  const all = series.flatMap(s => s.points); if (!all.length) return;
+  const x1 = Math.max(...all.map(p => p[0])) || 1, y1 = Math.max(...all.map(p => p[1])) * 1.1 || 1;
+  axes(g, w, h, 0, x1, 0, y1, 's', unit);
+  for (const s of series) { g.strokeStyle = s.color; g.lineWidth = 1.5; g.beginPath();
+    s.points.forEach((p, i) => { const x = 46 + (w - 54) * p[0] / x1, y = 18 + (h - 40) * (1 - p[1] / y1); i ? g.lineTo(x, y) : g.moveTo(x, y); }); g.stroke(); }
+  box.append(el('div', {className:'legend'}, series.map(s => `<span><i style="background:${s.color}"></i>${esc(s.name)}</span>`).join('')));
+}
+{
+  const s = section('The machine', 'One-second means from sensors.csv. The Steam Deck (Linux) has clocks, power and temperatures; Windows has the overlay\'s numbers.');
+  const ch = A.charts, pick = (names, colors) => names.map((n, i) => ch[n] ? {name: n, points: ch[n], color: colors[i % colors.length]} : null).filter(Boolean);
+  const cores = Object.keys(ch).filter(k => /^cpu\d+ MHz$/.test(k)).sort((a, b) => parseInt(a.slice(3)) - parseInt(b.slice(3)));
+  const busy = Object.keys(ch).filter(k => /^cpu\d+ busy %$/.test(k)).sort((a, b) => parseInt(a.slice(3)) - parseInt(b.slice(3)));
+  const palette = ['#3d8bfd','#43c47a','#f0b43c','#ef5b5b','#a57cff','#38c6d9','#ff7ab6','#e8e8ee','#7f8cff','#9be36b','#ffa26b','#6bd9ff','#c38bff','#ffd36b','#6bffb8','#ff6b9d'];
+  const grid = el('div', {className:'row'}); s.append(grid);
+  const charts = [
+    ['Core clocks (MHz)', pick(cores, palette), 'MHz'], ['Core load (%)', pick(busy.length ? busy : ['cpu busy %', 'process cpu %'], palette), '%'],
+    ['GPU', pick(['gpu busy %', 'overlay gpu %', 'gpu memory busy %'], ['#ef5b5b', '#f0b43c', '#a57cff']), '%'],
+    ['GPU clocks (MHz)', pick(['gpu MHz', 'gpu sclk MHz', 'gpu memory MHz'], ['#ef5b5b', '#f0b43c', '#a57cff']), 'MHz'],
+    ['Power (W)', pick(['soc power W', 'battery W'], ['#f0b43c', '#43c47a']), 'W'],
+    ['Temperatures (°C)', pick(['cpu temp C', 'gpu temp C'], ['#ef5b5b', '#f0b43c']), '°C'],
+    ['Memory (GB)', pick(['vram GB', 'ram GB'], ['#3d8bfd', '#43c47a']), 'GB'],
+    ['GPU memory faults and pipelines (/s)', pick(['gpu memory faults /s', 'pipelines made /s'], ['#ff7ab6', '#38c6d9']), '/s'],
+    ['Command processor spin (%) and flip queue', (A.plots['CP spin %'] ? [{name:'CP spin %', points:A.plots['CP spin %'], color:'#f0b43c'}] : []).concat(A.plots['flip queue'] ? [{name:'flip queue ×10', points:A.plots['flip queue'].map(p => [p[0], p[1] * 10]), color:'#3d8bfd'}] : []), '']];
+  for (const [title, series, unit] of charts) if (series.length) lineChart(grid, title, series, unit);
+}
+
+// ---- threads ----
+{
+  const s = section('Threads (CPU)', 'From sensors.csv every 100 ms: the share of the time each thread ran (100% = one core), and on Linux the share it was ready but waited for a free core (contention: the Steam Deck has 8).');
+  const t = el('table'); t.innerHTML = '<tr><th>thread</th><th class="n">ran avg %</th><th class="n">ran max %</th><th class="n">waited for a core avg %</th><th class="n">max %</th></tr>';
+  for (const r of A.threads) t.innerHTML += `<tr><td>${esc(r.name)}</td><td class="n">${fmt(r.run_avg)}</td><td class="n">${fmt(r.run_max)}</td><td class="n">${fmt(r.wait_avg)}</td><td class="n">${fmt(r.wait_max)}</td></tr>`;
+  const d = el('div', {className:'scroll'}); d.append(t); s.append(d);
+}
+
+// ---- zones ----
+if (A.zones.length) {
+  const s = section('Profiler zones (self time)', 'From the Tracy capture: the time inside each zone not spent in the zones it contains, over the whole session.');
+  const t = el('table'); t.innerHTML = '<tr><th>zone</th><th>where</th><th class="n">self ms</th><th class="n">calls</th><th class="n">mean µs</th><th class="n">max ms</th></tr>';
+  for (const z of A.zones) t.innerHTML += `<tr><td>${esc(z.name)}</td><td class="muted">${esc(z.file)}</td><td class="n">${fmt(z.self_ms, 0)}</td><td class="n">${z.count}</td><td class="n">${fmt(z.mean_us)}</td><td class="n">${fmt(z.max_ms)}</td></tr>`;
+  const d = el('div', {className:'scroll'}); d.append(t); s.append(d);
+}
+
+// ---- the game's code ----
+if (A.guest.length) {
+  const s = section('The game\'s threads and code', `From the guest samples (${A.sample_hz} a second per game thread): how often each thread was running or waiting and on what, and where the running ones were. game:xxxx is a function of the game at that image offset; module!name is the port's code.`);
+  const t = el('table'); t.innerHTML = '<tr><th>thread</th><th class="n">running %</th><th>waiting on</th><th>hottest code (share of its running samples)</th></tr>';
+  for (const g of A.guest) t.innerHTML += `<tr><td>${esc(g.name)}</td><td class="n">${fmt(g.run_share, 0)}</td><td class="muted">${g.waits.map(w => esc(w[0]) + ' ' + fmt(w[1], 0) + '%').join(', ')}</td><td>${g.top.slice(0, 3).map(f => esc(f[0]) + ' ' + fmt(f[1], 0) + '%').join(', ')}</td></tr>`;
+  const d = el('div', {className:'scroll'}); d.append(t); s.append(d);
+  const ft = el('table'); ft.style.marginTop = '14px'; ft.innerHTML = '<tr><th>hottest code over all game threads</th><th class="n">% of running samples</th></tr>';
+  for (const [name, pct] of A.functions.slice(0, 25)) ft.innerHTML += `<tr><td>${esc(name)}</td><td class="n">${fmt(pct)}</td></tr>`;
+  s.append(ft);
+  // flame graph: callers at the top, the running function at the bottom of each stack
+  const pickBox = el('div'); pickBox.style.margin = '14px 0 8px'; pickBox.innerHTML = 'Flame graph of ';
+  const sel = el('select'); A.guest.forEach((g, i) => sel.append(el('option', {value: i}, esc(g.name)))); pickBox.append(sel); s.append(pickBox);
+  const holder = el('div'); s.append(holder);
+  const draw = () => {
+    holder.innerHTML = '';
+    const g = A.guest[sel.value], root = {name: 'all', value: 0, children: {}};
+    for (const [stack, n] of g.stacks) { let node = root; root.value += n;
+      for (const name of stack.split(';')) { node = node.children[name] || (node.children[name] = {name, value: 0, children: {}}); node.value += n; } }
+    let focus = root;
+    const depthOf = n => 1 + Math.max(0, ...Object.values(n.children).map(depthOf));
+    const render = () => {
+      holder.innerHTML = '';
+      const rows = Math.min(depthOf(focus), 16), [c, ctx, w, h] = canvas(holder, rows * 20 + 4), boxes = [];
+      const walk = (n, x, depth, width) => {
+        if (width < 1 || depth >= rows) return;
+        const hue = n.name.startsWith('game') ? 18 : n.name.includes('!') ? 210 : 280;
+        ctx.fillStyle = `hsl(${hue}, 55%, ${36 + (n.name.length * 7) % 18}%)`; ctx.fillRect(x, depth * 20, width - 1, 19);
+        if (width > 40) { ctx.fillStyle = '#fff'; ctx.font = '11px Segoe UI'; ctx.fillText(n.name.slice(0, Math.floor(width / 6.5)), x + 4, depth * 20 + 13); }
+        boxes.push([x, depth * 20, width, n]);
+        let cx = x; for (const ch of Object.values(n.children).sort((a, b) => b.value - a.value)) { const cw = width * ch.value / n.value; walk(ch, cx, depth + 1, cw); cx += cw; }
+      };
+      walk(focus, 0, 0, w);
+      const find = e => { const r = c.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top; return boxes.find(b => x >= b[0] && x < b[0] + b[2] && y >= b[1] && y < b[1] + 20); };
+      c.onmousemove = e => { const b = find(e); b ? showTip(e, `${b[3].name}\n${b[3].value} samples, ${fmt(100 * b[3].value / root.value)}% of the thread's running samples`) : hideTip(); };
+      c.onmouseleave = hideTip;
+      c.onclick = e => { const b = find(e); focus = b && b[3] !== focus ? b[3] : root; render(); };
+    };
+    render();
+  };
+  sel.onchange = draw; draw();
+  s.append(el('div', {className:'note'}, 'Click a box to zoom into it, click it again (or the top) to go back. Orange: the game\'s code; blue: the port\'s modules.'));
+}
+
+// ---- timeline counts ----
+if (A.timeline_counts.length) {
+  const s = section('Renderer v2 timeline events');
+  s.append(el('div', {className:'note'}, A.timeline_counts.map(c => `${esc(c[0])} ${c[1]}`).join(' · ')));
+}
+</script>
+</body>
+</html>

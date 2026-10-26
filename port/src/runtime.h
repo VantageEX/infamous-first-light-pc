@@ -201,6 +201,8 @@ void runtime_freeze_report(FILE *out, const char *head);
 /* The registers of thread tid (os id) now: its RIP and up to max return addresses of its frame
  * chain; 0 when it could not be read. For the guest sampler (runtime_sampler.c). */
 int runtime_freeze_sample(uint64_t tid, uintptr_t *rip, uintptr_t *chain, unsigned max, unsigned *frames);
+/* Reads memory that may not be there (0 then) without faulting. */
+int runtime_freeze_read(uintptr_t address, void *out, size_t size);
 /* The game image runtime_freeze_start was given. */
 void runtime_freeze_image(uintptr_t *base, uint64_t *size);
 /* The profiling session's guest sampler (TLG_SESSION_DIR): starts once, after the image is

@@ -6,12 +6,17 @@
  * analyser turns the addresses into offsets in the game's image: where the game's own code spends
  * the CPU, per thread.
  *
- * The file (little endian): "TLGSMPL1", u64 image base, u64 image size, u32 rate (Hz), u32 0;
+ * The file (little endian): "TLGSMPL2", u64 image base, u64 image size, u32 rate (Hz), u32 0;
  * then records, each starting with a type byte:
  *   'T' u32 tid, u8 n, n bytes: a thread's name (before its first sample)
- *   'R' u64 time_ns, u32 tid, u8 n, u64 rip, n x u64 return addresses: running
+ *   'R' u64 time_ns, u32 tid, u8 flags, u8 n, u64 rip, n x u64 return addresses: running;
+ *       flags bit 0: the instruction before RIP is a syscall, so the thread is in a system call
+ *       (blocked in the OS, or just entering it: a wait the runtime did not mark)
  *   'W' u64 time_ns, u32 tid, u8 n, n bytes: blocked, the wait's kind ("mutex", "sleep"...)
- * time_ns is the steady clock of sensors.csv and the renderer v2 timeline. */
+ * time_ns is the steady clock of sensors.csv and the renderer v2 timeline.
+ * <dir>/modules.txt lists the loaded modules ("base size path" a line, hex; Linux: a copy of
+ * /proc/self/maps), so the analyser can put the samples outside the game's image (the runtime,
+ * the renderer, the driver) on their module and its symbols. */
 #include "runtime.h"
 #include <pthread.h>
 #include <stdio.h>
@@ -20,6 +25,8 @@
 #include <time.h>
 #ifdef _WIN32
 #include <windows.h>
+#define PSAPI_VERSION 2 /* EnumProcessModules... from kernel32 (K32*): no psapi.lib */
+#include <psapi.h>
 #endif
 
 #define SAMPLE_THREADS 512
@@ -91,13 +98,43 @@ static void *sampler(void *argument) {
             uintptr_t rip, chain[SAMPLE_FRAMES];
             unsigned frames = 0;
             if (!runtime_freeze_sample(t->os_tid, &rip, chain, SAMPLE_FRAMES, &frames)) continue;
-            put_u8(s->file, 'R'); put_u64(s->file, now); put_u32(s->file, tid); put_u8(s->file, (uint8_t)frames);
+            unsigned char before[2] = {0};
+            const int in_syscall = runtime_freeze_read(rip - 2, before, 2) && before[0] == 0x0f && before[1] == 0x05;
+            put_u8(s->file, 'R'); put_u64(s->file, now); put_u32(s->file, tid); put_u8(s->file, (uint8_t)in_syscall);
+            put_u8(s->file, (uint8_t)frames);
             put_u64(s->file, rip);
             for (unsigned f = 0; f < frames; ++f) put_u64(s->file, chain[f]);
         }
         if (++samples % (s->hz ? s->hz : 1) == 0) fflush(s->file); /* about once a second */
     }
     return NULL;
+}
+
+static void write_modules(const char *dir) {
+    char path[1024];
+    snprintf(path, sizeof(path), "%s/modules.txt", dir);
+    FILE *out = fopen(path, "w");
+    if (!out) return;
+#ifdef _WIN32
+    HMODULE modules[1024];
+    DWORD needed = 0;
+    HANDLE process = GetCurrentProcess();
+    if (EnumProcessModules(process, modules, sizeof(modules), &needed)) {
+        for (DWORD i = 0; i < needed / sizeof(HMODULE) && i < 1024; ++i) {
+            MODULEINFO info;
+            char name[MAX_PATH];
+            if (GetModuleInformation(process, modules[i], &info, sizeof(info)) &&
+                GetModuleFileNameA(modules[i], name, sizeof(name)))
+                fprintf(out, "%llx %lx %s\n", (unsigned long long)(uintptr_t)info.lpBaseOfDll, (unsigned long)info.SizeOfImage, name);
+        }
+    }
+#else
+    FILE *maps = fopen("/proc/self/maps", "r");
+    char line[1024];
+    while (maps && fgets(line, sizeof(line), maps)) fputs(line, out);
+    if (maps) fclose(maps);
+#endif
+    fclose(out);
 }
 
 void runtime_sampler_start(void) {
@@ -114,7 +151,8 @@ void runtime_sampler_start(void) {
     s.hz = (unsigned)(hz > 2000 ? 2000 : hz);
     uintptr_t base; uint64_t size;
     runtime_freeze_image(&base, &size);
-    put(s.file, "TLGSMPL1", 8); put_u64(s.file, base); put_u64(s.file, size); put_u32(s.file, s.hz); put_u32(s.file, 0);
+    write_modules(dir);
+    put(s.file, "TLGSMPL2", 8); put_u64(s.file, base); put_u64(s.file, size); put_u32(s.file, s.hz); put_u32(s.file, 0);
     pthread_t thread;
     if (pthread_create(&thread, NULL, sampler, &s)) { puts("Profile: guest sampler not started"); return; }
     pthread_detach(thread);

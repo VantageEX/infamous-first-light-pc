@@ -304,6 +304,12 @@ void Run(std::string dir) {
     const char* period_text = std::getenv("TLG_SESSION_SAMPLE_MS");
     const int period_ms = period_text && std::atoi(period_text) > 0 ? std::atoi(period_text) : 20;
     std::printf("Profile: sensors every %d ms to %s/sensors.csv\n", period_ms, dir.c_str());
+#ifdef TLG_PROFILE
+    // The steady clock now, in the profiler's own time: the analyser puts the sensors, the
+    // timeline and the guest samples (steady clock) on the capture's time line with it.
+    const std::string clock = "TLG_CLOCK " + std::to_string(NowNs());
+    TracyMessage(clock.c_str(), clock.size());
+#endif
     Writer w{file};
 #ifndef _WIN32
     const Machine machine;

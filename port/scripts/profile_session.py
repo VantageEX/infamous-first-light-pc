@@ -9,12 +9,16 @@ that folder:
   timeline.csv    renderer v2's event timeline (ISS_TIMELINE), steady clock
   sensors.csv     clocks, loads, power, temperatures, threads (gpu/shim/tlg_profile.cpp)
   session.json    what ran: the time, the probe, the switches
+  functions.bin   the game image's functions (its .eh_frame), for the guest samples' names:
+                  "TLGFUNC1", u32 count, count x (u32 start, u32 end) image offsets
+  guest_samples.bin, modules.txt  the guest sampler's (src/runtime_sampler.c)
 Without the profiling build (or without tracy-capture) the session still gets the other files.
 TLG_SESSION_CAPTURE=0: no tracy-capture; a Tracy viewer connects to the game (port 8086) instead.
 TLG_SESSION_SECONDS=N: the game is stopped after N seconds (unattended runs).
 """
 import json
 import os
+import struct
 import subprocess
 import sys
 import time
@@ -38,6 +42,21 @@ def profile_probe(probe):
     """The profiling build beside `probe` (tlg-probe-v2.exe -> tlg-probe-v2-profile.exe), or None."""
     candidate = probe.with_name(probe.stem + '-profile' + probe.suffix)
     return candidate if candidate.is_file() else None
+
+
+def write_functions(boot_linked, path):
+    """functions.bin from the linked image run.py made (out/boot-linked.bin); False without it."""
+    try:
+        import isa_rewrite
+        import red_zone
+        segments, image = isa_rewrite.read_boot_linked(Path(boot_linked).read_bytes())
+        functions = red_zone.find_functions(image, segments)
+    except (OSError, ValueError, ImportError, struct.error):
+        return False
+    with open(path, 'wb') as f:
+        f.write(b'TLGFUNC1' + struct.pack('<I', len(functions)))
+        f.write(b''.join(struct.pack('<II', start, end) for start, end in functions))
+    return True
 
 
 def find_capture(probe):
@@ -88,6 +107,7 @@ def start(env, data, probe, creationflags=0):
             env['TRACY_NO_EXIT'] = '1'
             capture.tracy = tracy
             print(f'Profile: Tracy capture to {tracy}', flush=True)
+    write_functions(Path(data) / 'out' / 'boot-linked.bin', folder / 'functions.bin')
     (folder / 'session.json').write_text(json.dumps({
         'started': time.strftime('%Y-%m-%d %H:%M:%S'),
         'probe': probe.name,

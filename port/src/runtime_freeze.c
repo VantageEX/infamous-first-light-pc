@@ -302,6 +302,7 @@ int runtime_freeze_sample(uint64_t tid, uintptr_t *rip, uintptr_t *chain, unsign
     return 1;
 }
 void runtime_freeze_image(uintptr_t *base, uint64_t *size) { *base = image_base; *size = image_bytes; }
+int runtime_freeze_read(uintptr_t address, void *out, size_t size) { return safe_read(out, address, size); }
 
 static void add_chain(Text *t, const uintptr_t *chain, unsigned frames) {
     char where[320];

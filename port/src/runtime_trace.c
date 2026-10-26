@@ -2,6 +2,7 @@
 #include "runtime_trace.h"
 
 #ifdef TRACY_ENABLE
+#include <stdio.h>
 #include <string.h>
 #include <tracy/TracyC.h>
 
@@ -14,9 +15,12 @@ static _Thread_local unsigned wait_depth;
 void runtime_trace_wait_begin(const char *kind, const char *name) {
     unsigned depth = wait_depth++;
     if (depth >= TRACE_DEPTH) return;
-    const char *k = kind ? kind : "wait";
-    /* The source location is the kind's: one row per kind in the profiler's statistics. */
-    uint64_t srcloc = ___tracy_alloc_srcloc_name(0, "runtime", 7, "wait", 4, k, strlen(k), 0x8a5a44);
+    /* "wait: <kind>": one row per kind in the profiler's statistics, and every wait (these and the
+     * renderer's "... wait ..." zones) under one name filter for the analyser. */
+    char zone[64];
+    int n = snprintf(zone, sizeof(zone), "wait: %s", kind ? kind : "?");
+    if (n < 0 || n >= (int)sizeof(zone)) n = (int)sizeof(zone) - 1;
+    uint64_t srcloc = ___tracy_alloc_srcloc_name(0, "runtime", 7, "wait", 4, zone, (size_t)n, 0x8a5a44);
     wait_zones[depth] = ___tracy_emit_zone_begin_alloc(srcloc, 1);
     if (name && *name) ___tracy_emit_zone_text(wait_zones[depth], name, strnlen(name, 256));
 }
