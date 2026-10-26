@@ -1275,6 +1275,7 @@ void Liverpool::Process(std::stop_token stoken) {
 
     while (!stoken.stop_requested()) {
         {
+            ZoneScopedN("CP wait for work");
             std::unique_lock lk{submit_mutex};
             Common::CondvarWait(submit_cv, lk, stoken, [this] {
                 return num_commands || num_submits || submit_done ||
@@ -1304,6 +1305,7 @@ void Liverpool::Process(std::stop_token stoken) {
             time_mark = now;
             packets_mark = processed_packets;
             if (publish || work_ns + spin_ns >= 1'000'000) {
+                TracyPlot("CP spin %", work_ns + spin_ns ? 100.0 * double(spin_ns) / double(work_ns + spin_ns) : 0.0);
                 Common::Perf::Add(Common::Perf::GpuBusyNs, work_ns);
                 Common::Perf::Add(Common::Perf::GpuSpinNs, spin_ns);
                 work_ns = 0;
@@ -1335,6 +1337,7 @@ void Liverpool::Process(std::stop_token stoken) {
             if (CpSplitActive() && !GraphicsSubmitsPending()) {
                 // ASC owns its coroutines now. Wait for G work or C completion without
                 // repeatedly polling empty queue slots or stealing a C coroutine.
+                ZoneScopedN("CP wait for graphics");
                 std::unique_lock lk{submit_mutex};
                 submit_cv.wait_for(lk, std::chrono::milliseconds{1}, [&] {
                     return stoken.stop_requested() || num_commands ||
@@ -1368,6 +1371,8 @@ void Liverpool::Process(std::stop_token stoken) {
             const auto previous_context = std::exchange(
                 thread_context, CpThreadContext{this, curr_qid, submission.token});
             if (curr_qid != GfxQueueId) {
+                ZoneScopedN("CP compute queue");
+                ZoneValue(curr_qid);
                 const u64 resume_start = Common::Perf::NowNs();
                 if (CpSplitActive()) {
                     iss::g4::RecordingOwnerScope recording_owner{
@@ -1379,6 +1384,8 @@ void Liverpool::Process(std::stop_token stoken) {
                 }
                 Common::Perf::Add(Common::Perf::AscBusyNs, Common::Perf::NowNs() - resume_start);
             } else {
+                // No zone here: while the guest's commands wait (WAIT_REG_MEM...) this resumes
+                // and returns at once, millions of times a minute; "CP spin %" shows that time.
                 if (CpSplitActive()) {
                     iss::g4::RecordingOwnerScope recording_owner{
                         {CpLane::Graphics, GfxQueueId, submission.token.generation}};
@@ -1425,6 +1432,7 @@ void Liverpool::Process(std::stop_token stoken) {
         if (iss::unified::enabled && rasterizer) rasterizer->FlushUnifiedFences(true);
 
         if (submit_done) {
+            ZoneScopedN("CP submit done: flush");
             if(rasterizer)rasterizer->DrainDrawPipe(2);
             VideoCore::EndCapture();
             if (rasterizer) {
@@ -1437,7 +1445,10 @@ void Liverpool::Process(std::stop_token stoken) {
         account_time(true);
         Common::Perf::GpuThreadCpu().store(Common::Perf::CurrentCpu(), std::memory_order_relaxed);
 
-        if(rasterizer)rasterizer->DrainDrawPipeForIdle();
+        {
+            ZoneScopedN("CP drain for idle");
+            if(rasterizer)rasterizer->DrainDrawPipeForIdle();
+        }
         Platform::IrqC::Instance()->Signal(Platform::InterruptId::GpuIdle);
     }
 }
@@ -4349,6 +4360,7 @@ void Liverpool::OnWaitRegMemSatisfied(const PM4CmdWaitRegMem& wait) {
 }
 
 void Liverpool::SubmitDone() noexcept {
+    ZoneScopedN("Guest SubmitDone");
     const auto trace_start=iss::timeline::enabled?Common::Perf::NowNs():0;
     iss::timeline::Emit("guest_submit_done_begin",reinterpret_cast<u64>(this),
         Common::Perf::GuestFrameCounter().load(std::memory_order_relaxed));

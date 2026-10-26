@@ -288,6 +288,21 @@ static void capture(Capture *c) {
 }
 #endif
 
+/* One capture at a time: the report and the profiling session's guest sampler share it. */
+static pthread_mutex_t capture_lock = PTHREAD_MUTEX_INITIALIZER;
+int runtime_freeze_sample(uint64_t tid, uintptr_t *rip, uintptr_t *chain, unsigned max, unsigned *frames) {
+    Capture c = {.tid = tid};
+    pthread_mutex_lock(&capture_lock);
+    capture(&c);
+    pthread_mutex_unlock(&capture_lock);
+    if (!c.captured) return 0;
+    *rip = c.rip;
+    *frames = c.frames < max ? c.frames : max;
+    memcpy(chain, c.chain, *frames * sizeof(*chain));
+    return 1;
+}
+void runtime_freeze_image(uintptr_t *base, uint64_t *size) { *base = image_base; *size = image_bytes; }
+
 static void add_chain(Text *t, const uintptr_t *chain, unsigned frames) {
     char where[320];
     for (unsigned i = 0; i < frames; ++i) {
@@ -342,7 +357,9 @@ void runtime_freeze_report(FILE *out, const char *head) {
     if (!caps || !infos) { free(caps); free(infos); pthread_mutex_unlock(&report_lock); return; }
     const size_t threads = list_threads(caps, MAX_THREADS);
     const uint64_t self = own_tid();
+    pthread_mutex_lock(&capture_lock);
     for (size_t i = 0; i < threads; ++i) if (caps[i].tid != self) capture(&caps[i]);
+    pthread_mutex_unlock(&capture_lock);
     /* Wait slots after the registers: the waits shown are at least as old as the RIPs. */
     const uint64_t now_ms = runtime_wait_now_ms();
     const size_t records = runtime_thread_snapshot(infos, MAX_THREADS);

@@ -9,6 +9,7 @@
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "tlg_perf_stats.h"
+#include <tracy/Tracy.hpp>
 
 namespace Vulkan {
 
@@ -131,6 +132,7 @@ void ComputePipeline::CompileVariant(bool fast) {
         .layout = *pipeline_layout,
     };
     const auto device = instance.GetDevice();
+    ZoneNamedN(create_zone, "Driver: create compute pipeline", true);
     auto [pipeline_result, pipe] =
         device.createComputePipelineUnique(vk_pipeline_cache, compute_pipeline_ci);
     if (pipeline_result != vk::Result::eSuccess && tiered) {

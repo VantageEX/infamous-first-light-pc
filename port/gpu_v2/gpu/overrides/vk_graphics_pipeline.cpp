@@ -19,6 +19,7 @@
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"
 #include "tlg_perf_stats.h"
+#include <tracy/Tracy.hpp>
 
 namespace Vulkan {
 
@@ -497,6 +498,7 @@ void GraphicsPipeline::CompileVariant(bool fast) {
         .layout = *pipeline_layout,
     };
 
+    ZoneNamedN(create_zone, "Driver: create graphics pipeline", true);
     auto [pipeline_result, pipe] =
         device.createGraphicsPipelineUnique(build->pipeline_cache, pipeline_info);
     if (pipeline_result != vk::Result::eSuccess && tiered) {

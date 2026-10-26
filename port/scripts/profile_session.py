@@ -10,6 +10,8 @@ that folder:
   sensors.csv     clocks, loads, power, temperatures, threads (gpu/shim/tlg_profile.cpp)
   session.json    what ran: the time, the probe, the switches
 Without the profiling build (or without tracy-capture) the session still gets the other files.
+TLG_SESSION_CAPTURE=0: no tracy-capture; a Tracy viewer connects to the game (port 8086) instead.
+TLG_SESSION_SECONDS=N: the game is stopped after N seconds (unattended runs).
 """
 import json
 import os
@@ -60,6 +62,10 @@ def start(env, data, probe, creationflags=0):
     capture = None
     if profiled is None:
         print(f'Profile: no profiling build beside {probe.name}: no Tracy capture (sensors and timeline only)', flush=True)
+    elif env.get('TLG_SESSION_CAPTURE') == '0':
+        # A Tracy viewer (or a capture started by hand) connects to the game itself.
+        probe = profiled
+        print('Profile: TLG_SESSION_CAPTURE=0: connect a Tracy viewer to this computer, port 8086', flush=True)
     else:
         probe = profiled
         tool = find_capture(probe)
@@ -93,6 +99,13 @@ def start(env, data, probe, creationflags=0):
     return probe, capture, folder
 
 
+def time_limit(env, folder):
+    """TLG_SESSION_SECONDS: how long a session runs before the game is stopped (unattended tests,
+    benchmarks); None without one."""
+    value = env.get('TLG_SESSION_SECONDS', '')
+    return float(value) if folder is not None and value.replace('.', '', 1).isdigit() and float(value) > 0 else None
+
+
 def finish(capture, folder, timeout=120):
     """After the game: lets the capture write its file (it ends once the game has gone)."""
     if capture is None:
@@ -105,3 +118,6 @@ def finish(capture, folder, timeout=120):
     tracy = capture.tracy
     if tracy.is_file():
         print(f'Profile: {tracy} ({tracy.stat().st_size / 1e6:.1f} MB)', flush=True)
+    else:
+        print(f'Profile: tracy-capture ended (code {capture.returncode}) without {tracy.name}; '
+              f'see {tracy.with_suffix(".log").name}', flush=True)

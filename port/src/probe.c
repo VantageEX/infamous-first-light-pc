@@ -1410,6 +1410,7 @@ int main(int argc, char **argv) {
         unsigned seconds = freeze && *freeze ? (unsigned)strtoul(freeze, NULL, 10) : 10;
         runtime_freeze_start((uintptr_t)image, round_page(size) + stub_area + red_zone_area, gpu_enabled ? seconds : 0);
     }
+    runtime_sampler_start(); /* TLG_SESSION_DIR: the profiling session's guest sampler */
     tlggpu_set_guest_image((uintptr_t)image, round_page(size));
     boot_step("entering the game");
     printf("Entering original x86-64 code at guest offset 0x%" PRIx64 "\n", entry);

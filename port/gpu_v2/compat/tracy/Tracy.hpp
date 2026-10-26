@@ -11,6 +11,11 @@
 #define ZoneScopedNC(name, color)
 #define ZoneText(text, size) ((void)(text), (void)(size))
 #define ZoneName(text, size)
+#define ZoneValue(value) ((void)(value))
+#define ZoneColor(color)
+#define ZoneNamedN(var, name, active)
+#define TracyMessage(text, size) ((void)(text), (void)(size))
+#define TracyPlotConfig(name, type, step, fill, color)
 #define FrameMark
 #define FrameMarkNamed(name)
 #define TracyMessageC(text, size, color) ((void)(text), (void)(size))

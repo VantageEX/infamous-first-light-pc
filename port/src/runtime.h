@@ -198,4 +198,12 @@ int runtime_freeze_step(FreezeMonitor *m, uint64_t frames, uint64_t now_ms);
 void runtime_freeze_start(uintptr_t image, uint64_t image_size, unsigned seconds);
 /* Writes a report now (every thread: name, wait, RIP and frame chain) to out. */
 void runtime_freeze_report(FILE *out, const char *head);
+/* The registers of thread tid (os id) now: its RIP and up to max return addresses of its frame
+ * chain; 0 when it could not be read. For the guest sampler (runtime_sampler.c). */
+int runtime_freeze_sample(uint64_t tid, uintptr_t *rip, uintptr_t *chain, unsigned max, unsigned *frames);
+/* The game image runtime_freeze_start was given. */
+void runtime_freeze_image(uintptr_t *base, uint64_t *size);
+/* The profiling session's guest sampler (TLG_SESSION_DIR): starts once, after the image is
+ * mapped. */
+void runtime_sampler_start(void);
 #endif

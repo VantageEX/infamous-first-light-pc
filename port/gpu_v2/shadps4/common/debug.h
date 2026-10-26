@@ -21,7 +21,12 @@ static inline bool IsProfilerConnected() {
 #endif
 }
 
+// tlg: the profiling build (TLG_PROFILE) records GPU zones (vk_scheduler.cpp BeginSession).
+#ifdef TLG_PROFILE
+#define TRACY_GPU_ENABLED 1
+#else
 #define TRACY_GPU_ENABLED 0
+#endif
 
 #define CUSTOM_LOCK(type, varname)                                                                 \
     tracy::LockableCtx varname {                                                                   \

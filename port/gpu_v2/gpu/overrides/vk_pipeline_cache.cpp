@@ -1,4 +1,5 @@
 #include <atomic>
+#include <tracy/Tracy.hpp>
 #include "deep_profile.h"
 #include "gpu_blackbox.h"
 #include "pipeline_library.h"
@@ -3215,6 +3216,7 @@ vk::ShaderModule PipelineCache::CompileModuleIR(Shader::Info& info,
                                                 const std::span<const u32>& code, size_t perm_idx,
                                                 Shader::Backend::Bindings& binding,
                                                 iss::g4::CpOwner owner) {
+    ZoneScopedN("Shader compile (translated in parallel)");
     Common::Perf::ScopedTimer compile_timer{Common::Perf::ShaderCompiles,
                                             Common::Perf::ShaderCompileNs};
     LOG_INFO(Render_Vulkan, "Compiling {} shader {:#x} {} (translated in parallel)",
@@ -3245,6 +3247,7 @@ vk::ShaderModule PipelineCache::CompileModule(Shader::Info& info, Shader::Runtim
                                               const std::span<const u32>& code, size_t perm_idx,
                                               Shader::Backend::Bindings& binding,
                                               iss::g4::CpOwner owner) {
+    ZoneScopedN("Shader translate and compile");
     Common::Perf::ScopedTimer compile_timer{Common::Perf::ShaderCompiles,
                                             Common::Perf::ShaderCompileNs};
     LOG_INFO(Render_Vulkan, "Compiling {} shader {:#x} {}", info.hw_stage, info.pgm_hash,

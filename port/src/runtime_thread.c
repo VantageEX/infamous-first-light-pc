@@ -8,6 +8,7 @@
  * the same 9-byte instruction with another displacement. */
 #define _GNU_SOURCE
 #include "runtime.h"
+#include "runtime_trace.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -184,10 +185,12 @@ GuestThread *runtime_thread_current(void) {
 void runtime_thread_attach_host(const char *name) {
     GuestThread *t=runtime_thread_current();
     snprintf(t->name,sizeof(t->name),"%s",name ? name : "host");
+    runtime_trace_thread_name(t->name);
 }
 void runtime_thread_attach_main(void) {
     GuestThread *t=runtime_thread_current();
     snprintf(t->name,sizeof(t->name),"main");
+    runtime_trace_thread_name("main");
     if (wait_stats()) wait_stats_start();
 }
 static GuestThread *find_thread(void *handle) {
@@ -338,8 +341,9 @@ void runtime_wait_slot_end(RuntimeWait *w) {
 }
 void runtime_wait_begin(const char *kind,const void *object,const char *name,const void *const *owner,uintptr_t frame) {
     runtime_wait_slot_begin(runtime_wait_slot(),kind,object,name,owner,frame,runtime_wait_now_ms());
+    runtime_trace_wait_begin(kind,name); /* the profiling build's zone (runtime_trace.h) */
 }
-void runtime_wait_end(void) { runtime_wait_slot_end(runtime_wait_slot()); }
+void runtime_wait_end(void) { runtime_trace_wait_end(); runtime_wait_slot_end(runtime_wait_slot()); }
 int runtime_wait_copy(const RuntimeWait *from,RuntimeWait *to) {
     for (int attempt=0;attempt<8;++attempt) {
         uint32_t before=__atomic_load_n(&from->generation,__ATOMIC_ACQUIRE);
@@ -512,6 +516,7 @@ static void set_host_name(const char *name) {
     char host[16]={0};
     memcpy(host,name,strnlen(name,sizeof(host)-1));
     pthread_setname_np(pthread_self(),host);
+    runtime_trace_thread_name(name); /* the whole name, in the profiling build */
 }
 #ifdef _WIN32
 #define exit_setjmp(t) tlg_setjmp((t)->exit_jump)

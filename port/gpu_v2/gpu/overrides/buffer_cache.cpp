@@ -46,6 +46,7 @@
 #include "video_core/texture_cache/texture_cache.h"
 
 #include <vk_mem_alloc.h>
+#include <tracy/Tracy.hpp>
 
 namespace iss {void ProbeNativeFeedback(const Vulkan::Instance&,Vulkan::Scheduler&);}
 namespace iss::asc_family {extern u32 family;extern bool readback;extern u32 readback_family;extern thread_local u32 pool_family;}
@@ -818,6 +819,7 @@ void UploadWorker::Run(std::stop_token stoken) {
 }
 
 void UploadWorker::ExecuteQueued() {
+    ZoneScopedN("Upload batch");
     u64 last_seq;
     {
         std::scoped_lock lk{queue_mutex};
@@ -1496,6 +1498,8 @@ void BufferCache::BeginRelaxedReadback(VAddr device_addr, u64 size) {
 
 void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool assume_locks,
                              u64 guest_rip) {
+    ZoneScopedN("Readback (guest reads GPU memory)");
+    ZoneValue(size);
     AssertGraphicsReadbackOwner();
     if (cp_split_enabled && liverpool && liverpool->CpSplitActive())
         ASSERT_MSG(liverpool->AscOwnerPausedForGraphics(),
@@ -1644,6 +1648,7 @@ void BufferCache::ReadMemory(VAddr device_addr, u64 size, bool is_write, bool as
 }
 
 void BufferCache::WaitReadback(VAddr device_addr, Vulkan::Semaphore* semaphore, u64 tick) {
+    ZoneScopedN("Readback wait for GPU");
     const u64 wait_start = Common::Perf::NowNs();
     iss::timeline::Emit("readback_wait_begin",reinterpret_cast<u64>(semaphore),tick,device_addr);
     LogReadbackDiag({.event = "wait_start", .address = device_addr,

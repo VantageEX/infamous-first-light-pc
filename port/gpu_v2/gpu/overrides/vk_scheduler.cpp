@@ -349,13 +349,52 @@ struct Scheduler::GpuProfile {
     std::vector<u64> results;
 };
 
+#if TRACY_GPU_ENABLED
+namespace {
+// The command processor's GPU zones (the profiling build): a timestamp at the start and at the end
+// of each session's command buffer. The commands are recorded on the recording thread, or on the
+// command processor's when a session is direct, and a threaded session's end can be direct: the
+// two halves of a zone can run on different threads, while Tracy pairs them by thread (a zone
+// ended on a thread that has none open crashes the viewer). So both name one thread, the first
+// that began a zone. The halves of the sessions never run at the same time (a direct end waits
+// for the idle recording thread), so one open flag does.
+bool session_zone_open = false;
+decltype(tracy::GetThreadHandle()) session_zone_thread{};
+
+void SessionGpuZone(tracy::VkCtx* ctx, vk::CommandBuffer c, bool begin) {
+    static const auto location = GPU_SCOPE_LOCATION("Guest commands", MarkersPalette::GpuMarkerColor);
+    if (!session_zone_thread) session_zone_thread = tracy::GetThreadHandle();
+    const auto write = [&](bool zone_begin) {
+        const auto query = ctx->NextQueryId();
+        c.writeTimestamp(vk::PipelineStageFlagBits::eBottomOfPipe, ctx->GetQueryPool(), query);
+        auto* item = tracy::Profiler::QueueSerial();
+        if (zone_begin) {
+            tracy::MemWrite(&item->hdr.type, tracy::QueueType::GpuZoneBeginSerial);
+            tracy::MemWrite(&item->gpuZoneBegin.cpuTime, tracy::Profiler::GetTime());
+            tracy::MemWrite(&item->gpuZoneBegin.srcloc, (uint64_t)&location);
+            tracy::MemWrite(&item->gpuZoneBegin.thread, session_zone_thread);
+            tracy::MemWrite(&item->gpuZoneBegin.queryId, uint16_t(query));
+            tracy::MemWrite(&item->gpuZoneBegin.context, uint8_t(ctx->GetId()));
+        } else {
+            tracy::MemWrite(&item->hdr.type, tracy::QueueType::GpuZoneEndSerial);
+            tracy::MemWrite(&item->gpuZoneEnd.cpuTime, tracy::Profiler::GetTime());
+            tracy::MemWrite(&item->gpuZoneEnd.thread, session_zone_thread);
+            tracy::MemWrite(&item->gpuZoneEnd.queryId, uint16_t(query));
+            tracy::MemWrite(&item->gpuZoneEnd.context, uint8_t(ctx->GetId()));
+        }
+        tracy::Profiler::QueueSerialFinish();
+    };
+    if (session_zone_open) write(false); // a session that ended without a submission
+    session_zone_open = begin;
+    if (begin) write(true);
+}
+} // namespace
+#endif
+
 Scheduler::Scheduler(const Instance& instance, vk::Queue queue_, const char* name_)
     : instance{instance}, queue{queue_ ? queue_ : instance.GetGraphicsQueue()}, name{name_},
       work_semaphore{instance}, command_pool{instance, &work_semaphore} {
     GpuCrashDiag::g_instance.store(&instance, std::memory_order_relaxed);
-#if TRACY_GPU_ENABLED
-    profiler_scope = reinterpret_cast<tracy::VkCtxScope*>(std::malloc(sizeof(tracy::VkCtxScope)));
-#endif
     BeginSession();
     priority_pending_ops_thread =
         std::jthread(std::bind_front(&Scheduler::PriorityPendingOpsThread, this));
@@ -367,9 +406,6 @@ Scheduler::~Scheduler() {
         recorder_thread.request_stop();
         recorder_thread.join();
     }
-#if TRACY_GPU_ENABLED
-    std::free(profiler_scope);
-#endif
 }
 
 void Scheduler::AllowThreadedRecording() {
@@ -480,6 +516,7 @@ void Scheduler::RecorderThread(std::stop_token stoken) {
         }
         RecorderJob job;
         {
+            ZoneScopedN("Recorder wait for job");
             std::unique_lock lk{recorder_mutex};
             recorder_waiting = true;
             recorder_cv.wait(lk, stoken, [this] { return !recorder_jobs.empty(); });
@@ -501,9 +538,12 @@ void Scheduler::RecorderThread(std::stop_token stoken) {
                                 work_semaphore.KnownGpuTick());
         }
         if (job.stream && !job.stream->Empty()) {
+            ZoneScopedN("Recorder record commands");
+            ZoneValue(job.stream->NumCommands());
             job.stream->Execute(RecorderCommandBuffer());
         }
         if (job.submit) {
+            ZoneScopedN("Recorder queue submit");
             const vk::CommandBuffer cmdbuf = RecorderCommandBuffer();
             Check(cmdbuf.end());
             recorder_cmdbuf = vk::CommandBuffer{};
@@ -738,11 +778,9 @@ void Scheduler::BeginSession() {
     }
 
 #if TRACY_GPU_ENABLED
-    auto* profiler_ctx = instance.GetProfilerContext();
-    if (profiler_ctx) {
-        static const auto scope_loc =
-            GPU_SCOPE_LOCATION("Guest Frame", MarkersPalette::GpuMarkerColor);
-        new (profiler_scope) tracy::VkCtxScope{profiler_ctx, &scope_loc, current_cmdbuf, true};
+    // The session's GPU zone (the profiling build), recorded where its commands are.
+    if (auto* profiler_ctx = instance.GetProfilerContext(); profiler_ctx && threading_allowed) {
+        Recorder().Record([profiler_ctx](vk::CommandBuffer c) { SessionGpuZone(profiler_ctx, c, true); });
     }
 #endif
 }
@@ -809,6 +847,15 @@ void Scheduler::WaitSubmitted(u64 tick) {
 }
 
 void Scheduler::SubmitExecution(SubmitInfo& info) {
+#if TRACY_GPU_ENABLED
+    // The end of the session's GPU zone, and the GPU times the GPU has finished (BeginSession).
+    if (auto* profiler_ctx = instance.GetProfilerContext(); profiler_ctx && threading_allowed) {
+        Recorder().Record([profiler_ctx](vk::CommandBuffer c) {
+            SessionGpuZone(profiler_ctx, c, false);
+            TracyVkCollect(profiler_ctx, c);
+        });
+    }
+#endif
     if (on_before_submit) on_before_submit();
     // Work of other threads the commands of the session read: done before they are submitted.
     info.upload_dependency = std::max(
@@ -883,13 +930,6 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
     std::scoped_lock lk{submit_mutex};
     const u64 signal_value = work_semaphore.NextTick();
 
-#if TRACY_GPU_ENABLED
-    auto* profiler_ctx = instance.GetProfilerContext();
-    if (profiler_ctx) {
-        profiler_scope->~VkCtxScope();
-        TracyVkCollect(profiler_ctx, current_cmdbuf);
-    }
-#endif
 
     if (on_submit) {
         on_submit(info);

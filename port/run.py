@@ -341,7 +341,12 @@ def main():
                    '--user', str(user_dir),
                    '--timeout', env.get('TLG_TIMEOUT', '0'), *isa_args, *args]
         # No stdin: an inherited pipe (shells such as Git Bash) cost the game its console output.
-        code = subprocess.run(command, stdin=subprocess.DEVNULL, creationflags=no_console()).returncode
+        try:
+            code = subprocess.run(command, stdin=subprocess.DEVNULL, creationflags=no_console(),
+                                  timeout=profile_session.time_limit(env, session)).returncode
+        except subprocess.TimeoutExpired:  # TLG_SESSION_SECONDS: the game was stopped
+            print('Profile: the session time limit is up; the game was stopped', flush=True)
+            code = 0
         profile_session.finish(capture, session)
         return code
     finally:

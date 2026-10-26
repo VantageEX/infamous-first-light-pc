@@ -1807,8 +1807,10 @@ struct SavePainter {
 // A painter for a w x h panel centred on the display (kept inside it on narrow windows).
 SavePainter SavePainterFor(float w, float h) {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    const float k = std::min({viewport->WorkSize.y / 1080.0f, viewport->WorkSize.x * 0.94f / w,
-                              viewport->WorkSize.y * 0.94f / (h + 40.0f)});
+    // Never 0: a minimised window has no size, and ImGui asserts on a font of size 0.
+    const float k = std::max(std::min({viewport->WorkSize.y / 1080.0f, viewport->WorkSize.x * 0.94f / w,
+                                       viewport->WorkSize.y * 0.94f / (h + 40.0f)}),
+                             0.25f);
     SavePainter p{ImGui::GetForegroundDrawList(), ImGui::GetFont(), k, {}};
     p.at = ImVec2(viewport->WorkPos.x + (viewport->WorkSize.x - w * k) * 0.5f,
                   viewport->WorkPos.y + (viewport->WorkSize.y - h * k) * 0.5f);
@@ -2155,7 +2157,7 @@ void SaveToastBox(SaveClock::time_point now) {
     const float out = std::chrono::duration<float>(toast_until - now).count();
     const float alpha = std::clamp(std::min(in / 0.15f, out / 0.4f), 0.0f, 1.0f);
     const float slide = (1.0f - std::clamp(in / 0.35f, 0.0f, 1.0f)) * 60.0f; // slides in from the right
-    const float k = viewport->WorkSize.y / 1080.0f;
+    const float k = std::max(viewport->WorkSize.y / 1080.0f, 0.6f); // a minimised window has no height
     SavePainter p{ImGui::GetForegroundDrawList(), ImGui::GetFont(), k, {}};
     char clock[16] = "";
     const std::time_t t = std::time(nullptr);
@@ -2456,7 +2458,7 @@ void TrophyToast() {
 
 void LoadingScreen() {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    const float k = viewport->WorkSize.y / 1080.0f;
+    const float k = std::max(viewport->WorkSize.y / 1080.0f, 0.6f); // a minimised window has no height
     const float w = std::max(640.0f, viewport->WorkSize.x / k * 0.4f);
     SavePainter p{ImGui::GetForegroundDrawList(), ImGui::GetFont(), k, {}};
     p.at = ImVec2(viewport->WorkPos.x + (viewport->WorkSize.x - w * k) / 2, viewport->WorkPos.y + viewport->WorkSize.y / 2 - 90 * k);
@@ -3349,7 +3351,7 @@ std::chrono::steady_clock::time_point notice_until;
 
 void NoticeBox() {
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    const float k = viewport->WorkSize.y / 1080.0f;
+    const float k = std::max(viewport->WorkSize.y / 1080.0f, 0.6f); // a minimised window has no height
     SavePainter p{ImGui::GetForegroundDrawList(), ImGui::GetFont(), k, {}};
     const float w = std::min(p.Width(23.0f, notice_text) + 56, viewport->WorkSize.x / k - 80), h = 72;
     p.at = ImVec2(viewport->WorkPos.x + (viewport->WorkSize.x - w * k) / 2, viewport->WorkPos.y + 40 * k);
@@ -3640,7 +3642,7 @@ void InputDisplay() {
 void BackgroundLoading() {
     const u32 done = background_done, total = std::max(background_total.load(), 1u);
     const ImGuiViewport* viewport = ImGui::GetMainViewport();
-    const float k = viewport->WorkSize.y / 1080.0f;
+    const float k = std::max(viewport->WorkSize.y / 1080.0f, 0.6f); // a minimised window has no height
     SavePainter p{ImGui::GetForegroundDrawList(), ImGui::GetFont(), k, {}};
     char text[96];
     std::snprintf(text, sizeof(text), TL("Loading shader cache %u%%", "Загрузка кэша шейдеров %u%%"), u32(u64(done) * 100 / total));

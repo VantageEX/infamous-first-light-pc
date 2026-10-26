@@ -909,6 +909,7 @@ Frame* Presenter::PrepareBlankFrame(bool present_thread) {
 }
 
 void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame) {
+    ZoneScopedN("Present");
     const u64 trace_start=iss::timeline::enabled?Common::Perf::NowNs():0;
     iss::timeline::Emit("present_begin",reinterpret_cast<u64>(frame),frame->ready_tick,
         is_reusing_frame,is_game_frame,reinterpret_cast<u64>(&present_scheduler));
@@ -933,13 +934,16 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
         swapchain.Recreate(window.GetWidth(), window.GetHeight());
     }
 
-    if (!swapchain.AcquireNextImage()) {
-        swapchain.Recreate(window.GetWidth(), window.GetHeight());
+    {
+        ZoneScopedN("Present acquire swapchain image");
         if (!swapchain.AcquireNextImage()) {
-            // User resizes the window too fast and GPU can't keep up. Skip this frame.
-            LOG_WARNING(Render_Vulkan, "Skipping frame!");
-            free_frame();
-            return;
+            swapchain.Recreate(window.GetWidth(), window.GetHeight());
+            if (!swapchain.AcquireNextImage()) {
+                // User resizes the window too fast and GPU can't keep up. Skip this frame.
+                LOG_WARNING(Render_Vulkan, "Skipping frame!");
+                free_frame();
+                return;
+            }
         }
     }
 
@@ -972,8 +976,10 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
 
     {
         auto* profiler_ctx = instance.GetProfilerContext();
+        // Off: the context's zones and collection belong to the command processor's scheduler
+        // (vk_scheduler.cpp BeginSession), and its queries are not to be read from two threads.
         TracyVkNamedZoneC(profiler_ctx, renderer_gpu_zone, cmdbuf, "Host frame",
-                          MarkersPalette::GpuMarkerColor, profiler_ctx != nullptr);
+                          MarkersPalette::GpuMarkerColor, false);
 
         const vk::Extent2D extent = swapchain.GetExtent();
         const std::array pre_barriers{
@@ -1152,9 +1158,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
                                vk::PipelineStageFlagBits::eAllCommands,
                                vk::DependencyFlagBits::eByRegion, {}, {}, post_barrier);
 
-        if (profiler_ctx) {
-            TracyVkCollect(profiler_ctx, cmdbuf);
-        }
+        (void)profiler_ctx;
     }
     if (EmulatorSettings.IsVkHostMarkersEnabled()) {
         cmdbuf.endDebugUtilsLabelEXT();
@@ -1183,6 +1187,7 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
 
     // Present to swapchain.
     {
+        ZoneScopedN("Present vkQueuePresent");
         std::scoped_lock submit_lock{Scheduler::submit_mutex};
         if (!swapchain.Present()) {
             swapchain.Recreate(window.GetWidth(), window.GetHeight());
@@ -1222,6 +1227,7 @@ Frame* Presenter::GetRenderFrame() {
     // Wait for free presentation frames
     Frame* frame;
     {
+        ZoneScopedN("Wait for a free frame");
         std::unique_lock lock{free_mutex};
         free_cv.wait(lock, [this] { return !free_queue.empty(); });
         LOG_DEBUG(Render_Vulkan, "Got render frame, remaining {}", free_queue.size() - 1);
@@ -1241,15 +1247,18 @@ Frame* Presenter::GetRenderFrame() {
     };
 
     // Wait for the presentation to be finished so all frame resources are free
-    while (wait() != vk::Result::eSuccess) {
-        if (result == vk::Result::eErrorDeviceLost) {
-            GpuCrashDiag::ReportDeviceLost(instance, "frame wait");
-        }
-        ASSERT_MSG(result != vk::Result::eErrorDeviceLost,
-                   "Device lost during waiting for a frame");
-        // Retry if the waiting times out
-        if (result == vk::Result::eTimeout) {
-            continue;
+    {
+        ZoneScopedN("Wait for the frame's GPU work");
+        while (wait() != vk::Result::eSuccess) {
+            if (result == vk::Result::eErrorDeviceLost) {
+                GpuCrashDiag::ReportDeviceLost(instance, "frame wait");
+            }
+            ASSERT_MSG(result != vk::Result::eErrorDeviceLost,
+                       "Device lost during waiting for a frame");
+            // Retry if the waiting times out
+            if (result == vk::Result::eTimeout) {
+                continue;
+            }
         }
     }
 

@@ -246,6 +246,7 @@ int VideoOutDriver::ChangeBufferAttribute(VideoOutPort* port, s32 attributeIndex
 }
 
 void VideoOutDriver::Flip(const Request& req, u64 vblank_count) {
+    ZoneScopedN("Flip");
     const u64 present_start = iss::timeline::enabled ? Common::Perf::NowNs() : 0;
     const u64 frame_address = iss::timeline::enabled
                                   ? reinterpret_cast<u64>(req.frame) : 0;
@@ -339,6 +340,7 @@ void VideoOutDriver::DrawLastFrame() {
 
 bool VideoOutDriver::SubmitFlip(VideoOutPort* port, s32 index, s64 flip_arg,
                                 bool is_eop /*= false*/) {
+    FrameMarkNamed("Game flip"); // the game's own frames, beside the presented ones (FRAME_END)
     u64 trace_id{};
     s32 pending{};
     {
@@ -515,6 +517,7 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
             u64 queue_depth{};
             const auto request = receive_request(vblank_count, flip_rate,
                                                  queue_depth);
+            TracyPlot("flip queue", static_cast<int64_t>(queue_depth));
             if (!request) {
                 if (timer.GetTotalWait().count() < 0) { // Dont draw too fast
                     if (!main_port.is_open) {
@@ -565,6 +568,7 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
                                 vblank_event_count);
         }
 
+        ZoneScopedN("Present wait for vblank");
         timer.End();
     }
 }
