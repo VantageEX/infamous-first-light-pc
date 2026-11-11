@@ -25,6 +25,24 @@ def application(argv):
     return app
 
 
+def game_argument(argv):
+    """The folder after `--game` on the command line, or None."""
+    if '--game' not in argv:
+        return None
+    index = argv.index('--game') + 1
+    return argv[index] if index < len(argv) else None
+
+
+def new_launcher(argv):
+    """The launcher, on the folder of `--game <folder>` when it is given (RecompLauncher, scripts
+    and shortcuts need not pick the folder in the window first)."""
+    launcher = Launcher(fonts.setup())
+    folder = game_argument(argv)
+    if folder:
+        launcher.use_game(folder)
+    return launcher
+
+
 def create(argv, launcher=None):
     """(application, engine, launcher), the window already loaded (for `launcher` when given)."""
     app = application(argv)
@@ -43,17 +61,17 @@ def create(argv, launcher=None):
 
 
 def main():
-    app, _engine, _launcher = create(sys.argv)
+    app, _engine, _launcher = create(sys.argv, new_launcher(sys.argv))
     return app.exec()
 
 
 def play():
-    """`<launcher> --play`: the game with the launcher's settings, without the launcher window,
-    for shortcuts and Steam's or Playnite's "add a game" (issue #9); the process ends with the
-    game. The window opens instead when there is no game folder yet or the game cannot start,
-    and after a failed run, on its log."""
+    """`<launcher> --play [--game <folder>]`: the game with the launcher's settings, without the
+    launcher window, for shortcuts and Steam's or Playnite's "add a game" (issue #9); the process
+    ends with the game. The window opens instead when there is no game folder yet or the game
+    cannot start, and after a failed run, on its log."""
     app = application(sys.argv)
-    launcher = Launcher(fonts.setup())
+    launcher = new_launcher(sys.argv)
     failed = []
     launcher.showLog.connect(lambda: failed.append(True))
 
