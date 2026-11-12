@@ -220,6 +220,11 @@ class Launcher(QObject):
         except OSError as error:
             return None, self.t('bad_sfo', error=error)
 
+    def use_game(self, folder):
+        """The game folder for this run only (`--game <folder>`): the folder the player picked in
+        the launcher stays what it was."""
+        self._load_game(folder, quiet=True)
+
     def _load_game(self, folder, quiet=False):
         self.info, self.game_error = self._inspect(folder) if folder else (None, '')
         if self.info and not quiet:

@@ -99,6 +99,8 @@ mkdir -p "$dest/port/tools"
 cp -r port/tools/xpps "$dest/port/tools/"
 find "$dest" -name __pycache__ -prune -exec rm -r {} +
 cp port/LICENSE "$dest/LICENSE.txt"
+# RecompLauncher reads this at the top of every release (set-up, settings and Play from its page).
+cp recomplauncher.json "$dest/"
 git rev-parse --short HEAD > "$dest/VERSION"
 # The release tag (RELEASE=v0.3.2, else this port's vX.Y.Z tag on HEAD): the launcher compares it
 # with the latest GitHub release to offer updates. A package without it never updates itself.

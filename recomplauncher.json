@@ -1,0 +1,113 @@
+{
+  "$schema": "https://recomplauncher.com/schema/recomplauncher.json",
+  "format": 1,
+  "name": "inFAMOUS First Light PC",
+  "repo": "VantageEX/infamous-first-light-pc",
+  "game": {
+    "kind": "folder",
+    "label": "Your dumped game folder of inFAMOUS First Light for PS4 (CUSA00897 or CUSA00575): the one with eboot.bin and sce_sys.",
+    "check": { "file": "eboot.bin" }
+  },
+  "start": {
+    "program": ["inFAMOUS First Light.exe", "inFAMOUS First Light"],
+    "args": ["--play", "--game", "{game}"],
+    "env": { "FL_DATA_DIR": "{install}/data" }
+  },
+  "config": [
+    {
+      "id": "main",
+      "format": "ini",
+      "file": [{ "path": "{install}/data/tlg.ini" }]
+    }
+  ],
+  "saves": ["{install}/data/user"],
+  "folders": {
+    "saves": [{ "path": "{install}/data/user" }],
+    "logs": [{ "path": "{install}/data/logs" }]
+  },
+  "settings": [
+    {
+      "id": "window", "label": "Window mode",
+      "help": "Windowed keeps the game in a window. Borderless fills the screen and lets you switch apps quickly.",
+      "choices": [
+        { "label": "Windowed", "set": { "display_mode": "windowed" } },
+        { "label": "Borderless", "set": { "display_mode": "borderless" } },
+        { "label": "Fullscreen", "set": { "display_mode": "fullscreen" } }
+      ],
+      "defaults": { "display_mode": "windowed" }
+    },
+    {
+      "id": "resolution", "label": "Render resolution",
+      "help": "What the game draws at. Native is the game's own size; lower is lighter on the graphics card.",
+      "choices": [
+        { "label": "Native", "set": { "render_resolution": "native" } },
+        { "label": "800p", "set": { "render_resolution": "800p" } },
+        { "label": "720p", "set": { "render_resolution": "720p" } }
+      ],
+      "defaults": { "render_resolution": "native" }
+    },
+    {
+      "id": "aspect", "label": "Picture shape",
+      "help": "Ultrawide is experimental: the view widens at the sides and the HUD moves to the edges. As the screen fits your monitor.",
+      "choices": [
+        { "label": "16:9", "set": { "aspect": "16:9" } },
+        { "label": "21:9", "set": { "aspect": "21:9" } },
+        { "label": "32:9", "set": { "aspect": "32:9" } },
+        { "label": "As the screen", "set": { "aspect": "auto" } }
+      ],
+      "defaults": { "aspect": "16:9" }
+    },
+    {
+      "id": "fps_limit", "label": "Frame rate limit",
+      "help": "The most frames per second the game draws. Unlimited is for testing.",
+      "choices": [
+        { "label": "30", "set": { "fps_limit": "30" } },
+        { "label": "60", "set": { "fps_limit": "60" } },
+        { "label": "120", "set": { "fps_limit": "120" } },
+        { "label": "240", "set": { "fps_limit": "240" } },
+        { "label": "Unlimited", "set": { "fps_limit": "0" } }
+      ],
+      "defaults": { "fps_limit": "60" }
+    },
+    {
+      "id": "vsync", "label": "V-Sync",
+      "help": "Waits for the screen's refresh, so frames don't tear.",
+      "choices": [
+        { "label": "On", "set": { "vsync": "1" } },
+        { "label": "Off", "set": { "vsync": "0" } }
+      ],
+      "defaults": { "vsync": "1" }
+    },
+    {
+      "id": "fsr1", "label": "FSR 1 upscaling",
+      "help": "Sharpens the picture as it's fitted to your screen, most of all below the screen's own resolution.",
+      "choices": [
+        { "label": "Off", "set": { "fsr1": "0" } },
+        { "label": "On", "set": { "fsr1": "1" } }
+      ],
+      "defaults": { "fsr1": "0" }
+    },
+    {
+      "id": "rcas", "label": "Sharpening",
+      "help": "Makes the picture crisper. Costs very little.",
+      "choices": [
+        { "label": "Off", "set": { "rcas": "0" } },
+        { "label": "On", "set": { "rcas": "1" } }
+      ],
+      "defaults": { "rcas": "0" }
+    },
+    {
+      "id": "show_fps", "label": "Show FPS",
+      "help": "The frame rate in the corner of the game. F10 turns it on and off in game too.",
+      "choices": [
+        { "label": "Off", "set": { "show_fps": "0" } },
+        { "label": "On", "set": { "show_fps": "1" } }
+      ],
+      "defaults": { "show_fps": "0" }
+    }
+  ],
+  "actions": [
+    { "id": "saves", "label": "Saves", "help": "Your saves.", "open": "saves" },
+    { "id": "logs", "label": "Logs", "help": "The log of each run, the first place to look when something breaks.", "open": "logs" }
+  ]
+}
