@@ -76,6 +76,8 @@ cp -r port/tools/xpps "$dest/port/tools/"
 find "$dest" -name __pycache__ -prune -exec rm -r {} +
 cp port/LICENSE "$dest/LICENSE.txt"
 cp dev/README-linux.txt "$dest/"
+# RecompLauncher reads this at the top of every release (set-up, settings and Play from its page).
+cp recomplauncher.json "$dest/"
 git rev-parse --short HEAD > "$dest/VERSION"
 release=${RELEASE:-$(git tag --points-at HEAD | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || true)}
 if [[ -n $release ]]; then
