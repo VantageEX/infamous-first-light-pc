@@ -10,6 +10,8 @@
 [![downloads](https://img.shields.io/github/downloads/VantageEX/infamous-first-light-pc/total?label=downloads)](https://github.com/VantageEX/infamous-first-light-pc/releases)
 [![status](https://img.shields.io/badge/status-early%20preview-orange)](#status)
 
+<a href="https://recomplauncher.com/game/infamous-first-light-pc"><picture><source media="(prefers-color-scheme: dark)" srcset="https://recomplauncher.com/assets/press/launcher/badge-light.svg"><img alt="Get it on RecompLauncher" src="https://recomplauncher.com/assets/press/launcher/badge-dark.svg" height="48"></picture></a>
+
 An unofficial native Windows port of **inFAMOUS First Light** (PS4). The game's own x86-64 code runs directly on the PC's processor, a reimplemented PS4 runtime stands in for the console's system libraries, and the graphics are translated to Vulkan. It is not a general-purpose emulator.
 
 > **You need your own copy of the game**, dumped from your own PS4. No game files, firmware, keys or Sony assets are part of this repository or its releases.
@@ -46,7 +48,7 @@ An unofficial native Windows port of **inFAMOUS First Light** (PS4). The game's 
 
 From v0.3.2 the launcher checks for a new release when it starts and installs it with one click; your saves and settings stay.
 
-**Steam, Playnite, a shortcut:** `"inFAMOUS First Light.exe" --play` starts the game straight away with the launcher's settings, without its window (in Steam: add a non-Steam game, then Properties → Launch options: `--play`). If the game fails, the launcher opens on its log.
+**Steam, Playnite, a shortcut:** `"inFAMOUS First Light.exe" --play` starts the game straight away with the launcher's settings, without its window (in Steam: add a non-Steam game, then Properties → Launch options: `--play`). If the game fails, the launcher opens on its log. `--game <folder>` (with or without `--play`) uses that game folder for the run, without changing the one picked in the launcher.
 
 **Ultrawide (experimental):** launcher → Display → Picture shape: 21:9, 32:9 or "As the screen". The view widens at the sides and the HUD moves to the edges; the movies stay 16:9 with bars at the sides. The render size keeps the chosen resolution's height (at most 4K's pixel count). Environment variables for testing: `TLG_RENDER_SIZE=2560x1080` sets the size directly, `TLG_MOVIE_FIT=0` stretches the movies as before.
 
